@@ -7,7 +7,7 @@
 
 namespace viscnts_lsm {
 
-static uint32_t BloomHash(const KVPair& key) { return Hash(reinterpret_cast<const char*>(&key), sizeof(key), 0xbc9f1d34); }
+static uint32_t BloomHash(const SKey& key) { return Hash(reinterpret_cast<const char*>(key.data()), key.size(), 0xbc9f1d34); }
 
 class BloomFilter {
  private:
@@ -19,7 +19,7 @@ class BloomFilter {
     k_ = static_cast<size_t>(bits_per_key * 0.69);
     k_ = std::max<size_t>(std::min<size_t>(30, k_), 1);
   }
-  void create(const KVPair* keys, int n, Slice out) {
+  void create(const SKey* keys, int n, Slice out) {
     size_t bits = n * bits_per_key_;
     bits = std::max<size_t>(64, bits);
     size_t bytes = (bits + 7) / 8;
@@ -38,7 +38,7 @@ class BloomFilter {
       }
     }
   }
-  bool find(const KVPair& key, const Slice& bloom_bits) {
+  bool find(const SKey& key, const Slice& bloom_bits) {
     if (bloom_bits.size() < 4) return false;
     const size_t k = *(reinterpret_cast<size_t*>(bloom_bits.data()));
     if (k > 30) return true;

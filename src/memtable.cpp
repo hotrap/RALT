@@ -2,12 +2,10 @@
 
 namespace viscnts_lsm {
 
-
-
 template <class Key, class SkipListValue, class Allocator, class Comparator>
 typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key, SkipListValue, Allocator, Comparator>::newNode(const Key &k,
                                                                                                                                  int height) {
-  char *mem = alloc_->allocate(sizeof(Node) + sizeof(std::atomic<Node *>) * (height - 1));
+  uint8_t *mem = alloc_->allocate(sizeof(Node) + sizeof(std::atomic<Node *>) * (height - 1));
   return new (mem) Node(k);
 }
 template <class Key, class SkipListValue, class Allocator, class Comparator>
@@ -37,20 +35,12 @@ typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key
 template <class Key, class SkipListValue, class Allocator, class Comparator>
 typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key, SkipListValue, Allocator, Comparator>::queryEqual(
     const Key &k) const {
-  // find the largest one that node -> k <= k.
   Node *nw = head_;
   Node *lst = nullptr;
   int level = GetMaxHeight() - 1;
   while (true) {
     Node *next = nw->noBarrierGetNext(level);
     int cmp = (next == nullptr || next == lst) ? -1 : comp_(k, next->key);
-    // printf("[(nw)%s]", std::string(reinterpret_cast<char *>(nw->key.a_),
-    // nw->key.len_).c_str()); printf("[(next)%s]",
-    //        next == nullptr
-    //            ? "nullptr"
-    //            : std::string(reinterpret_cast<char *>(next->key.a_),
-    //            next->key.len_).c_str());
-    // fflush(stdout);
     if (cmp == 0) {
       nw = next;
     } else if (cmp < 0 && level == 0) {
@@ -163,6 +153,28 @@ typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key
   }
 
   return nw;
+}
+
+SSTable MemTable::SST() {
+  SSTable ret;
+  auto head = list_.getHead()->noBarrierGetNext(0);
+  while (head != nullptr) ret.array_.emplace_back(head->key, head->value), head = head->noBarrierGetNext(0);
+  return ret;
+}
+
+bool SSTable::find(const SKey &key) const {
+  size_t l = 0, r = array_.size();
+  while (l <= r) {
+    auto mid = (l + r) >> 1;
+    auto v = SKeyComparator()(array_[mid].first, key);
+    if (!v)
+      return true;
+    else if (v < 0)
+      l = mid + 1;
+    else
+      r = mid - 1;
+  }
+  return false;
 }
 
 }  // namespace viscnts_lsm

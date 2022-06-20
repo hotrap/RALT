@@ -1,7 +1,9 @@
 #include <atomic>
 #include <random>
 
+#include "alloc.hpp"
 #include "common.hpp"
+#include "key.hpp"
 
 namespace viscnts_lsm {
 
@@ -15,7 +17,7 @@ class SkipList {
  public:
   explicit SkipList(Allocator *A_, const Comparator &C_) : alloc_(A_), comp_(C_) {
     height_ = 1;
-    char *_head_mem = alloc_->allocate(sizeof(Node) + sizeof(std::atomic<Node *>) * (kMaxHeight - 1));
+    uint8_t *_head_mem = alloc_->allocate(sizeof(Node) + sizeof(std::atomic<Node *>) * (kMaxHeight - 1));
     head_ = reinterpret_cast<Node *>(_head_mem);
     prev_height_ = 0;
     prev_[0] = head_;
@@ -107,8 +109,23 @@ class SkipList {
   Node *head_;
 };
 
+class SSTable {
+ public:
+  std::vector<std::pair<SKey, SValue>> array_;
+  SSTable(size_t size = 0) : array_(size) {}
+  bool find(const SKey &) const;
+};
 
+class MemTable {
+  SkipList<SKey, SValue, MemtableAllocator, SKeyComparator> list_;
+  size_t size_;
+  MemtableAllocator *alloc_;
 
-
+ public:
+  explicit MemTable(MemtableAllocator *alloc) : size_(0), list_(alloc_ = alloc, SKeyComparator()) {}
+  void append(const SKey &key, const SValue &value) { size_ += 1, list_.insert(key, value); }
+  bool find(const SKey &key) { return list_.queryEqual(key) != nullptr; }
+  SSTable SST();
+};
 
 }  // namespace viscnts_lsm
