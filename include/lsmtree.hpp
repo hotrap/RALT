@@ -6,7 +6,11 @@
 #include "memtable.hpp"
 
 namespace viscnts_lsm {
-class LSMTree {};
+
+class LSMTree {
+  
+};
+
 }  // namespace viscnts_lsm
 
 #endif
