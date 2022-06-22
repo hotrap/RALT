@@ -16,7 +16,7 @@ class BloomFilter {
 
  public:
   explicit BloomFilter(int bits_per_key) : bits_per_key_(bits_per_key) {
-    k_ = static_cast<size_t>(bits_per_key * 0.69);
+    k_ = static_cast<size_t>(bits_per_key * 0.69); // 0.69 ~ ln(2)
     k_ = std::max<size_t>(std::min<size_t>(30, k_), 1);
   }
   void create(const SKey* keys, int n, Slice out) {
@@ -30,6 +30,7 @@ class BloomFilter {
     array += sizeof(size_t);
     for (int i = 0; i < n; i++) {
       uint32_t h = BloomHash(keys[i]);
+      // use the double-hashing in leveldb, i.e. h1 + i * h2
       const uint32_t delta = (h >> 17) | (h << 15);
       uint32_t bitpos = h % bits, dpos = delta % bits;
       for (size_t j = 0; j < k_; j++) {
@@ -45,6 +46,7 @@ class BloomFilter {
     size_t bits = bloom_bits.size() * 8 - sizeof(size_t) * 8;
     uint8_t* array = bloom_bits.data() + sizeof(size_t);
     uint32_t h = BloomHash(key);
+    // use the double-hashing in leveldb, i.e. h_k = h1 + k * h2
     const uint32_t delta = (h >> 17) | (h << 15);
     uint32_t bitpos = h % bits, dpos = delta % bits;
     for (size_t j = 0; j < k_; j++) {

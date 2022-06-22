@@ -17,16 +17,16 @@ struct LRUHandle {
   LRUHandle* nxt_h;
   LRUHandle* prv_h;
   uint8_t* data;
-  void (*deleter)(uint8_t*);
-  std::atomic_flag valid;
+  BaseAllocator* deleter;
+  std::atomic<bool> valid;
   bool in_use;
   std::atomic<uint32_t> refs;
   size_t klen;
   uint8_t key_data[1];
   static LRUHandle* genHandle(const Slice& key) {
-    auto ret = reinterpret_cast<LRUHandle*>(new uint8_t[sizeof(LRUHandle) + key.size() - 1]());
-    memcpy(ret->key_data, key.data(), key.size());
-    ret->klen = key.size();
+    auto ret = reinterpret_cast<LRUHandle*>(new uint8_t[sizeof(LRUHandle) + key.len() - 1]());
+    memcpy(ret->key_data, key.data(), key.len());
+    ret->klen = key.len();
     return ret;
   }
   Slice Key() { return Slice(key_data, klen); }
@@ -39,7 +39,7 @@ class HashTable {
   ~HashTable() { 
     for(size_t i = 0; i < size_; ++i) if(list_[i]) {
       for(auto ptr = list_[i], nxt_ptr = ptr->nxt_h; ptr; ptr = nxt_ptr, nxt_ptr = nxt_ptr ? nxt_ptr->nxt_h : nullptr) 
-        ptr->deleter ? ptr->deleter(ptr->data), delete ptr : delete ptr;
+        ptr->deleter ? ptr->deleter->release(ptr->data), delete ptr : delete ptr;
     }
     delete[] list_; 
   }
@@ -151,6 +151,7 @@ void LRUCache::unref(LRUHandle* h) {
       }
       table.erase(h);
     }
+    if(h->deleter) h->deleter->release(h->data); 
     delete h;
   }
 }

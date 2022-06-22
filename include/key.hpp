@@ -7,6 +7,10 @@ namespace viscnts_lsm {
 
 using SKey = Slice;
 
+int operator<=(const SKey& A, const SKey& B) {
+    if(A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
+    return memcmp(A.data(), B.data(), A.len()) <= 0;
+}
 
 struct SValue {
   double counts;
@@ -15,12 +19,12 @@ struct SValue {
 
 struct SKeyComparator {
     int operator()(const SKey& A, const SKey& B) const {
-        if(A.size() != B.size()) return A.size() < B.size() ? -1 : 1;
-        return memcmp(A.data(), B.data(), A.size());
+        if(A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
+        return memcmp(A.data(), B.data(), A.len());
     }
     int is_equal(const SKey& A, const SKey& B) const {
-        if(A.size() != B.size()) return -1;
-        return memcmp(A.data(), B.data(), A.size());
+        if(A.len() != B.len()) return -1;
+        return memcmp(A.data(), B.data(), A.len());
     }
 };
 

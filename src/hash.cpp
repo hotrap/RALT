@@ -33,4 +33,25 @@ uint32_t Hash(const char* data, size_t n, uint32_t seed) {
   return h;
 }
 
+// copy from leveldb
+uint32_t Hash8(const char* data, uint32_t seed) {
+  // Similar to murmur hash
+  const uint32_t m = 0xc6a4a793;
+  const uint32_t r = 24;
+  uint32_t h = seed ^ (8 * m);
+  uint32_t w = *reinterpret_cast<const uint32_t*>(data);
+  uint32_t w2 = *reinterpret_cast<const uint32_t*>(data + 4);
+  h += w;
+  h *= m;
+  h ^= (h >> 16);
+  h += w2;
+  h *= m;
+  h ^= (h >> 16);
+  return h;
+}
+
+uint32_t Hash8(const char* data) {
+  return Hash8(data, 0x114514);
+}
+
 }  // namespace viscnts_lsm

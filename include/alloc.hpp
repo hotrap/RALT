@@ -6,7 +6,7 @@
 class BaseAllocator {
  public:
   virtual uint8_t* allocate(size_t size) = 0;
-  virtual void release(size_t size) = 0;
+  virtual void release(uint8_t*) = 0;
 };
 
 class MemtableAllocator : public BaseAllocator {
@@ -37,7 +37,7 @@ class MemtableAllocator : public BaseAllocator {
     }
   }
   // release all
-  void release(size_t size = 0) {
+  void release(uint8_t* ptr = nullptr) {
     nwsize = 0;
   }
 };

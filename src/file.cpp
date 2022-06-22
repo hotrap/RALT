@@ -1,5 +1,3 @@
-#ifndef __FILE_CACHE__
-#define __FILE_CACHE__
 #include "file.hpp"
 
 #include <fcntl.h>
@@ -29,10 +27,12 @@ class Limiter {
   std::atomic<uint32_t> max_acquires_;
 };
 
+// If the program is IO bound, then we consider to use io_uring, because viscnts is stored on CD.
+
 class PosixSeqFile : public SeqFile {
  public:
   PosixSeqFile(int fd) : fd_(fd) {}
-  ssize_t read(size_t n, uint8_t* data, Slice* result) override {
+  ssize_t read(size_t n, uint8_t* data, Slice& result) override {
     while (true) {
       ::ssize_t read_size = ::read(fd_, data, n);
       if (read_size < 0) {
@@ -40,7 +40,7 @@ class PosixSeqFile : public SeqFile {
         if (errno == EINTR) continue;
         return errno;
       }
-      *result = Slice(data, read_size);
+      result = Slice(data, read_size);
       break;
     }
   }
@@ -59,7 +59,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
   ~PosixRandomAccessFile() {
     if (use_fd_) fd_limit_->release();
   }
-  ssize_t read(size_t offset, size_t n, uint8_t* data, Slice* result) override {
+  ssize_t read(size_t offset, size_t n, uint8_t* data, Slice& result) override {
     int xfd;
     if (!use_fd_) {
       xfd = ::open(fname_.c_str(), O_RDONLY);
@@ -67,7 +67,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
       xfd = fd_;
     auto rd_n = ::pread(xfd, data, n, offset);
     if (rd_n < 0) return errno;
-    *result = Slice(data, rd_n < 0 ? 0 : rd_n);
+    result = Slice(data, rd_n < 0 ? 0 : rd_n);
     if (!use_fd_) ::close(xfd);
     return rd_n;
   }
@@ -86,7 +86,7 @@ class MmapRandomAccessFile : public RandomAccessFile {
     ::munmap(base_, length_);
     fd_limit_->release();
   }
-  ssize_t read(size_t offset, size_t n, uint8_t* data, Slice* result) override {
+  ssize_t read(size_t offset, size_t n, uint8_t* data, Slice& result) override {
     if (offset + n > length_) {
       result = Slice(data, 0);
       return -EINVAL;
@@ -109,7 +109,7 @@ class PosixAppendFile : public AppendFile {
       ::close(fd_);
     }
     ssize_t write(const Slice& data) override {
-      auto ret = ::write(fd_, data.data(), data.size());
+      auto ret = ::write(fd_, data.data(), data.len());
       if(ret < 0) return errno;
       return 0;
     }
@@ -160,5 +160,3 @@ class DefaultEnv : public Env {
 Env* createDefaultEnv() { return new DefaultEnv(); }
 
 }  // namespace viscnts_lsm
-
-#endif

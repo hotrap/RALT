@@ -155,26 +155,4 @@ typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key
   return nw;
 }
 
-SSTable MemTable::SST() {
-  SSTable ret;
-  auto head = list_.getHead()->noBarrierGetNext(0);
-  while (head != nullptr) ret.array_.emplace_back(head->key, head->value), head = head->noBarrierGetNext(0);
-  return ret;
-}
-
-bool SSTable::find(const SKey &key) const {
-  size_t l = 0, r = array_.size();
-  while (l <= r) {
-    auto mid = (l + r) >> 1;
-    auto v = SKeyComparator()(array_[mid].first, key);
-    if (!v)
-      return true;
-    else if (v < 0)
-      l = mid + 1;
-    else
-      r = mid - 1;
-  }
-  return false;
-}
-
 }  // namespace viscnts_lsm
