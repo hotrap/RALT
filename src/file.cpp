@@ -81,7 +81,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
 
 class MmapRandomAccessFile : public RandomAccessFile {
  public:
-  MmapRandomAccessFile(void* base, size_t length, Limiter* fd_limit) : base_(base), legnth_(length) fd_limit_(fd_limit) {}
+  MmapRandomAccessFile(void* base, size_t length, Limiter* fd_limit) : base_(base), length_(length), fd_limit_(fd_limit) {}
   ~MmapRandomAccessFile() {
     ::munmap(base_, length_);
     fd_limit_->release();
@@ -126,6 +126,7 @@ class DefaultEnv : public Env {
   ssize_t openRAFile(std::string filename, RandomAccessFile*& result) override {
     auto fd = ::open(filename.c_str(), O_RDONLY);
     if (fd < 0) return errno;
+    /*
     if (!_mmap_limit_.acquire()) {
       result = new PosixRandomAccessFile(fd, filename, &_fd_limit_);
       return 0;
@@ -137,19 +138,19 @@ class DefaultEnv : public Env {
     }
     void* mmap_base = ::mmap(nullptr, file_stat.st_size, PROT_READ, MAP_SHARED, fd, 0);
     if (mmap_base == MAP_FAILED) return errno;
-    result = new MmapRandomAccessFile(mmap_base, file_stat.st_size, &_mmap_limit_);
+    result = new MmapRandomAccessFile(mmap_base, file_stat.st_size, &_mmap_limit_);*/
+    result = new PosixRandomAccessFile(fd, filename, &_fd_limit_);
     ::close(fd);
   }
-  ssize_t openSeqFile(std::string filename, SeqFile*& result) override {
+  SeqFile* openSeqFile(std::string filename) override {
     auto fd = ::open(filename.c_str(), O_RDONLY);
-    if (fd < 0) return errno;
-    result = new PosixSeqFile(fd);
-    return 0;
+    // if (fd < 0) return errno;
+    return new PosixSeqFile(fd);
   }
-  ssize_t openAppFile(std::string filename, AppendFile*& result) override {
+  AppendFile* openAppFile(std::string filenamet) override {
     auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT, 0644);
-    if (fd < 0) return errno;
-    
+    // if (fd < 0) return errno;
+    return new AppendFile(fd);
   }
 
  private:

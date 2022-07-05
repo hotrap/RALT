@@ -7,10 +7,10 @@
 
 namespace viscnts_lsm {
 
+const static int kMaxHeight = 16;
 static std::mt19937 rndGen(time(0));
 template <class Key, class Value, class Allocator, class Comparator>
 class SkipList {
-  const static int kMaxHeight = 12;
 
   static int rndHeight() { return __builtin_clz(std::max(1u, (unsigned int)rndGen() & ((1 << kMaxHeight) - 1))) - (31 - kMaxHeight); }
 
@@ -110,17 +110,34 @@ class SkipList {
 };
 
 class MemTable {
-  SkipList<SKey, SValue, MemtableAllocator, SKeyComparator> list_;
   size_t size_;
-  MemtableAllocator *alloc_;
+  MemtableAllocator alloc_;
+  SkipList<SKey, SValue, MemtableAllocator, SKeyComparator> *list_;
 
  public:
   using Node = SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>::Node;
-  explicit MemTable(MemtableAllocator *alloc) : size_(0), list_(alloc_ = alloc, SKeyComparator()) {}
-  void append(const SKey &key, const SValue &value) { size_ += 1, list_.insert(key, value); }
-  bool exists(const SKey &key) { return list_.queryEqual(key) != nullptr; }
-  Node *find(const SKey &key) { return list_.queryEqual(key); }
-  Node *head() { return list_.getHead(); }
+  explicit MemTable() : size_(0), alloc_(), list_(new SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>(&alloc_, SKeyComparator())) {}
+  void append(const SKey &key, const SValue &value) {
+    size_ += key.size() + sizeof(SValue);
+    uint8_t *key_ptr = alloc_.allocate(key.len());
+    memcpy(key_ptr, key.data(), key.len());
+    list_->insert(SKey(key_ptr, key.len()), value);
+  }
+  bool exists(const SKey &key) { return list_->queryEqual(key) != nullptr; }
+  Node *find(const SKey &key) { return list_->queryEqual(key); }
+  Node *head() { return list_->getHead(); }
+  size_t size() { return size_; }
+  void release() {
+    alloc_.release(), delete list_;
+    list_ = new SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>(&alloc_, SKeyComparator());
+  }
+  std::pair<SKey, SKey> range() {
+    auto mx = head();
+    auto mn = head()->noBarrierGetNext(0);
+    for(int level = kMaxHeight - 1; level >= 0; --level)
+      while(auto c = mx->noBarrierGetNext(level)) mx = c;
+    return std::make_pair(mn->key, mx->key);
+  }
 };
 
 }  // namespace viscnts_lsm

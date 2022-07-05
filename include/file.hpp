@@ -30,11 +30,11 @@ class Env {
   public:
     virtual ~Env() = default;
     virtual ssize_t openRAFile(std::string filename, RandomAccessFile*& result) = 0;
-    virtual ssize_t openSeqFile(std::string filename, SeqFile*& result) = 0;
-    virtual ssize_t openAppFile(std::string filename, AppendFile*& result) = 0;
+    virtual SeqFile* openSeqFile(std::string filename) = 0;
+    virtual AppendFile* openAppFile(std::string filename) = 0;
 };
 
-Env* createDefaultEnv();
+std::unique_ptr<Env> createDefaultEnv();
 
 }  // namespace viscnts_lsm
 
