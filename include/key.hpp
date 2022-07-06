@@ -25,6 +25,8 @@ int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); 
 struct SValue {
   double counts;
   size_t vlen;
+  SValue() = default;
+  SValue(double _counts, size_t _vlen) : counts(_counts), vlen(_vlen) {}
 };
 
 SValue& operator+=(SValue& a, const SValue& v) {

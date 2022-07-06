@@ -37,9 +37,13 @@ class MemtableAllocator : public BaseAllocator {
     }
   }
   // release all
-  void release(uint8_t* ptr = nullptr) {
-    nwsize = 0;
-  }
+  void release(uint8_t* ptr = nullptr) { nwsize = 0; }
+};
+
+class DefaultAllocator : public BaseAllocator {
+ public:
+  uint8_t* allocate(size_t size) override { return new uint8_t[size]; }
+  void release(uint8_t* ptr) override { delete ptr; }
 };
 
 #endif

@@ -29,7 +29,7 @@ class AppendFile {
 class Env {
   public:
     virtual ~Env() = default;
-    virtual ssize_t openRAFile(std::string filename, RandomAccessFile*& result) = 0;
+    virtual RandomAccessFile* openRAFile(std::string filename) = 0;
     virtual SeqFile* openSeqFile(std::string filename) = 0;
     virtual AppendFile* openAppFile(std::string filename) = 0;
 };

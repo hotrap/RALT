@@ -123,9 +123,10 @@ class PosixAppendFile : public AppendFile {
 class DefaultEnv : public Env {
  public:
   DefaultEnv() : _mmap_limit_(MmapLimits), _fd_limit_(FileHandleLimits) {}
-  ssize_t openRAFile(std::string filename, RandomAccessFile*& result) override {
+  RandomAccessFile* openRAFile(std::string filename) override {
     auto fd = ::open(filename.c_str(), O_RDONLY);
-    if (fd < 0) return errno;
+    // if (fd < 0) return errno;
+    if (fd < 0) return nullptr;
     /*
     if (!_mmap_limit_.acquire()) {
       result = new PosixRandomAccessFile(fd, filename, &_fd_limit_);
@@ -140,16 +141,19 @@ class DefaultEnv : public Env {
     if (mmap_base == MAP_FAILED) return errno;
     result = new MmapRandomAccessFile(mmap_base, file_stat.st_size, &_mmap_limit_);*/
     result = new PosixRandomAccessFile(fd, filename, &_fd_limit_);
-    ::close(fd);
+    // ::close(fd);
+    return result;
   }
   SeqFile* openSeqFile(std::string filename) override {
     auto fd = ::open(filename.c_str(), O_RDONLY);
     // if (fd < 0) return errno;
+    if (fd < 0) return nullptr;
     return new PosixSeqFile(fd);
   }
   AppendFile* openAppFile(std::string filenamet) override {
     auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT, 0644);
     // if (fd < 0) return errno;
+    if (fd < 0) return nullptr;
     return new AppendFile(fd);
   }
 
