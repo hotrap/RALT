@@ -62,7 +62,7 @@ class FileBlock {     // process blocks in a file
  public:
   FileBlock() = default;
   explicit FileBlock(uint32_t file_id, FileBlockHandle handle, LRUCache* cache, BaseAllocator* alloc, RandomAccessFile* file_ptr)
-      : file_id_(file_id), handle_(handle), data_(nullptr), cache_(cache), alloc_(alloc), file_ptr_(file_ptr) {}
+      : file_id_(file_id), handle_(handle), data_(nullptr), cache_(cache), lru_handle_(nullptr), alloc_(alloc), file_ptr_(file_ptr) {}
 
   ssize_t acquire() {
     // TODO: when file_ptr is MmapRAFile, we don't need to allocate buffer.
@@ -731,24 +731,24 @@ class Compaction {
         while (iters.valid()) {
           auto L = iters.read();
           iters.next();
-          while (iters.valid() && iters.read().first == lst_value_.first) {
+          while (iters.valid() && iters.read().first == L.first) {
             auto c = iters.read();
-            lst_value_.first = c.first;
-            lst_value_.second += c.second;
+            L.first = c.first;
+            L.second += c.second;
             iters.next();
           }
           if (keep) {
-            lst_value_.second.counts = 1;
-            real_size_ += _calc_decay_value(lst_value_);
-            builder_.append(lst_value_);
+            L.second.counts = 1;
+            real_size_ += _calc_decay_value(L);
+            builder_.append(L);
             _divide_file();
             keep--;
           } else {
             std::uniform_real_distribution<> dis(0, 1.);
             if (dis(rndgen_) < keep) {
-              lst_value_.second.counts = 1;
-              real_size_ += _calc_decay_value(lst_value_);
-              builder_.append(lst_value_);
+              L.second.counts = 1;
+              real_size_ += _calc_decay_value(L);
+              builder_.append(L);
               _divide_file();
             }
           }
@@ -958,7 +958,7 @@ class LSMTree {
   void _compact_result_insert(std::vector<Compaction::NewFileData>&& vec, Immutables::Node* left, Immutables::Node* right, int level) {
     std::vector<std::unique_ptr<ImmutableFile>> files;
     for (auto a : vec) {
-      auto file = std::make_unique<ImmutableFile>(a.file_id, a.size, env_->openRAFile(a.filename), cache_.get(), file_alloc_, a.range);
+      auto file = std::make_unique<ImmutableFile>(a.file_id, a.size, std::unique_ptr<RandomAccessFile>(env_->openRAFile(a.filename)), cache_.get(), file_alloc_.get(), a.range);
       files.push_back(std::move(file));
     }
     tree_[level].insert(std::move(files), left, right);
@@ -1105,26 +1105,24 @@ class VisCnts {
 
 }  // namespace viscnts_lsm
 
-using namespace viscnts_lsm;
-
 void* VisCntsOpen(const char* path, double delta, bool createIfMissing) {
-  auto ret = new VisCnts(path, delta, createIfMissing);
+  auto ret = new viscnts_lsm::VisCnts(path, delta, createIfMissing);
   return ret;
 }
 
 int VisCntsAccess(void* ac, const char* key, size_t klen, size_t vlen) {
-  auto vc = reinterpret_cast<VisCnts*>(ac);
-  vc->access({SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen), SValue(1, vlen)});
+  auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
+  vc->access({viscnts_lsm::SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen), viscnts_lsm::SValue(1, vlen)});
   return 0;
 }
 
 bool VisCntsIsHot(void* ac, const char* key, size_t klen) {
-  auto vc = reinterpret_cast<VisCnts*>(ac);
-  return vc->is_hot(SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen));
+  auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
+  return vc->is_hot(viscnts_lsm::SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen));
 }
 
 int VisCntsClose(void* ac) {
-  auto vc = reinterpret_cast<VisCnts*>(ac);
+  auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
   delete vc;
   return 0;
 }
