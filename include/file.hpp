@@ -1,6 +1,7 @@
 #ifndef __FILE_CACHE_H__
 #define __FILE_CACHE_H__
 #include <string>
+#include <memory>
 
 #include "common.hpp"
 namespace viscnts_lsm {
@@ -34,7 +35,8 @@ class Env {
     virtual AppendFile* openAppFile(std::string filename) = 0;
 };
 
-std::unique_ptr<Env> createDefaultEnv();
+
+Env* createDefaultEnv();
 
 }  // namespace viscnts_lsm
 

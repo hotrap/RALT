@@ -155,4 +155,14 @@ typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key
   return nw;
 }
 
+void MemTable::append(const SKey &key, const SValue &value) {
+  size_ += key.size() + sizeof(SValue);
+  uint8_t *key_ptr = alloc_.allocate(key.len());
+  memcpy(key_ptr, key.data(), key.len());
+  list_.insert(SKey(key_ptr, key.len()), value);
+}
+
+MemTable::Node *MemTable::find(const SKey &key) { return list_.queryEqual(key); }
+bool MemTable::exists(const SKey &key) { return find(key) != nullptr; }
+
 }  // namespace viscnts_lsm

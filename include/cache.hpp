@@ -24,9 +24,11 @@ struct LRUHandle {
   size_t klen;
   uint8_t key_data[1];
   static LRUHandle* genHandle(const Slice& key) {
-    auto ret = reinterpret_cast<LRUHandle*>(new uint8_t[sizeof(LRUHandle) + key.len() - 1]());
+    auto mem = new uint8_t[sizeof(LRUHandle) + key.len() - 1]();
+    auto ret = new (mem) LRUHandle();
     memcpy(ret->key_data, key.data(), key.len());
     ret->klen = key.len();
+    assert(ret->data == nullptr);
     return ret;
   }
   Slice Key() { return Slice(key_data, klen); }
@@ -35,13 +37,12 @@ struct LRUHandle {
 // use chain hashing
 class HashTable {
  public:
-  HashTable(size_t size) : size_(size), list_(new LRUHandle*[size]()) {}
+  HashTable(size_t size) : size_(size), list_(size) {}
   ~HashTable() { 
     for(size_t i = 0; i < size_; ++i) if(list_[i]) {
       for(auto ptr = list_[i], nxt_ptr = ptr->nxt_h; ptr; ptr = nxt_ptr, nxt_ptr = nxt_ptr ? nxt_ptr->nxt_h : nullptr) 
         ptr->deleter ? ptr->deleter->release(ptr->data), delete ptr : delete ptr;
     }
-    delete[] list_; 
   }
   LRUHandle* lookup(const Slice& key, uint32_t hash, bool allow_new) {
     auto head = list_[hash % size_];
@@ -76,8 +77,8 @@ class HashTable {
   }
 
  private:
-  LRUHandle** list_;
   size_t size_;
+  std::vector<LRUHandle*> list_;
 };
 
 class LRUCache {
@@ -99,8 +100,8 @@ class LRUCache {
 };
 
 LRUCache::LRUCache(size_t size) : limit_size_(size), used_(0), table(LRUCache::TableSize) {
-  lru_ = new LRUHandle;
-  in_use_ = new LRUHandle;
+  lru_ = new LRUHandle();
+  in_use_ = new LRUHandle();
   lru_->nxt = lru_->prv = lru_;
   in_use_->nxt = in_use_->prv = in_use_;
 }
@@ -111,7 +112,7 @@ LRUCache::~LRUCache() {
 }
 
 LRUHandle* LRUCache::lookup(const Slice& key, uint32_t hash) {
-  std::unique_lock _(mutex_);
+  // std::unique_lock<std::shared_mutex> _(mutex_);
   auto ret = table.lookup(key, hash, true);
   ref(ret);
   return ret;
@@ -137,7 +138,7 @@ void LRUCache::unref(LRUHandle* h) {
   if (--h->refs) {
     h->in_use = false;
     {
-      std::unique_lock _(mutex_);
+      std::unique_lock<std::shared_mutex> _(mutex_);
       h->prv->nxt = h->nxt;
       h->nxt->prv = h->prv;
       h->nxt = lru_->nxt;

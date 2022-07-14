@@ -43,6 +43,7 @@ class PosixSeqFile : public SeqFile {
       result = Slice(data, read_size);
       break;
     }
+    return 0;
   }
   ssize_t seek(size_t offset) override {
     if (auto ret = ::lseek(fd_, offset, SEEK_CUR); ret < 0) return errno;
@@ -66,10 +67,10 @@ class PosixRandomAccessFile : public RandomAccessFile {
     } else
       xfd = fd_;
     auto rd_n = ::pread(xfd, data, n, offset);
-    if (rd_n < 0) return errno;
+    if (rd_n < 0) return -errno;
     result = Slice(data, rd_n < 0 ? 0 : rd_n);
     if (!use_fd_) ::close(xfd);
-    return rd_n;
+    return 0;
   }
 
  private:
@@ -91,7 +92,7 @@ class MmapRandomAccessFile : public RandomAccessFile {
       result = Slice(data, 0);
       return -EINVAL;
     }
-    result = Slice(base_ + offset, n);
+    result = Slice((uint8_t*)base_ + offset, n);
     return 0;
   }
 
@@ -114,7 +115,7 @@ class PosixAppendFile : public AppendFile {
       return 0;
     }
     ssize_t sync() override {
-      return ::sync(fd_);
+      return ::fsync(fd_);
     }
   private:
     int fd_;
@@ -140,7 +141,7 @@ class DefaultEnv : public Env {
     void* mmap_base = ::mmap(nullptr, file_stat.st_size, PROT_READ, MAP_SHARED, fd, 0);
     if (mmap_base == MAP_FAILED) return errno;
     result = new MmapRandomAccessFile(mmap_base, file_stat.st_size, &_mmap_limit_);*/
-    result = new PosixRandomAccessFile(fd, filename, &_fd_limit_);
+    auto result = new PosixRandomAccessFile(fd, filename, &_fd_limit_);
     // ::close(fd);
     return result;
   }
@@ -150,11 +151,11 @@ class DefaultEnv : public Env {
     if (fd < 0) return nullptr;
     return new PosixSeqFile(fd);
   }
-  AppendFile* openAppFile(std::string filenamet) override {
-    auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT, 0644);
+  AppendFile* openAppFile(std::string filename) override {
+    auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | O_TRUNC, 0644);
     // if (fd < 0) return errno;
     if (fd < 0) return nullptr;
-    return new AppendFile(fd);
+    return new PosixAppendFile(fd);
   }
 
  private:

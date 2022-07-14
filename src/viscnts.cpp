@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <thread>
 
@@ -15,13 +16,21 @@
 
 namespace viscnts_lsm {
 
+template <typename... Args>
+void logger(Args&&... a) {
+  static std::mutex m_;
+  std::unique_lock lck_(m_);
+  (std::cerr << ... << a) << std::endl;
+}
+
 const static size_t kDataBlockSize = 1 << 16;           // 64 KB
 const static size_t kPageSize = 4096;                   // 4 KB
 const static size_t kMagicNumber = 0x25a65facc3a23559;  // echo viscnts | sha1sum
-const static size_t kMemTable = 1 << 28;                // 64 MB
-const static size_t kSSTable = 1 << 28;
+const static size_t kMemTable = 1 << 26;                // 64 MB
+const static size_t kSSTable = 1 << 26;
 const static size_t kRatio = 10;
 const static size_t kBatchSize = 1 << 16;
+const static size_t kChunkSize = 1 << 13;  // 8 KB
 // about kMemTable... on average, we expect the size of index block < kDataBlockSize
 
 class FileName {
@@ -46,114 +55,283 @@ struct FileBlockHandle {
   uint32_t offset;
   uint32_t size;    // The size of SST doesn't exceed 4GB
   uint32_t counts;  // number of keys in the fileblock
-  FileBlockHandle() = default;
+  FileBlockHandle() { offset = size = counts = 0; }
   explicit FileBlockHandle(uint32_t offset, uint32_t size, uint32_t counts) : offset(offset), size(size), counts(counts) {}
 };
 
+template <typename Value>
+struct BlockValue {
+  Value v;
+  uint32_t offset;
+};
+
+class Chunk {
+  LRUHandle* lru_handle_;
+  LRUCache* cache_;
+  uint8_t* data_;
+
+ public:
+  Chunk() {
+    lru_handle_ = nullptr;
+    cache_ = nullptr;
+    data_ = nullptr;
+  }
+  Chunk(uint32_t file_id, uint32_t offset, LRUCache* cache, BaseAllocator* alloc, RandomAccessFile* file_ptr) : cache_(cache) {
+    Slice result;
+    size_t key = (size_t)file_id << 32 | offset;
+    lru_handle_ = cache_->lookup(Slice(reinterpret_cast<uint8_t*>(&key), sizeof(size_t)), Hash8(reinterpret_cast<char*>(&key)));
+    if (!lru_handle_->valid.load(std::memory_order_relaxed)) {
+      auto ptr = alloc->allocate(kChunkSize);
+      auto err = file_ptr->read(offset, kChunkSize, ptr, result);
+      if (err) {
+        logger("error in Chunk::Chunk(): ", err);
+        data_ = nullptr;
+        return;
+      }
+      if (!lru_handle_->valid.exchange(true, std::memory_order_relaxed)) {
+        lru_handle_->data = result.data();
+        lru_handle_->deleter = alloc;
+      } else
+        alloc->release(ptr);
+      data_ = lru_handle_->data;
+      assert(data_ != nullptr);
+      // if (data_ != ptr) alloc_->release(ptr); // we don't use mmap
+    } else {
+      data_ = lru_handle_->data;
+      assert(data_ != nullptr);
+    }
+  }
+  Chunk(const Chunk&) = delete;
+  Chunk& operator=(const Chunk&) = delete;
+  Chunk(Chunk&& c) { (*this) = std::move(c); }
+  Chunk& operator=(Chunk&& c) {
+    if (lru_handle_ && cache_) cache_->release(lru_handle_);
+    lru_handle_ = c.lru_handle_;
+    data_ = c.data_;
+    cache_ = c.cache_;
+    c.lru_handle_ = nullptr;
+    return (*this);
+  }
+  ~Chunk() {
+    if (lru_handle_) cache_->release(lru_handle_);
+  }
+  uint8_t* data(uint32_t offset = 0) const { return data_ + offset; }
+};
+
+template <typename Value>
 class FileBlock {     // process blocks in a file
   uint32_t file_id_;  // file id
   FileBlockHandle handle_;
-  uint8_t* data_;  // a reference to pointer in cache
   LRUCache* cache_;
-  LRUHandle* lru_handle_;
   BaseAllocator* alloc_;
   RandomAccessFile* file_ptr_;
 
+  // [keys] [(offset, value) pairs]
+  // serveral kinds of file blocks
+  // data block and index block
+  // their values are different: data block stores SValue, index block stores FileBlockHandle.
+  // attention: the size of value is fixed.
+
+  uint32_t offset_index_;
+
+  uint32_t lst_value_id_, lst_key_id_;
+
+  // last key and value chunk
+  // to speed up sequential accesses.
+
+  constexpr static auto kValuePerChunk = kChunkSize / sizeof(Value);
+
+  std::pair<uint32_t, uint32_t> _key_offset(uint32_t offset) {
+    assert(offset < handle_.size);
+    // ensure no key cross two chunks.
+    // offset is absolute
+    return {offset / kChunkSize, offset % kChunkSize};
+  }
+
+  std::pair<uint32_t, uint32_t> _value_offset(uint32_t id) {
+    assert(id < handle_.counts);
+    // calcuate the absolute offset
+    const auto offset = offset_index_ + id * sizeof(Value);
+    // calculate the chunk id
+    // because of alignment
+    const auto the_chunk = offset / kValuePerChunk;
+    return {the_chunk * kChunkSize, offset + the_chunk * (sizeof(Value) - kChunkSize % sizeof(Value))};
+  }
+
  public:
-  FileBlock() = default;
-  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, LRUCache* cache, BaseAllocator* alloc, RandomAccessFile* file_ptr)
-      : file_id_(file_id), handle_(handle), data_(nullptr), cache_(cache), lru_handle_(nullptr), alloc_(alloc), file_ptr_(file_ptr) {}
-
-  ssize_t acquire() {
-    // TODO: when file_ptr is MmapRAFile, we don't need to allocate buffer.
-    // <- We don't use mmap. since viscnts' accesses are sequential.
-    Slice result(nullptr, 0);
-    size_t key = (size_t)file_id_ << 32 | handle_.offset;
-    lru_handle_ = cache_->lookup(Slice(reinterpret_cast<uint8_t*>(&key), sizeof(size_t)), Hash8(reinterpret_cast<char*>(&key)));
-    if (!lru_handle_->valid.load(std::memory_order_relaxed)) {
-      auto ptr = alloc_->allocate(handle_.size);
-      auto err = file_ptr_->read(handle_.offset, handle_.size, ptr, result);
-      if (err) return err;
-      if (lru_handle_->valid.exchange(true, std::memory_order_relaxed)) {
-        lru_handle_->data = result.data();
-        lru_handle_->deleter = alloc_;
-      } else
-        alloc_->release(ptr);
-      data_ = result.data();
-      // if (data_ != ptr) alloc_->release(ptr); // we don't use mmap
-    } else {
-      data_ = result.data();
+  class Iterator {
+   public:
+    Iterator(FileBlock<Value> block) : block_(block), current_value_id_(-1), current_key_id_(-1), offset_(0) {}
+    Iterator(FileBlock<Value> block, uint32_t offset) : block_(block), current_value_id_(-1), current_key_id_(-1), offset_(offset) {}
+    Iterator(const Iterator& it) {
+      block_ = it.block_;
+      offset_ = it.offset_;
+      init();
     }
-    return 0;
+    Iterator& operator=(const Iterator& it) {
+      block_ = it.block_;
+      offset_ = it.offset_;
+      init();
+      return (*this);
+    }
+    auto seek_and_read(uint32_t id) {
+      SKey _key;
+      Value _value;
+      auto [chunk_id, offset] = block_._value_offset(id);
+      if (current_value_id_ != chunk_id) currenct_value_chunk_ = block_.acquire(current_value_id_ = chunk_id);
+      block_.read_value_offset(offset % kChunkSize, currenct_value_chunk_, _value);
+      // read key
+      auto [chunk_key_id, key_offset] = block_._key_offset(_value.offset);
+      if (current_key_id_ != chunk_key_id) current_key_chunk_ = block_.acquire(current_key_id_ = chunk_key_id);
+      block_.read_key_offset(key_offset % kChunkSize, current_key_chunk_, _key);
+      offset_ = offset;
+      return std::make_pair(_key, _value);
+    }
+    void next() {
+      offset_ += sizeof(Value);
+      if (offset_ + sizeof(Value) > kChunkSize) {
+        offset_ += kChunkSize - offset_ % kChunkSize, current_value_id_ += 1;
+        currenct_value_chunk_ = block_.acquire(current_value_id_);
+      }
+    }
+    auto read() {
+      SKey _key;
+      Value _value;
+      block_.read_value_offset(offset_ % kChunkSize, currenct_value_chunk_, _value);
+      auto [chunk_key_id, key_offset] = block_._key_offset(_value.offset);
+      if (current_key_id_ != chunk_key_id) current_key_chunk_ = block_.acquire(current_key_id_ = chunk_key_id);
+      block_.read_key_offset(key_offset % kChunkSize, current_key_chunk_, _key);
+      return std::make_pair(_key, _value);
+    }
+    void init() {
+      if (valid()) seek_and_read(offset_);
+    }
+    bool valid() { return offset_ < block_.handle_.offset + block_.handle_.size; }
+
+   private:
+    FileBlock<Value> block_;
+    Chunk currenct_value_chunk_, current_key_chunk_;
+    uint32_t current_value_id_, current_key_id_, offset_;
+  };
+
+  FileBlock() {
+    file_id_ = 0;
+    cache_ = nullptr;
+    alloc_ = nullptr;
+    file_ptr_ = nullptr;
+    lst_value_id_ = lst_key_id_ = -1;
+    offset_index_ = 0;
+  }
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, LRUCache* cache, BaseAllocator* alloc, RandomAccessFile* file_ptr)
+      : file_id_(file_id), handle_(handle), cache_(cache), alloc_(alloc), file_ptr_(file_ptr) {
+    logger("init fileblock");
+    lst_value_id_ = lst_key_id_ = -1;
+    offset_index_ = handle_.offset + handle_.size - handle_.counts / kValuePerChunk * kChunkSize - handle_.counts % kValuePerChunk * sizeof(Value);
   }
 
-  void release() { cache_->release(lru_handle_); }
-
-  int read_key(uint32_t id, SKey& result) const {
-    if (id > handle_.counts) return -1;
-    uint32_t offset = reinterpret_cast<uint32_t*>(data_)[id];
-    size_t klen = *reinterpret_cast<size_t*>(data_ + offset);
-    result = SKey(data_ + offset + sizeof(klen), klen);
-    return 0;
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, LRUCache* cache, BaseAllocator* alloc, RandomAccessFile* file_ptr,
+                     uint32_t offset_index)
+      : file_id_(file_id), handle_(handle), cache_(cache), alloc_(alloc), file_ptr_(file_ptr) {
+    logger("init fileblock by specified offset_index");
+    lst_value_id_ = lst_key_id_ = -1;
+    offset_index_ = offset_index;
   }
 
-  template <typename T>
-  int read_value(uint32_t id, T& result) const {
-    if (id > handle_.counts) return -1;
-    uint32_t offset = reinterpret_cast<uint32_t*>(data_)[id];
-    size_t klen = *reinterpret_cast<size_t*>(data_ + offset);
-    result = *reinterpret_cast<T*>(data_ + offset + klen + sizeof(size_t));
-    return 0;
-  }
+  Chunk acquire(size_t id) { return Chunk(file_id_, id * kChunkSize, cache_, alloc_, file_ptr_); }
 
   // assume that input is valid, read_key_offset and read_value_offset
-  int read_key_offset(uint32_t offset, SKey& result) const {
-    size_t klen = *reinterpret_cast<size_t*>(data_ + offset);
-    result = SKey(data_ + offset + sizeof(klen), klen);
-    return 0;
+  template <typename Key>
+  void read_key_offset(uint32_t offset, const Chunk& c, Key& result) const {
+    assert(offset < kChunkSize);
+    result.read(c.data(offset));
   }
 
-  template <typename T>
-  int read_value_offset(uint32_t offset, T& result) const {
-    size_t klen = *reinterpret_cast<size_t*>(data_ + offset);
-    result = *reinterpret_cast<T*>(data_ + offset + klen + sizeof(size_t));
-    return 0;
+  void read_value_offset(uint32_t offset, const Chunk& c, Value& result) const {
+    assert(offset < kChunkSize);
+    result = *reinterpret_cast<Value*>(c.data(offset));
   }
 
-  uint32_t counts() { return handle_.counts; }
-  uint32_t offset() { return handle_.offset; }
+  uint32_t end() { return handle_.offset + handle_.size; }
+  uint32_t begin() { return offset_index_; }
+
   ssize_t exists(const SKey& key) {
     uint32_t l = 0, r = handle_.counts - 1;
-    SKey _key(nullptr, 0);
-    acquire();
+    Iterator it = Iterator(*this);
     while (l < r) {
       auto mid = (l + r) >> 1;
-      auto err = read_key(mid, _key);
-      if (err) return err;
-      auto cmp = SKeyComparator()(_key, key);
+      // compare two keys
+      auto cmp = SKeyComparator()(it.seek_and_read(mid).first, key);
       if (!cmp) return 1;
       if (cmp < 0)
         l = mid;
       else
         r = mid - 1;
     }
-    release();
+    // concurrency bugs?
+    // consider this later
+    // lst_value_id_ = current_value_id;
+    // lst_key_id_ = current_key_id;
     return 0;
+  }
+
+  // ensure key is in range!!
+  Value upper(const SKey& key) {
+    uint32_t l = 0, r = handle_.counts - 1;
+    Value ret;
+    Iterator it = Iterator(*this);
+    while (l < r) {
+      auto mid = (l + r) >> 1;
+      auto kv = it.seek_and_read(mid);
+      // compare two keys
+      if (key <= kv.first) {
+        l = mid, ret = kv.second;
+      } else
+        r = mid - 1;
+    }
+    return ret;
+  }
+
+  // ssize_t exists_in_lst(const SKey& key) {
+  //   if (lst_value_id_ == -1) return 0;
+  //   uint32_t l = 0, r = kChunkSize / sizeof(Value), current_value_id = lst_value_id_, current_key_id = lst_key_id_;
+  //   Chunk currenct_value_chunk = acquire(lst_value_id_ * kChunkSize), current_key_chunk = acquire(lst_key_id_ * kChunkSize);
+  //   while (l < r) {
+  //     auto mid = (l + r) >> 1;
+  //     SKey _key;
+  //     Value _value;
+  //     auto [chunk_id, offset] = _value_offset(mid + lst_value_id_ * kValuePerChunk);
+  //     if (current_value_id != chunk_id) currenct_value_chunk = acquire(current_value_id = chunk_id);
+  //     read_value_offset(offset, currenct_value_chunk, _value);
+  //     // read key
+  //     auto [chunk_key_id, key_offset] = _key_offset(_value.offset);
+  //     if (current_key_id != chunk_key_id) current_key_chunk = acquire(current_key_id = chunk_key_id);
+  //     read_key_offset(key_offset, current_key_chunk, _key);
+  //     auto cmp = SKeyComparator()(_key, key);
+  //     if (!cmp) return 1;
+  //     if (cmp < 0)
+  //       l = mid;
+  //     else
+  //       r = mid - 1;
+  //   }
+  //   return 0;
+  // }
+
+  auto sub_fileblock(uint32_t offset_l, uint32_t offset_r) {
+    auto counts_l = (offset_l - offset_index_) / kChunkSize * kValuePerChunk + (offset_l - offset_index_) % kChunkSize / sizeof(Value);
+    auto counts_r = (offset_r - offset_index_) / kChunkSize * kValuePerChunk + (offset_r - offset_index_) % kChunkSize / sizeof(Value);
+    logger("sub fileblock: ", counts_r - counts_l, ", ", handle_.counts);
+    return FileBlock<Value>(file_id_, FileBlockHandle(handle_.offset, offset_r - handle_.offset, counts_r - counts_l), cache_, alloc_, file_ptr_,
+                            offset_l);
   }
 };
 
 // one SST
 class ImmutableFile {
   // The structure of the file:
-  // [Handles(offset) of keys of data blocks]
-  //    -(uint32_t, 4Bytes)
-  // [Data Blocks]...
-  //    -(klen(size_t), [key], vlen(size_t), counts(double))
-  // [Handles(offset) of index block]
-  //    -([offset in index block(uint32_t), size_, counts_], 4Bytes)
-  // [Block of the first key of data blocks] (=index block in leveldb)
-  //    -(klen(size_t), [key], offset of corresponding data block(uint32_t))
+  // [A data block]
+  // [A index block]
   // [offset of index block, size, counts]
+  // [offset of data block, size, counts]
   // [kMagicNumber] (8B)
   // Now we don't consider crash consistency
   // leveldb drops the shared prefix of a key which is not restart point, here we don't consider the compression now
@@ -170,66 +348,50 @@ class ImmutableFile {
   // I don't consider the deletion of this pointer now
   // 1000 (limitation of file handles) files of 64MB, then 64GB of data, it may be enough?
   std::unique_ptr<RandomAccessFile> file_ptr_;
-  FileBlock index_block_;
+  FileBlock<BlockValue<uint32_t>> index_block_;
+  FileBlock<BlockValue<SValue>> data_block_;
   // LRUCache pointer reference to the one in VisCnts
   LRUCache* cache_;
   BaseAllocator* alloc_;
   // last Block range
   // initially block_range_ is SKey(nullptr, 1e9), SKey(nullptr, 1e9)
   std::pair<IndSKey, IndSKey> block_range_;
-  FileBlock lst_block_;
 
  public:
   ImmutableFile(uint32_t file_id, uint32_t size, std::unique_ptr<RandomAccessFile>&& file_ptr, LRUCache* cache, BaseAllocator* alloc,
                 std::pair<IndSKey, IndSKey> range)
       : file_id_(file_id),
         size_(size),
+        range_(range),
         file_ptr_(std::move(file_ptr)),
         cache_(cache),
         alloc_(alloc),
-        range_(range),
         block_range_(IndSKey(nullptr, 1e18), IndSKey(nullptr, 1e18)) {
     // read index block
     Slice result(nullptr, 0);
-    FileBlockHandle index_bh;
-    file_ptr->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle), sizeof(FileBlockHandle), (uint8_t*)(&index_bh), result);
-    if (result.data() != (uint8_t*)(&index_bh)) index_bh = *(FileBlockHandle*)(result.data());
-    index_block_ = FileBlock(file_id, index_bh, cache, alloc, file_ptr.get());
+    FileBlockHandle index_bh, data_bh;
+    size_t mgn;
+    auto ret = file_ptr_->read(size_ - sizeof(size_t), sizeof(size_t), (uint8_t*)(&mgn), result);
+    assert(ret >= 0);
+    logger("file size: ", size);
+    logger("magic number: ", mgn);
+    assert(mgn == kMagicNumber);
+    ret = file_ptr_->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle) * 2, sizeof(FileBlockHandle), (uint8_t*)(&index_bh), result);
+    assert(ret >= 0);
+    // if (result.data() != (uint8_t*)(&index_bh)) index_bh = *(FileBlockHandle*)(result.data()); // we don't use mmap since mmap is shit due to TLB
+    // flushes...
+    ret = file_ptr_->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle), sizeof(FileBlockHandle), (uint8_t*)(&data_bh), result);
+    assert(ret >= 0);
+    printf("[file_size=%d, counts=%d, offset=%d, size=%d]\n", size, index_bh.counts, index_bh.offset, index_bh.size);
+    index_block_ = FileBlock<BlockValue<uint32_t>>(file_id, index_bh, cache, alloc, file_ptr_.get());
+    data_block_ = FileBlock<BlockValue<SValue>>(file_id, data_bh, cache, alloc, file_ptr_.get());
   }
-  /* the */
+
+  // ensure key is in range!!
+  // I don't want to check range here...
   ssize_t exists(const SKey& key) {
-    if (in_block_range(key)) {
-      return lst_block_.exists(key);
-    }
-    uint32_t l = 0, r = index_block_.counts() - 1;
-    SKey _key(nullptr, 0);
-    index_block_.acquire();
-    while (l < r) {
-      auto mid = (l + r) >> 1;
-      auto err = index_block_.read_key(mid, _key);
-      if (err) return err;
-      auto cmp = SKeyComparator()(_key, key);
-      if (!cmp) return 1;
-      if (cmp < 0)
-        l = mid;
-      else
-        r = mid - 1;
-    }
-    FileBlockHandle value;
-    auto err = index_block_.read_value(l, value);
-    // store the range of the current block
-    if (err) return err;
-    err = index_block_.read_key(l, _key);
-    if (err) return err;
-    block_range_.first = IndSKey(_key);
-    if (l + 1 < index_block_.counts()) {
-      err = index_block_.read_key(l + 1, _key);
-      if (err) return err;
-    } else
-      block_range_.second = std::move(IndSKey(nullptr, 1e18));
-    index_block_.release();
-    lst_block_ = FileBlock(file_id_, FileBlockHandle(value.offset, value.size, value.counts), cache_, alloc_, file_ptr_.get());
-    return lst_block_.exists(key);
+    auto handle = index_block_.upper(key);
+    return data_block_.sub_fileblock(handle.offset, handle.offset + kChunkSize).exists(key);
   }
   bool in_range(const SKey& key) {
     auto& [l, r] = range_;
@@ -240,55 +402,14 @@ class ImmutableFile {
 
   uint32_t size() { return size_; }
 
-  uint32_t get_block_id(uint32_t offset) {
-    if (offset >= size_) return -1;
-    uint32_t l = 0, r = index_block_.counts() - 1;
-    SKey _key(nullptr, 0);
-    FileBlockHandle value;
-    index_block_.acquire();
-    while (l < r) {
-      auto mid = (l + r) >> 1;
-      index_block_.read_value(mid, value);
-      if (value.offset <= offset)
-        l = mid;
-      else
-        r = mid - 1;
-    }
-    index_block_.release();
-    return l;
-  }
-
-  uint32_t get_block_offset(uint32_t id) {
-    if (id >= index_block_.counts()) return -1;
-    index_block_.acquire();
-    FileBlockHandle value;
-    index_block_.read_value(id, value);
-    index_block_.release();
-    return value.offset;
-  }
-
-  uint32_t get_block_end_offset(uint32_t id) {
-    if (id >= index_block_.counts()) return -1;
-    index_block_.acquire();
-    FileBlockHandle value;
-    index_block_.read_value(id, value);
-    index_block_.release();
-    return value.offset + value.size;
-  }
-
-  // id must be valid
-  FileBlock get_file_block(uint32_t id) {
-    index_block_.acquire();
-    FileBlockHandle value;
-    index_block_.read_value(id, value);
-    index_block_.release();
-    return FileBlock(file_id_, FileBlockHandle(value.offset, value.size, value.counts), cache_, alloc_, file_ptr_.get());
-  }
-
   bool range_overlap(const std::pair<SKey, SKey>& range) {
     auto [l, r] = range_;
     return l <= range.second && range.first <= r;
   }
+
+  auto sub_datablock(uint32_t offset_l, uint32_t offset_r) { return data_block_.sub_fileblock(offset_l, offset_r); }
+  auto sub_datablock(uint32_t offset_l) { return data_block_.sub_fileblock(offset_l, data_block_.end()); }
+  auto sub_datablock() { return data_block_.sub_fileblock(data_block_.begin(), data_block_.end()); }
 
  private:
   bool in_block_range(const SKey& key) {
@@ -300,9 +421,9 @@ class ImmutableFile {
 // Semantically there can only be one AppendFile at the same time
 class WriteBatch {
   std::unique_ptr<AppendFile> file_ptr_;
-  uint8_t* data_;
   const size_t buffer_size_;
   size_t used_size_;
+  uint8_t* data_;
 
  public:
   explicit WriteBatch(std::unique_ptr<AppendFile>&& file, size_t size) : file_ptr_(std::move(file)), buffer_size_(size), used_size_(0) {
@@ -310,7 +431,9 @@ class WriteBatch {
   }
   ~WriteBatch() { delete[] data_; }
 
-  void append(const Slice& kv) {
+  template <typename T>
+  void append(const T& kv) {
+    // return;  // debug
     size_t cp_size = std::min(kv.len(), buffer_size_ - used_size_);
     memcpy(data_ + used_size_, kv.data(), cp_size);
     used_size_ += cp_size;
@@ -322,6 +445,7 @@ class WriteBatch {
 
   template <typename T>
   void append_other(const T& x) {
+    // return;  // debug
     if (used_size_ + sizeof(T) > buffer_size_) {
       T y = x;
       append(Slice(reinterpret_cast<uint8_t*>(&y), sizeof(T)));
@@ -331,7 +455,18 @@ class WriteBatch {
     }
   }
 
+  void fill(uint8_t what, size_t len) {
+    size_t fill_size = std::min(len, buffer_size_ - used_size_);
+    memset(data_ + used_size_, what, fill_size);
+    used_size_ += fill_size;
+    if (fill_size != len) {
+      flush();
+      fill(what, len - fill_size);
+    }
+  }
+
   void flush() {
+    // return;  // debug
     file_ptr_->write(Slice(data_, used_size_));
     used_size_ = 0;
   }
@@ -368,7 +503,7 @@ class SeqIteratorSet : public SeqIterator {
   void next() override {
     auto h = 0;
     SKey mn = tmp_kv_[0].first;
-    for (int i = 1; i < tmp_kv_.size(); ++i)
+    for (uint32_t i = 1; i < tmp_kv_.size(); ++i)
       if (tmp_kv_[i].first <= mn) mn = tmp_kv_[h = i].first;
     iters_[h]->next();
     if (iters_[h]->valid())
@@ -379,7 +514,7 @@ class SeqIteratorSet : public SeqIterator {
   std::pair<SKey, SValue> read() override {
     auto h = 0;
     SKey mn = tmp_kv_[0].first;
-    for (int i = 1; i < tmp_kv_.size(); ++i)
+    for (uint32_t i = 1; i < tmp_kv_.size(); ++i)
       if (tmp_kv_[i].first <= mn) mn = tmp_kv_[h = i].first;
     return tmp_kv_[h];
   }
@@ -405,88 +540,109 @@ class MemTableIterator : public SeqIterator {
 };
 
 // This iterator assumes that (forgotten)
+// wofo!!!
 class SSTIterator : public SeqIterator {
  public:
-  SSTIterator(ImmutableFile* file, uint32_t offset) : file_(file), offset_(offset), kvpair_(SKey(nullptr, 0), SValue()) {
-    if (file->size() > offset) {
-      now_block_id_ = file_->get_block_id(offset_);
-      // if now_block_id_ >= index_block_.counts(), then next_offset_ equals to ~0u.
-      next_offset_ = file->get_block_end_offset(now_block_id_);
-      now_ = file->get_file_block(now_block_id_);
-      now_.acquire();
-      kvpair_valid_ = false;
-    }
+  SSTIterator(ImmutableFile* file)
+      : file_(file), kv_valid_(false), file_block_iter_(file->sub_datablock()) {
+    file_block_iter_.init();
   }
-  bool valid() override { return file_->size() > offset_; }
-  void next() override {
-    SKey key(nullptr, 0);
-    if (!kvpair_valid_) {
-      now_.read_key_offset(offset_, key);
-      offset_ += key.size() + sizeof(SValue);
-    } else
-      offset_ += kvpair_.first.size() + sizeof(SValue);
-    kvpair_valid_ = false;
-
-    if (offset_ >= next_offset_) {
-      now_.release();
-      now_block_id_++;
-      next_offset_ = file_->get_block_offset(now_block_id_ + 1);
-      now_ = file_->get_file_block(now_block_id_);
-      now_.acquire();
-      offset_ = now_.offset();
-    }
-  }
+  bool valid() override { return file_block_iter_.valid(); }
+  // ensure it's valid.
+  void next() override { file_block_iter_.next(), kv_valid_ = false; }
   // remember, SKey is a reference to file block
   std::pair<SKey, SValue> read() override {
-    if (!kvpair_valid_) {
-      kvpair_valid_ = true;
-      SKey key(nullptr, 0);
-      SValue value;
-      now_.read_key_offset(offset_, key);
-      now_.read_value_offset(offset_, value);
-      kvpair_ = {key, value};
+    if (kv_valid_) {
+      return kvpair_;
     }
-    return kvpair_;
+    kv_valid_ = true;
+    auto pair = file_block_iter_.read();
+    return kvpair_ = {pair.first, pair.second.v};
   }
   SeqIterator* copy() override { return new SSTIterator(*this); }
 
  private:
   ImmutableFile* file_;
-  uint32_t offset_;
-  uint32_t now_block_id_;
-  uint32_t next_offset_;
-  FileBlock now_;
+  bool kv_valid_;
   std::pair<SKey, SValue> kvpair_;
-  bool kvpair_valid_;
+  FileBlock<BlockValue<SValue>>::Iterator file_block_iter_;
 };
 
 class SSTBuilder {
   std::unique_ptr<WriteBatch> file_;
 
+  void _align() {
+    if (now_offset % kChunkSize != 0) {
+      file_->fill(0, kChunkSize - now_offset % kChunkSize);
+      now_offset += kChunkSize - now_offset % kChunkSize;
+    }
+  }
+
+  void _append_align(size_t len) {
+    if (len && (now_offset + len - 1) / kChunkSize != now_offset / kChunkSize) {
+      file_->fill(0, kChunkSize - now_offset % kChunkSize);
+      now_offset += kChunkSize - now_offset % kChunkSize;
+    }
+  }
+
+  uint32_t _calc_offset(uint32_t id) {
+    return id / (kChunkSize / sizeof(BlockValue<SValue>)) * kChunkSize + id % (kChunkSize / sizeof(BlockValue<SValue>)) * sizeof(BlockValue<SValue>);
+  }
+
  public:
   SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : file_(std::move(file)) {}
   template <typename T>
   void append(const std::pair<SKey, T>& kv) {
-    now_offset += kv.first.size() + sizeof(T);
+    _append_align(kv.first.size());
     counts++;
-    if (now_offset - lst_offset > kDataBlockSize) {
-      index.emplace_back(IndSKey(kv.first), FileBlockHandle(now_offset, now_offset - lst_offset, counts));
-      lst_offset = now_offset;
-    }
-    _write_kv(kv);
+    if (counts == kChunkSize) {
+      index.emplace_back(kv.first, _calc_offset(offsets.size() + 1));
+      counts = 0;
+    } else
+      lst_key = kv.first;
+    offsets.push_back({kv.second, now_offset});
+    now_offset += kv.first.size();
+    _write_key(kv.first);
   }
   void make_index() {
-    lst_offset = now_offset;
-    for (const auto& a : index) {
-      _write_kv(std::make_pair(a.first.ref(), a.second));
-      now_offset += a.first.size() + sizeof(FileBlockHandle);
+    if (counts) {
+      index.emplace_back(lst_key, _calc_offset(offsets.size()));
+      counts = 0;
     }
+    _align();
+    auto data_index_offset = now_offset;
+    for (const auto& a : offsets) {
+      _append_align(sizeof(decltype(a)));
+      file_->append_other(a);
+      now_offset += sizeof(decltype(a));
+    }
+    auto data_bh = FileBlockHandle(lst_offset, now_offset - lst_offset, offsets.size());
+    _align();
+    lst_offset = now_offset;
+    std::vector<BlockValue<uint32_t>> v;
+    for (const auto& a : index) {
+      _append_align(a.first.size());
+      _write_key(a.first);
+      v.push_back({a.second + data_index_offset, now_offset});
+      now_offset += a.first.size();
+    }
+    _align();
+    for (const auto& a : v) {
+      _append_align(sizeof(decltype(a)));
+      file_->append_other(a);
+      now_offset += sizeof(decltype(a));
+    }
+    file_->append_other(FileBlockHandle(lst_offset, now_offset - lst_offset, index.size()));  // write offset of index block
+    file_->append_other(data_bh);
+    now_offset += sizeof(FileBlockHandle) * 2;
+  }
+  template <typename T>
+  void append(const std::pair<IndSKey, T>& kv) {
+    append(std::make_pair(kv.first.ref(), kv.second));
   }
   void finish() {
-    uint32_t counts = index.size();
-    file_->append_other(FileBlockHandle(now_offset, now_offset - lst_offset, counts));  // write offset of index block
     file_->append_other(kMagicNumber);
-    now_offset += sizeof(FileBlockHandle) + sizeof(size_t);
+    now_offset += sizeof(size_t);
     file_->flush();
   }
   void reset() {
@@ -494,21 +650,28 @@ class SSTBuilder {
     lst_offset = 0;
     counts = 0;
     index.clear();
+    offsets.clear();
   }
   void new_file(std::unique_ptr<WriteBatch>&& file) { file_ = std::move(file); }
 
   size_t size() { return now_offset; }
 
-  std::pair<IndSKey, IndSKey> range() { return {index[0].first, index.back().first}; }
+  std::pair<IndSKey, IndSKey> range() {
+    if (index.size())
+      return {index[0].first, index.back().first};
+    else
+      return {};
+  }
 
  private:
   uint32_t now_offset, lst_offset, counts;
-  std::vector<std::pair<IndSKey, FileBlockHandle>> index;
+  std::vector<std::pair<IndSKey, uint32_t>> index;
+  std::vector<BlockValue<SValue>> offsets;
+  IndSKey lst_key;
   template <typename T>
-  void _write_kv(const std::pair<SKey, T>& a) {
-    file_->append_other(a.first.len());
-    file_->append(a.first);
-    file_->append_other(a.second);
+  void _write_key(const T& a) {
+    file_->append_other(a.len());
+    file_->append(a);
   }
 };
 
@@ -523,7 +686,7 @@ class Compaction {
   FileName* files_;
   Env* env_;
   bool flag_;
-  std::pair<SKey, SValue> lst_value_;
+  std::pair<IndSKey, SValue> lst_value_;
 
   void begin_new_file() {
     builder_.reset();
@@ -559,14 +722,14 @@ class Compaction {
   void compact(TIter left, UIter right) {
     // compact from two different iterators
     // iterators can be MemTable & SST, or SST & SST, or MemTable & MemTable ?
+    // return;  // debug
     auto L = left.valid() ? left.read() : std::pair<SKey, SValue>();
     auto R = right.valid() ? right.read() : std::pair<SKey, SValue>();
 
     while (left.valid() || right.valid()) {
-      if (!right.valid() || (L.first <= R.first)) {
+      if (!right.valid() || (left.valid() && L.first <= R.first)) {
         if (flag_ && lst_value_.first == L.first) {
           lst_value_.second += L.second;
-          lst_value_.first = L.first;  // avoid copying SKey, because old SKey may be expired
         } else {
           if (flag_) builder_.append(lst_value_);
           lst_value_ = L, flag_ = true;
@@ -576,7 +739,6 @@ class Compaction {
       } else {
         if (flag_ && lst_value_.first == R.first) {
           lst_value_.second += R.second;
-          lst_value_.first = R.first;
         } else {
           if (flag_) builder_.append(lst_value_);
           lst_value_ = R, flag_ = true;
@@ -594,15 +756,15 @@ class Compaction {
   double compact_last_level(TIter left, UIter right) {
     // compact from two different iterators
     // iterators can be MemTable & SST, or SST & SST, or MemTable & MemTable ?
-    auto L = left.valid() ? left.read() : std::pair<SKey, SValue>();
-    auto R = right.valid() ? right.read() : std::pair<SKey, SValue>();
+    // return 0;  // debug
+    std::pair<SKey, SValue> L = left.valid() ? left.read() : std::pair<SKey, SValue>();
+    std::pair<SKey, SValue> R = right.valid() ? right.read() : std::pair<SKey, SValue>();
     double change = 0;
 
     while (left.valid() || right.valid()) {
-      if (!right.valid() || (L.first <= R.first)) {
+      if (!right.valid() || (left.valid() && L.first <= R.first)) {
         if (flag_ && lst_value_.first == L.first) {
           lst_value_.second += L.second;
-          lst_value_.first = L.first;  // avoid copying SKey, because old SKey may be expired
         } else {
           if (flag_) builder_.append(lst_value_), change += _calc_decay_value(lst_value_);
           lst_value_ = L, flag_ = true;
@@ -613,7 +775,6 @@ class Compaction {
         if (flag_ && lst_value_.first == R.first) {
           change -= _calc_decay_value(R);
           lst_value_.second += R.second;
-          lst_value_.first = R.first;
         } else {
           if (flag_) builder_.append(lst_value_), change += _calc_decay_value(lst_value_);
           lst_value_ = R, flag_ = true;
@@ -630,8 +791,7 @@ class Compaction {
     if (flag_) builder_.append(lst_value_);
     // TODO: we can store shorter key in viscnts by checking the LCP
     // Now we begin to write index block
-    builder_.make_index();
-    builder_.finish();
+    end_new_file();
     return vec_newfiles_;
   }
 
@@ -643,13 +803,11 @@ class Compaction {
 
   template <typename TIter, std::enable_if_t<std::is_base_of_v<SeqIterator, TIter>, bool> = true>
   void flush(TIter left) {
-    if (!left.valid()) return;
-
     while (left.valid()) {
+      // printf("A");
       auto L = left.read();
       if (flag_ && lst_value_.first == L.first) {
         lst_value_.second += L.second;
-        lst_value_.first = L.first;  // avoid copying SKey, because old SKey may be expired
       } else {
         if (flag_) builder_.append(lst_value_);
         lst_value_ = L, flag_ = true;
@@ -660,8 +818,7 @@ class Compaction {
 
   std::vector<NewFileData> flush_end() {
     if (flag_) builder_.append(lst_value_);
-    builder_.make_index();
-    builder_.finish();
+    end_new_file();
     return vec_newfiles_;
   }
 
@@ -674,7 +831,6 @@ class Compaction {
       auto L = iters.read();
       if (flag_ && lst_value_.first == L.first) {
         lst_value_.second += L.second;
-        lst_value_.first = L.first;  // avoid copying SKey, because old SKey may be expired
       } else {
         if (_decay_kv(lst_value_)) {
           real_size_ += _calc_decay_value(lst_value_);
@@ -686,8 +842,7 @@ class Compaction {
       iters.next();
     }
     if (flag_) builder_.append(lst_value_);
-    builder_.make_index();
-    builder_.finish();
+    end_new_file();
     return {vec_newfiles_, real_size_};
   }
 
@@ -755,14 +910,19 @@ class Compaction {
         }
       }
     }
+    end_new_file();
     return {vec_newfiles_, real_size_};
   }
 
  private:
   std::mt19937 rndgen_;
   double decay_prob_;  // = 0.5 on default
-  double _calc_decay_value(const std::pair<SKey, SValue>& kv) { return (kv.first.len() + kv.second.vlen) * std::min(kv.second.counts * .5, 1.); }
-  bool _decay_kv(std::pair<SKey, SValue>& kv) {
+  template <typename T>
+  double _calc_decay_value(const std::pair<T, SValue>& kv) {
+    return (kv.first.len() + kv.second.vlen) * std::min(kv.second.counts * .5, 1.);
+  }
+  template <typename T>
+  bool _decay_kv(std::pair<T, SValue>& kv) {
     kv.second.counts *= decay_prob_;
     if (kv.second.counts < 1) {
       std::uniform_real_distribution<> dis(0, 1.);
@@ -775,8 +935,7 @@ class Compaction {
   }
   void _divide_file() {
     if (builder_.size() > kMemTable) {
-      builder_.make_index();
-      builder_.finish();
+      end_new_file();
       begin_new_file();
     }
   }
@@ -796,14 +955,18 @@ class LSMTree {
 
    public:
     Node nw_, od_;
-    bool compacting;
     bool flag;
+    bool compacting;
     MemTables() : flag(false), compacting(false) {}
     void append(const std::pair<SKey, SValue>& kv) {
       std::unique_lock<std::mutex> lck_(m_);
       if (compacting) {
+        // printf("B");
+        // logger(flag);
         flag ? od_.mem->append(kv.first, kv.second) : nw_.mem->append(kv.first, kv.second);
       } else {
+        // logger("n", flag);
+        // printf("C");
         compacting |= flag ? nw_.mem->size() >= kMemTable : od_.mem->size() >= kMemTable;
         // compacting old
         flag ? nw_.mem->append(kv.first, kv.second) : od_.mem->append(kv.first, kv.second);
@@ -812,18 +975,21 @@ class LSMTree {
       }
     }
     bool exists(const SKey& key) {
-      if (!od_.compacting_complete.load(std::memory_order_relaxed)) {
-        od_.refcounts += 1;
-        bool result = od_.mem->exists(key);
-        od_.refcounts -= 1;
-        if (result) return true;
-      }
-      if (!nw_.compacting_complete.load(std::memory_order_relaxed)) {
-        nw_.refcounts += 1;
-        bool result = nw_.mem->exists(key);
-        nw_.refcounts -= 1;
-        if (result) return true;
-      }
+      (void)key;
+      // TODO: fix potential bugs
+      // debug
+      // if (!od_.compacting_complete.load(std::memory_order_relaxed)) {
+      //   od_.refcounts += 1;
+      //   bool result = od_.mem->exists(key);
+      //   od_.refcounts -= 1;
+      //   if (result) return true;
+      // }
+      // if (!nw_.compacting_complete.load(std::memory_order_relaxed)) {
+      //   nw_.refcounts += 1;
+      //   bool result = nw_.mem->exists(key);
+      //   nw_.refcounts -= 1;
+      //   if (result) return true;
+      // }
       return false;
     }
     std::mutex& get_mutex() { return m_; }
@@ -864,25 +1030,30 @@ class LSMTree {
     }
     void insert(std::vector<std::unique_ptr<ImmutableFile>>&& files, Node* left, Node* right) {
       std::unique_lock<std::mutex> lck_(m_);
-      if (!head_) {
+      assert(head_ != nullptr);
+      if (!head_->next) {
         std::reverse(files.begin(), files.end());
-        for (auto&& a : files) {
+        for (auto& a : files) {
+          logger("[insert file]");
+          assert(a.get() != nullptr);
           auto node = new Node(std::move(a));
-          node->next.store(head_, std::memory_order_relaxed);
-          head_ = node;
+          node->next.store(head_->next, std::memory_order_relaxed);
           node->refcounts.fetch_add(1, std::memory_order_relaxed);
+          head_->next = node;
         }
 
       } else {
         std::reverse(files.begin(), files.end());
-        for (auto&& a : files) {
+        auto rright = right;
+        for (auto& a : files) {
+          assert(a.get() != nullptr);
           auto node = new Node(std::move(a));
           node->refcounts++;
           node->next.store(right, std::memory_order_relaxed);
           right = node;
         }
         // release old files
-        for (auto a = left->next.load(std::memory_order_relaxed); a != right;) {
+        for (auto a = left->next.load(std::memory_order_relaxed); a != rright;) {
           auto b = a->next.load(std::memory_order_relaxed);
           unref(a);
           a = b;
@@ -910,6 +1081,7 @@ class LSMTree {
     size_t size() {
       size_t ret = 0;
       for (Node* a = head_->next.load(std::memory_order_relaxed); a; a = a->next.load(std::memory_order_relaxed)) {
+        assert(a->file.get() != nullptr);
         ret += a->file->size();
       }
       return ret;
@@ -932,14 +1104,14 @@ class LSMTree {
     SSTIterator iter_;
 
    public:
-    ImmutablesIterator(Immutables::Node* begin) : now_(begin), iter_(begin->file.get(), 0) {}
+    ImmutablesIterator(Immutables::Node* begin) : now_(begin), iter_(begin->file.get()) {}
     bool valid() override { return now_ != nullptr; }
     void next() override {
       iter_.next();
       while (now_ && !iter_.valid()) {
         now_ = now_->next;
         if (!now_) return;
-        iter_ = SSTIterator(now_->file.get(), 0);
+        iter_ = SSTIterator(now_->file.get());
       }
     }
     std::pair<SKey, SValue> read() override { return iter_.read(); }
@@ -958,15 +1130,21 @@ class LSMTree {
   void _compact_result_insert(std::vector<Compaction::NewFileData>&& vec, Immutables::Node* left, Immutables::Node* right, int level) {
     std::vector<std::unique_ptr<ImmutableFile>> files;
     for (auto a : vec) {
-      auto file = std::make_unique<ImmutableFile>(a.file_id, a.size, std::unique_ptr<RandomAccessFile>(env_->openRAFile(a.filename)), cache_.get(), file_alloc_.get(), a.range);
+      auto rafile = env_->openRAFile(a.filename);
+      assert(rafile != nullptr);
+      auto file =
+          std::make_unique<ImmutableFile>(a.file_id, a.size, std::unique_ptr<RandomAccessFile>(rafile), cache_.get(), file_alloc_.get(), a.range);
+      assert(file.get() != nullptr);
       files.push_back(std::move(file));
     }
     tree_[level].insert(std::move(files), left, right);
   }
 
   template <typename TableType, typename TableIterType>
-  void _compact_tables(const TableType& table, const TableIterType& iter, int level) {
+  void _compact_tables(const TableType& table, const TableIterType& iter, uint32_t level) {
+    logger("_compact_tables");
     Immutables::Node *left = nullptr, *right = nullptr;
+    assert(tree_[level].head() != nullptr);
     for (auto a = tree_[level].head(); a; a = a->next.load(std::memory_order_relaxed)) {
       if (!a->file || !a->file->range_overlap(table->range())) {
         if (!left)
@@ -975,19 +1153,22 @@ class LSMTree {
           right = a;
       }
     }
+    assert(left != nullptr);
     Compaction worker(filename_.get(), env_.get());
-    if (left->next == right) {
+    if (!left || left->next.load(std::memory_order_relaxed) == right) {
+      logger("flush");
       worker.flush_begin();
       worker.flush(iter);
       _compact_result_insert(worker.flush_end(), left, right, level);
     } else {
+      logger("merge with sst");
+      // return;  // debug
       worker.compact_begin();
-      for (auto p = left;; p = p->next) {
+      for (auto p = left->next.load(std::memory_order_relaxed); p != right; p = p->next.load(std::memory_order_relaxed)) {
         if (level == tree_.size() - 1)  // for the last level, we update the estimated size of viscnts.
-          estimated_size_ += worker.compact_last_level(iter, SSTIterator(p->file.get(), 0));
+          estimated_size_ += worker.compact_last_level(iter, SSTIterator(p->file.get()));
         else
-          worker.compact(iter, SSTIterator(p->file.get(), 0));
-        if (p == right) break;
+          worker.compact(iter, SSTIterator(p->file.get()));
       }
       _compact_result_insert(worker.compact_end(), left, right, level);
     }
@@ -1024,10 +1205,11 @@ class LSMTree {
     // we store the decay result in the last level to decrease write amp.
     _compact_result_insert(std::move(vec), tree_.back().head(), nullptr, tree_.size() - 1);
     // clear all the levels and memtables
-    for (int i = 0; i < tree_.size() - 1; ++i) tree_[i].clear();
+    for (uint32_t i = 0; i < tree_.size() - 1; ++i) tree_[i].clear();
     mem_.clear();
   }
   void compact_thread() {
+    logger("thread begin");
     // use leveling first...
     // although I think tiering is better.
     // we only create one compact_thread including flushing memtable, compacing, decay.
@@ -1035,19 +1217,26 @@ class LSMTree {
     while (true) {
       std::this_thread::sleep_for(100ms);
       if (_check_decay()) {
+        logger("begin decay");
         decay_all();
         continue;
       }
       if (mem_.compacting) {
+        logger("flush memtable");
         if (mem_.od_.compacting_complete || mem_.nw_.compacting_complete) {
           // we must avoid moving nw_ to od_.
           // we use compacting_complete to mark the validality.
           // we use flag to mark which thread is processing now.
           // we use compacting to mark the whether there exists a table that needs a compaction.
+          logger("mem_.od_: ", mem_.od_.compacting_complete, ", ", mem_.od_.refcounts);
+          logger("mem_.nw_: ", mem_.nw_.compacting_complete, ", ", mem_.nw_.refcounts);
+          logger("flag, compacting: ", mem_.flag, ", ", mem_.compacting);
           if (mem_.od_.compacting_complete && !mem_.od_.refcounts) {
             std::unique_lock<std::mutex> lck_(mem_.get_mutex());
             // release is to reset memtable
             mem_.od_.mem->release();
+            // mem_.od_.mem = new MemTable();
+            // mem_.nw_.mem = new MemTable();
             mem_.od_.compacting_complete = false;
             mem_.compacting = false;
             mem_.flag ^= 1;
@@ -1055,25 +1244,37 @@ class LSMTree {
             std::unique_lock<std::mutex> lck_(mem_.get_mutex());
             // release is to reset memtable
             mem_.nw_.mem->release();
+            // mem_.od_.mem = new MemTable();
+            // mem_.nw_.mem = new MemTable();
             mem_.nw_.compacting_complete = false;
             mem_.compacting = false;
             mem_.flag ^= 1;
           }
+
+          logger("change memtable end");
           continue;
         }
+        std::unique_lock<std::mutex> lck_(mem_.get_mutex());
         auto& table = mem_.flag ? mem_.nw_.mem : mem_.od_.mem;
-        MemTableIterator iter(mem_.od_.mem->head());
+        logger("memtable size: ", table->size());
+        MemTableIterator iter(table->begin());
+        if (tree_.size() == 0) {
+          tree_.emplace_back();
+        }
         _compact_tables(table, iter, 0);
 
         mem_.flag ? mem_.nw_.compacting_complete = true : mem_.od_.compacting_complete = true;
+        logger("flush memtable end");
         // std::unique_lock<std::mutex> lck_(mem_.get_mutex());
         // mem_.od_ = std::move(mem.nw_)
         // mem_.od_.compacting = false;
       }
+      // continue;  // debug
       size_t level_size = kSSTable * 2;
-      for (int i = 0; i < tree_.size(); i++) {
+      for (uint32_t i = 0; i < tree_.size(); i++) {
         auto& a = tree_[i];
         if (a.size() > level_size) {
+          logger("compact sst of ", i, "-th level");
           // choose one file to flush
           auto lucky_one = a.head()->next.load(std::memory_order_relaxed);
           if (i == tree_.size() - 1) {
@@ -1082,7 +1283,7 @@ class LSMTree {
             tree_.back().insert(std::move(lucky_one->file), nullptr, nullptr);
             tree_[i].unref(lucky_one);
           } else {
-            _compact_tables(lucky_one->file, SSTIterator(lucky_one->file.get(), 0), i + 1);
+            _compact_tables(lucky_one->file, SSTIterator(lucky_one->file.get()), i + 1);
           }
         }
         level_size *= kRatio;
@@ -1118,7 +1319,7 @@ int VisCntsAccess(void* ac, const char* key, size_t klen, size_t vlen) {
 
 bool VisCntsIsHot(void* ac, const char* key, size_t klen) {
   auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
-  return vc->is_hot(viscnts_lsm::SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen));
+  return vc->is_hot(viscnts_lsm::SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen)) == 1;
 }
 
 int VisCntsClose(void* ac) {

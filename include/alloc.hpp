@@ -10,34 +10,33 @@ class BaseAllocator {
 };
 
 class MemtableAllocator : public BaseAllocator {
-  static const int kBlockSize = 1e7;
+  static const size_t kBlockSize = 1e7;
   std::vector<uint8_t*> v;
   size_t nwsize;
+  size_t index;
 
  public:
-  MemtableAllocator() {
-    nwsize = 0;
-    v.clear();
-  }
+  MemtableAllocator() : nwsize(0), index(0) {}
   ~MemtableAllocator() {
-    for (auto& a : v)
-      if (a) {
-        delete[] a;
-      }
+    for (auto& a : v) delete a;
   }
-  uint8_t* allocate(size_t size) {
-    if (!v.size() || nwsize + size > kBlockSize) {
-      v.push_back(new uint8_t[kBlockSize]);
+  uint8_t* allocate(size_t size) override {
+    if (index == 0 || nwsize + size > kBlockSize) {
+      if (index == v.size()) v.push_back(new uint8_t[size > kBlockSize ? size : kBlockSize]);
+      else if(size > kBlockSize) delete v[index], v[index] = new uint8_t[size];
       nwsize = size;
-      return v.back();
+      return v[index++];
     } else {
-      auto ret = v.back() + nwsize;
+      auto ret = v[index - 1] + nwsize;
       nwsize += size;
       return ret;
     }
   }
   // release all
-  void release(uint8_t* ptr = nullptr) { nwsize = 0; }
+  void release(uint8_t* = nullptr) override {
+    nwsize = 0;
+    index = 0;
+  }
 };
 
 class DefaultAllocator : public BaseAllocator {
@@ -45,5 +44,13 @@ class DefaultAllocator : public BaseAllocator {
   uint8_t* allocate(size_t size) override { return new uint8_t[size]; }
   void release(uint8_t* ptr) override { delete ptr; }
 };
+
+
+// class MemtableAllocator : public BaseAllocator {
+//  public:
+//   uint8_t* allocate(size_t size) override { return new uint8_t[size]; }
+//   void release(uint8_t* = nullptr) override {}
+// };
+
 
 #endif

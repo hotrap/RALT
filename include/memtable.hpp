@@ -18,13 +18,27 @@ class SkipList {
   explicit SkipList(Allocator *A_, const Comparator &C_) : alloc_(A_), comp_(C_) {
     height_ = 1;
     uint8_t *_head_mem = alloc_->allocate(sizeof(Node) + sizeof(std::atomic<Node *>) * (kMaxHeight - 1));
+    memset(_head_mem, 0, sizeof(Node) + sizeof(std::atomic<Node *>) * (kMaxHeight - 1));
     head_ = reinterpret_cast<Node *>(_head_mem);
     prev_height_ = 0;
+    memset(prev_, 0, sizeof(prev_));
     prev_[0] = head_;
   }
 
   SkipList(const SkipList &) = delete;
-  void operator=(const SkipList &) = delete;
+  SkipList& operator=(const SkipList &) = delete;
+  SkipList& operator=(SkipList&& list) {
+    alloc_ = list.alloc_;
+    comp_ = list.comp_;
+    height_ = list.height_.load(std::memory_order_relaxed);
+    prev_height_ = list.prev_height_;
+    head_ = list.head_;
+    list.head_ = nullptr;
+    list.alloc_ = nullptr;
+    memcpy(prev_, list.prev_, sizeof(list.prev_));
+    memset(list.prev_, 0, sizeof(list.prev_));
+    return (*this);
+  }
 
   inline int GetMaxHeight() const { return height_.load(std::memory_order_relaxed); }
 
@@ -112,24 +126,20 @@ class SkipList {
 class MemTable {
   size_t size_;
   MemtableAllocator alloc_;
-  SkipList<SKey, SValue, MemtableAllocator, SKeyComparator> *list_;
+  SkipList<SKey, SValue, MemtableAllocator, SKeyComparator> list_;
 
  public:
   using Node = SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>::Node;
-  explicit MemTable() : size_(0), alloc_(), list_(new SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>(&alloc_, SKeyComparator())) {}
-  void append(const SKey &key, const SValue &value) {
-    size_ += key.size() + sizeof(SValue);
-    uint8_t *key_ptr = alloc_.allocate(key.len());
-    memcpy(key_ptr, key.data(), key.len());
-    list_->insert(SKey(key_ptr, key.len()), value);
-  }
-  bool exists(const SKey &key) { return list_->queryEqual(key) != nullptr; }
-  Node *find(const SKey &key) { return list_->queryEqual(key); }
-  Node *head() { return list_->getHead(); }
+  explicit MemTable() : size_(0), alloc_(), list_(&alloc_, SKeyComparator()) {}
+  void append(const SKey &key, const SValue &value); 
+  bool exists(const SKey &key);
+  Node *find(const SKey &key); 
+  Node *head() { return list_.getHead(); }
+  Node *begin() { return list_.getHead()->noBarrierGetNext(0); }
   size_t size() { return size_; }
   void release() {
-    alloc_.release(), delete list_;
-    list_ = new SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>(&alloc_, SKeyComparator());
+    alloc_.release(), size_ = 0;
+    list_ = SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>(&alloc_, SKeyComparator());
   }
   std::pair<SKey, SKey> range() {
     auto mx = head();
