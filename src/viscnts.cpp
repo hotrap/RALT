@@ -154,8 +154,8 @@ class FileBlock {     // process blocks in a file
     const auto offset = offset_index_ + id * sizeof(Value);
     // calculate the chunk id
     // because of alignment
-    const auto the_chunk = offset / kValuePerChunk;
-    return {the_chunk * kChunkSize, offset + the_chunk * (sizeof(Value) - kChunkSize % sizeof(Value))};
+    const auto the_chunk = offset_index_ / kChunkSize + id / kValuePerChunk;
+    return {the_chunk, offset + id / kValuePerChunk * (kChunkSize - kValuePerChunk * sizeof(Value))};
   }
 
  public:
@@ -166,6 +166,7 @@ class FileBlock {     // process blocks in a file
     Iterator(const Iterator& it) {
       block_ = it.block_;
       offset_ = it.offset_;
+      logger("new fileblock iterator");
       init();
     }
     Iterator& operator=(const Iterator& it) {
@@ -177,7 +178,9 @@ class FileBlock {     // process blocks in a file
     auto seek_and_read(uint32_t id) {
       SKey _key;
       Value _value;
+      logger("seek_and_read(): ", id);
       auto [chunk_id, offset] = block_._value_offset(id);
+      logger("first, ", chunk_id, ", ", offset);
       if (current_value_id_ != chunk_id) currenct_value_chunk_ = block_.acquire(current_value_id_ = chunk_id);
       block_.read_value_offset(offset % kChunkSize, currenct_value_chunk_, _value);
       // read key
@@ -188,6 +191,7 @@ class FileBlock {     // process blocks in a file
       return std::make_pair(_key, _value);
     }
     void next() {
+      logger("next(): ", offset_, ", ", current_value_id_);
       offset_ += sizeof(Value);
       if (offset_ + sizeof(Value) > kChunkSize) {
         offset_ += kChunkSize - offset_ % kChunkSize, current_value_id_ += 1;
@@ -585,8 +589,9 @@ class SSTBuilder {
     }
   }
 
+  template<typename T>
   uint32_t _calc_offset(uint32_t id) {
-    return id / (kChunkSize / sizeof(BlockValue<SValue>)) * kChunkSize + id % (kChunkSize / sizeof(BlockValue<SValue>)) * sizeof(BlockValue<SValue>);
+    return id / (kChunkSize / sizeof(T)) * kChunkSize + id % (kChunkSize / sizeof(T)) * sizeof(T);
   }
 
  public:
@@ -596,7 +601,7 @@ class SSTBuilder {
     _append_align(kv.first.size());
     counts++;
     if (counts == kChunkSize) {
-      index.emplace_back(kv.first, _calc_offset(offsets.size() + 1));
+      index.emplace_back(kv.first, _calc_offset<T>(offsets.size()));
       counts = 0;
     } else
       lst_key = kv.first;
@@ -606,7 +611,7 @@ class SSTBuilder {
   }
   void make_index() {
     if (counts) {
-      index.emplace_back(lst_key, _calc_offset(offsets.size()));
+      index.emplace_back(lst_key, _calc_offset<BlockValue<SValue>>(offsets.size() - 1));
       counts = 0;
     }
     _align();
