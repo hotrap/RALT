@@ -16,9 +16,8 @@ struct LRUHandle {
   LRUHandle* prv;
   LRUHandle* nxt_h;
   LRUHandle* prv_h;
-  uint8_t* data;
+  std::atomic<uint8_t*> data;
   BaseAllocator* deleter;
-  std::atomic<bool> valid;
   std::atomic<uint32_t> refs;
   size_t klen;
   uint8_t key_data[1];
@@ -26,7 +25,6 @@ struct LRUHandle {
     nxt = prv = nxt_h = prv_h = nullptr;
     data = nullptr;
     deleter = nullptr;
-    valid = false;
     refs = 0;
     klen = 0;
   }
@@ -36,6 +34,7 @@ struct LRUHandle {
     memcpy(ret->key_data, key.data(), key.len());
     ret->klen = key.len();
     assert(ret->data == nullptr);
+    assert(ret->deleter == nullptr);
     return ret;
   }
   Slice Key() { return Slice(key_data, klen); }
@@ -56,7 +55,7 @@ class HashTable {
   HashTable& operator=(const HashTable&) = delete;
   HashTable& operator=(HashTable&&) = delete;
   LRUHandle* lookup(const Slice& key, uint32_t hash, bool allow_new) {
-    auto* head = &list_[hash % size_], *tail = head;
+    auto* head = &list_[hash & (size_ - 1)], *tail = head;
     if(tail->nxt_h) tail = tail->nxt_h;
     else if(!allow_new) return nullptr;
     else return _insert(key, head);
@@ -74,11 +73,9 @@ class HashTable {
     return true;
   }
   void erase(LRUHandle* ptr) {
-    auto head = _find(ptr);
-    while(head->valid.exchange(true, std::memory_order_relaxed));
+    std::unique_lock lck_(m_);
     ptr->prv_h->nxt_h = ptr->nxt_h;
     if(ptr->nxt_h) ptr->nxt_h->prv_h = ptr->prv_h;
-    head->valid = false;
   }
 
  private:
@@ -86,21 +83,15 @@ class HashTable {
   std::vector<LRUHandle> list_;
   std::mutex m_;
 
-  LRUHandle* _find(LRUHandle* ptr) {
-    while(ptr->prv_h) ptr = ptr->prv_h;
-    return ptr;
-  }
-  
   LRUHandle* _insert(const Slice& key, LRUHandle* head) {
-    while(head->valid.exchange(true, std::memory_order_relaxed));
+    std::unique_lock lck_(m_);
     auto tail = head;
     while (tail->nxt_h && tail->Key() != key) tail = tail->nxt_h;
-    if(tail->Key() == key) return tail;
+    if(tail != head && tail->Key() == key) return tail;
     auto ret = LRUHandle::genHandle(key);
     ret->nxt_h = nullptr;
-    ret->prv_h = head;
+    ret->prv_h = tail;
     tail->nxt_h = ret;
-    head->valid = false;
     return ret;
   }
 };
@@ -133,6 +124,7 @@ LRUCache::~LRUCache() {
 }
 
 LRUHandle* LRUCache::lookup(const Slice& key, uint32_t hash) {
+  std::unique_lock<std::shared_mutex> _(mutex_);
   auto ret = table.lookup(key, hash, true);
   ref(ret);
   return ret;
@@ -142,7 +134,7 @@ void LRUCache::release(LRUHandle* h) { unref(h); }
 
 void LRUCache::ref(LRUHandle* h) {
   if (!h->refs && h->prv != nullptr) {  
-    std::unique_lock<std::shared_mutex> _(mutex_);
+    // std::unique_lock<std::shared_mutex> _(mutex_);
     assert(h->prv != nullptr);
     assert(h->nxt != nullptr);
     h->prv->nxt = h->nxt;
@@ -154,9 +146,10 @@ void LRUCache::ref(LRUHandle* h) {
 
 void LRUCache::unref(LRUHandle* h) {
   assert((int)h->refs >= 0);
+  std::unique_lock<std::shared_mutex> _(mutex_);
   if (!--h->refs) {  
-    std::unique_lock<std::shared_mutex> _(mutex_);
     h->nxt = lru_->nxt;
+    assert(lru_->nxt != nullptr);
     h->prv = lru_;
     lru_->nxt->prv = h;
     lru_->nxt = h;

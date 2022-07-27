@@ -84,7 +84,7 @@ class Chunk {
     Slice result;
     size_t key = (size_t)file_id << 32 | offset;
     lru_handle_ = cache_->lookup(Slice(reinterpret_cast<uint8_t*>(&key), sizeof(size_t)), Hash8(reinterpret_cast<char*>(&key)));
-    if (!lru_handle_->valid.load(std::memory_order_relaxed)) {
+    if (!lru_handle_->data.load(std::memory_order_relaxed)) {
       // since this handle is not valid, we read the chunk from file, then try to cache it in memory.
       // if several threads read and cache the same chunk at the same time, then all but one of these threads should release the chunk.
       auto ptr = alloc->allocate(kChunkSize);
@@ -95,9 +95,10 @@ class Chunk {
         data_ = nullptr;
         return;
       }
-      if (!lru_handle_->valid.exchange(true, std::memory_order_relaxed)) {
-        // result.data() == ptr.
-        lru_handle_->data = result.data();
+      // result.data() == ptr.
+      assert(result.data() == ptr);
+      auto _moto_data = lru_handle_->data.load(std::memory_order_relaxed);
+      if (!_moto_data && lru_handle_->data.compare_exchange_strong(_moto_data, ptr)) {
         lru_handle_->deleter = alloc;
       } else
         alloc->release(ptr);
@@ -108,6 +109,17 @@ class Chunk {
       data_ = lru_handle_->data;
       assert(data_ != nullptr);
     }
+    // Slice result;
+    // auto ptr = alloc->allocate(kChunkSize);
+    // auto err = file_ptr->read(offset, kChunkSize, ptr, result);
+    // if (err) {
+    //     logger("error in Chunk::Chunk(): ", err);
+    //     exit(-1);
+    //     data_ = nullptr;
+    //     return;
+    //   }
+    // data_ = result.data();
+    // lru_handle_ = nullptr;
   }
   Chunk(const Chunk&) = delete;
   Chunk& operator=(const Chunk&) = delete;
@@ -120,6 +132,7 @@ class Chunk {
     c.cache_ = nullptr;
   }
   Chunk& operator=(Chunk&& c) {
+    // delete data_;
     if (lru_handle_ && cache_) cache_->release(lru_handle_);
     lru_handle_ = c.lru_handle_;
     data_ = c.data_;
@@ -130,6 +143,7 @@ class Chunk {
     return (*this);
   }
   ~Chunk() {
+    // delete data_;
     if (lru_handle_) cache_->release(lru_handle_);
   }
   uint8_t* data(uint32_t offset = 0) const { return data_ + offset; }
@@ -788,7 +802,7 @@ class Compaction {
         right.next();
         if (right.valid()) R = right.read();
       }
-      // _divide_file();
+      _divide_file();
     }
   }
 
@@ -824,7 +838,7 @@ class Compaction {
         right.next();
         if (right.valid()) R = right.read();
       }
-      // _divide_file();
+      _divide_file();
     }
     return change;
   }
@@ -1188,6 +1202,7 @@ class LSMTree {
   std::unique_ptr<FileName> filename_;
   std::unique_ptr<BaseAllocator> file_alloc_;
   std::thread compact_thread_;
+  bool terminate_signal_;
 
   void _compact_result_insert(std::vector<Compaction::NewFileData>&& vec, Immutables::Node* left, Immutables::Node* right, int level) {
     std::vector<std::unique_ptr<ImmutableFile>> files;
@@ -1239,26 +1254,32 @@ class LSMTree {
  public:
   LSMTree(std::unique_ptr<LRUCache>&& cache, double delta, std::unique_ptr<Env>&& env, std::unique_ptr<FileName>&& filename,
           std::unique_ptr<BaseAllocator>&& alloc)
-      : tree_height_(0),cache_(std::move(cache)),
+      : tree_height_(0),
+        cache_(std::move(cache)),
         estimated_size_(0),
         delta_(delta),
         env_(std::move(env)),
         filename_(std::move(filename)),
-        file_alloc_(std::move(alloc)) {
+        file_alloc_(std::move(alloc)),
+        terminate_signal_(false) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
-    compact_thread_.detach();
+  }
+  ~LSMTree() {
+    terminate_signal_ = true;
+    compact_thread_.join();
   }
   void append(const std::pair<SKey, SValue>& kv) { mem_.append(kv); }
   bool exists(const SKey& key) {
     if (mem_.exists(key)) return true;
-    for (int i = 0; i < tree_height_; i++)
+    for (uint32_t i = 0; i < tree_height_; i++)
       if (tree_[i].exists(key)) return true;
     return false;
   }
   void decay_all() {
     SeqIteratorSet iter_set;
     iter_set.push(std::make_unique<MemTableIterator>(mem_.mem_->head()));
-    for (int i = 0; i < tree_height_; i++) iter_set.push(std::make_unique<ImmutablesIterator>(ImmutablesIterator(tree_[i].head()->next, nullptr)));
+    for (uint32_t i = 0; i < tree_height_; i++)
+      iter_set.push(std::make_unique<ImmutablesIterator>(ImmutablesIterator(tree_[i].head()->next, nullptr)));
     Compaction worker(filename_.get(), env_.get());
     auto [vec, sz] = worker.decay_first(std::move(iter_set));  // we use this first;
     estimated_size_ = sz;                                      // this is the exact value of estimated_size_ // will it decay twice in succession?
@@ -1274,7 +1295,7 @@ class LSMTree {
     // although I think tiering is better.
     // we only create one compact_thread including flushing memtable, compacing, decay.
     using namespace std::chrono_literals;
-    while (true) {
+    while (!terminate_signal_) {
       std::this_thread::sleep_for(100ms);
       if (_check_decay()) {
         logger("begin decay");
@@ -1298,7 +1319,7 @@ class LSMTree {
         // mem_.od_ = std::move(mem.nw_)
         // mem_.od_.compacting = false;
       }
-      if (tree_height_) logger("level 0: ", tree_[0].size());
+      if (tree_height_) logger("level 0: ", tree_[0].size(), ", first file: ", tree_[0].head()->next.load());
       // continue;  // debug
       // continue;  // debug
       size_t level_size = kSSTable * 2;
