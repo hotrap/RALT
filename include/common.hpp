@@ -7,6 +7,8 @@
 #include <cassert>
 #include <cstring>
 #include <vector>
+#include <atomic>
+#include <cstdio>
 
 namespace viscnts_lsm {
 
@@ -45,17 +47,17 @@ class IndSlice {
   explicit IndSlice(Slice s) : a_(s.data() == nullptr ? nullptr : new uint8_t[s.len()]), len_(s.len()) {
     if (a_) memcpy(a_, s.data(), s.len());
   }
-  IndSlice(IndSlice&& s) : a_(s.a_), len_(s.len_) { s.a_ = nullptr; }
+  IndSlice(IndSlice&& s) : a_(s.a_), len_(s.len_) { s.a_ = nullptr, s.len_ = 0; }
   IndSlice(const IndSlice& s) : a_(s.data() == nullptr ? nullptr : new uint8_t[s.len()]), len_(s.len()) {
     if (a_) memcpy(a_, s.data(), s.len());
   }
   IndSlice& operator=(IndSlice&& s) {
-    if(a_) delete a_;
-    a_ = s.a_, len_ = s.len_, s.a_ = nullptr;
+    if (a_) delete a_;
+    a_ = s.a_, len_ = s.len_, s.a_ = nullptr, s.len_ = 0;
     return (*this);
   }
   IndSlice& operator=(const Slice& s) {
-    if(a_) delete a_;
+    if (a_) delete a_;
     a_ = s.data() == nullptr ? nullptr : new uint8_t[s.len()];
     len_ = s.len();
     if (a_) memcpy(a_, s.data(), s.len());
@@ -78,6 +80,22 @@ class IndSlice {
     memcpy(to, a_, len_);
     to += len_;
     return to;
+  }
+};
+
+class RefCounts {
+  std::atomic<uint32_t> __ref_counts;
+
+ public:
+  RefCounts() { __ref_counts = 1; }
+  RefCounts& operator=(RefCounts&& r){
+    __ref_counts.store(r.__ref_counts.load());
+    return (*this);
+  }
+  virtual ~RefCounts() = default;
+  void ref() { __ref_counts.fetch_add(1, std::memory_order_seq_cst); }
+  void unref() {
+    if (!--__ref_counts) { delete this; }
   }
 };
 

@@ -123,7 +123,7 @@ class SkipList {
   Node *head_;
 };
 
-class MemTable {
+class MemTable : public RefCounts {
   size_t size_;
   MemtableAllocator alloc_;
   SkipList<SKey, SValue, MemtableAllocator, SKeyComparator> list_;
@@ -131,16 +131,20 @@ class MemTable {
  public:
   using Node = SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>::Node;
   explicit MemTable() : size_(0), alloc_(), list_(&alloc_, SKeyComparator()) {}
+  MemTable& operator=(MemTable&& m) {
+    RefCounts::operator=(std::move(m));
+    list_ = std::move(m.list_);
+    alloc_ = m.alloc_;
+    size_ = m.size_;
+    m.size_ = 0;
+    return (*this);
+  }
   void append(const SKey &key, const SValue &value); 
   bool exists(const SKey &key);
   Node *find(const SKey &key); 
   Node *head() { return list_.getHead(); }
   Node *begin() { return list_.getHead()->noBarrierGetNext(0); }
   size_t size() { return size_; }
-  void release() {
-    alloc_.release(), size_ = 0;
-    list_ = SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>(&alloc_, SKeyComparator());
-  }
   std::pair<SKey, SKey> range() {
     auto mx = head();
     auto mn = head()->noBarrierGetNext(0);

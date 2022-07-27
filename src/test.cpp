@@ -12,42 +12,105 @@ extern bool VisCntsIsHot(void* ac, const char* key, size_t klen);
 
 extern int VisCntsClose(void* ac);
 
+class KeyTests {
+ public:
+  KeyTests() {}
+  int gen(std::mt19937& rnd, int l, int r) {
+    uniform_int_distribution<int> dis(l, r);
+    int x = dis(rnd);
+    return x;
+  }
+  template <typename Append, typename Exists>
+  void test1(const Append& _append, const Exists& _exist, int R) {
+    std::set<int> st;
+    std::random_device rd;
+    std::mt19937 rnd(19260817);
+    for (int i = 0; i < R; i++) {
+      int x = gen(rnd, 0, R);
+      if (i & 1) {
+        _append(x);
+        st.insert(x);
+      } else {
+        if(_exist(x) != st.count(x)) {
+          printf("failed: i = %d, x = %d, _exist = %d, st.count = %d\n", i, x, _exist(x), st.count(x));
+          fflush(stdout);
+          exit(-1);
+        }
+        // assert(_exist(x) == st.count(x));
+      }
+    }
+  }
+
+  std::mutex m_;
+  template <typename Append, typename Exists>
+  void test2(const Append& _append, const Exists& _exist, int L, int R) {
+    std::set<int> st;
+    std::random_device rd;
+    std::mt19937 rnd(rd());
+    for (int i = 0; i < R - L; i++) {
+      int x = gen(rnd, L, R);
+      if (i % 5 == 0) {
+        st.insert(x);
+        std::unique_lock lck_(m_);
+        _append(x);
+      } else {
+        assert(_exist(x) == st.count(x));
+      }
+    }
+  }
+
+  template <typename Append>
+  void test3(const Append& _append, int R) {
+    std::random_device rd;
+    std::mt19937 rnd(19260817);
+    for (int i = 0; i < R; i++) {
+      int x = gen(rnd, 0, R);
+      _append(x);
+    }
+  }
+};
+
 void test_basic() {
   auto vc = VisCntsOpen("/tmp/viscnts/", 1 << 30, 1);
-  VisCntsAccess(vc, "a", 1, 1);
-  // assert(VisCntsIsHot(vc, "a", 1) == 1);
-  // assert(VisCntsIsHot(vc, "b", 1) == 0);
-  for (int i = 0; i < 10000000; ++i) {
-    VisCntsAccess(vc, (char*)(&i), 4, 1);
-    if (i % 1000000 == 0) printf("[ins: %d]", i), fflush(stdout);
+  KeyTests A;
+  A.test1([&](int x) { VisCntsAccess(vc, (char*)(&x), 4, 1); }, [&](int x) { return VisCntsIsHot(vc, (char*)(&x), 4); }, 1e7);
+  A.test3([&](int x) { VisCntsAccess(vc, (char*)(&x), 4, 1); }, 1e6);
+  puts("[Basic] Pass single thread");
+  VisCntsClose(vc);
+  vc = VisCntsOpen("/tmp/viscnts/", 1 << 30, 1);
+  std::vector<std::thread> v;
+  for (int i = 0; i < 20; ++i) {
+    v.emplace_back([i, &A, &vc]() {
+      A.test2([&](int x) { VisCntsAccess(vc, (char*)(&x), 4, 1); }, [&](int x) { return VisCntsIsHot(vc, (char*)(&x), 4); }, 5000000 * i + 1,
+              5000000 * (i + 1));
+    });
   }
-  // for(int i = 0; i < 10000000; ++i) {
-  //     assert(VisCntsIsHot(vc,  (char*)(&i), 4) == 1);
-  // }
-  puts("Pass");
+  for (auto& a : v) a.join();
+  puts("[Basic] Pass multi-thread #1");
   VisCntsClose(vc);
 }
 
 void test_memtable() {
   using namespace viscnts_lsm;
-  MemTable T;
-  std::set<int> st;
-  for (int i = 0, x = rand() % 1000000; i < 1000000; ++i, x = rand() % 1000000) T.append(SKey((uint8_t*)(&x), sizeof(int)), SValue()), st.insert(x);
-  puts("insert complete");
-  fflush(stdout);
-  for (int i = 0; i < 1000000; ++i) assert(T.exists(SKey((uint8_t*)(&i), 4)) == st.count(i));
-  puts("assert complete");
-  fflush(stdout);
-  T.release();
-  st.clear();
-  for (int i = 0, x = rand() % 1000000; i < 1000000; ++i, x = rand() % 1000000) T.append(SKey((uint8_t*)(&x), sizeof(int)), SValue()), st.insert(x);
-  puts("insert2 complete");
-  fflush(stdout);
-  for (int i = 0; i < 1000000; ++i) assert(T.exists(SKey((uint8_t*)(&i), 4)) == st.count(i));
-  puts("assert2 complete");
-  fflush(stdout);
-  puts("memtable pass");
-  fflush(stdout);
+  MemTable* T = new MemTable;
+  KeyTests A;
+  A.test1([&](int x) { T->append(SKey((uint8_t*)&x, 4), SValue()); }, [&](int x) { return T->exists(SKey((uint8_t*)&x, 4)); }, 1e6);
+  T->unref();
+  T = new MemTable();
+  A.test1([&](int x) { T->append(SKey((uint8_t*)&x, 4), SValue()); }, [&](int x) { return T->exists(SKey((uint8_t*)&x, 4)); }, 1e6);
+  T->unref();
+  puts("[Memtable] Pass single thread");
+  T = new MemTable();
+  std::vector<std::thread> v;
+  for (int i = 0; i < 10; ++i) {
+    v.emplace_back([i, &T, &A]() {
+      A.test2([&](int x) { T->append(SKey((uint8_t*)&x, 4), SValue()); }, [&](int x) { return T->exists(SKey((uint8_t*)&x, 4)); }, 100000 * i + 1,
+              100000 * (i + 1));
+    });
+  }
+  for (auto& a : v) a.join();
+  puts("[Memtable] Pass multi-thread #1");
+
 }
 
 int main() {

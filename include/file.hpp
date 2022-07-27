@@ -16,6 +16,7 @@ class SeqFile {
 class RandomAccessFile {
  public:
   virtual ssize_t read(size_t offset, size_t n, uint8_t* data, Slice& result) = 0;
+  virtual ssize_t remove() = 0;
   virtual ~RandomAccessFile() = default;
 };
 

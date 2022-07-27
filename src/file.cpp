@@ -73,6 +73,10 @@ class PosixRandomAccessFile : public RandomAccessFile {
     return 0;
   }
 
+  ssize_t remove() override {
+    return ::remove(fname_.c_str());
+  }
+
  private:
   int fd_;
   bool use_fd_;
