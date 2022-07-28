@@ -438,7 +438,7 @@ class ImmutableFile {
 
     // offset_l is % kChunkSize = 0.
     auto ret = data_block_.sub_fileblock(handle.v / kChunkSize * kChunkSize, handle.v + sizeof(BlockValue<SValue>)).exists(key);
-    assert(ret == data_block_.exists(key));
+    // assert(ret == data_block_.exists(key));
     return ret;
   }
   bool in_range(const SKey& key) {
@@ -551,24 +551,22 @@ class SeqIteratorSet : public SeqIterator {
     auto h = 0;
     SKey mn = tmp_kv_[0].first;
     for (uint32_t i = 1; i < tmp_kv_.size(); ++i)
-      if (tmp_kv_[i].first <= mn) mn = tmp_kv_[h = i].first;
+      if (iters_[i]->valid() && tmp_kv_[i].first <= mn) mn = tmp_kv_[h = i].first;
     iters_[h]->next();
     if (iters_[h]->valid())
       tmp_kv_[h] = iters_[h]->read();
-    else
-      tmp_kv_[h] = {SKey(nullptr, 1e18), SValue()};
   }
   std::pair<SKey, SValue> read() override {
     auto h = 0;
     SKey mn = tmp_kv_[0].first;
     for (uint32_t i = 1; i < tmp_kv_.size(); ++i)
-      if (tmp_kv_[i].first <= mn) mn = tmp_kv_[h = i].first;
+      if (iters_[i]->valid() && tmp_kv_[i].first <= mn) mn = tmp_kv_[h = i].first;
     return tmp_kv_[h];
   }
   void push(std::unique_ptr<SeqIterator>&& new_iter) {
     if (!new_iter->valid()) return;
-    iters_.push_back(std::move(new_iter));
     tmp_kv_.push_back(new_iter->read());
+    iters_.push_back(std::move(new_iter));
   }
   SeqIterator* copy() override { return new SeqIteratorSet(*this); }
 };
@@ -768,7 +766,9 @@ class Compaction {
     size_t size;
     std::pair<IndSKey, IndSKey> range;
   };
-  Compaction(FileName* files, Env* env) : files_(files), env_(env), flag_(false), rndgen_(std::random_device()()) {}
+  Compaction(FileName* files, Env* env) : files_(files), env_(env), flag_(false), rndgen_(std::random_device()()) {
+    decay_prob_ = 0.5;
+  }
   void compact_begin() {
     vec_newfiles_.clear();
     _begin_new_file();
@@ -883,12 +883,14 @@ class Compaction {
     vec_newfiles_.clear();
     _begin_new_file();
     flag_ = false;
+    int A = 0;
     while (iters.valid()) {
       auto L = iters.read();
       if (flag_ && lst_value_.first == L.first) {
         lst_value_.second += L.second;
       } else {
         if (_decay_kv(lst_value_)) {
+          A++;
           real_size_ += _calc_decay_value(lst_value_);
           builder_.append(lst_value_);
           _divide_file();
@@ -897,7 +899,14 @@ class Compaction {
       }
       iters.next();
     }
-    if (flag_) builder_.append(lst_value_);
+    if (flag_) {
+      if (_decay_kv(lst_value_)) {
+          A++;
+          real_size_ += _calc_decay_value(lst_value_);
+          builder_.append(lst_value_);
+        }
+    }
+    printf("[%d]", A);
     _end_new_file();
     return {vec_newfiles_, real_size_};
   }
@@ -1153,6 +1162,7 @@ class LSMTree {
     }
 
     void clear() {
+      std::unique_lock lck_(tree_m_);
       for (Node* a = head_->next.load(std::memory_order_relaxed); a;) {
         auto b = a->next.load(std::memory_order_relaxed);
         a->unref();
@@ -1276,17 +1286,21 @@ class LSMTree {
     return false;
   }
   void decay_all() {
+    assert(tree_height_ != 0);
     SeqIteratorSet iter_set;
     iter_set.push(std::make_unique<MemTableIterator>(mem_.mem_->head()));
-    for (uint32_t i = 0; i < tree_height_; i++)
+    for (uint32_t i = 0; i < tree_height_; i++) if(tree_[i].head()->next)
       iter_set.push(std::make_unique<ImmutablesIterator>(ImmutablesIterator(tree_[i].head()->next, nullptr)));
     Compaction worker(filename_.get(), env_.get());
     auto [vec, sz] = worker.decay_first(std::move(iter_set));  // we use this first;
     estimated_size_ = sz;                                      // this is the exact value of estimated_size_ // will it decay twice in succession?
+    logger("estimate_size: ", sz);
     // we store the decay result in the last level to decrease write amp.
     _compact_result_insert(std::move(vec), tree_[tree_height_ - 1].head(), nullptr, tree_height_ - 1);
     // clear all the levels and memtables
     for (uint32_t i = 0; i < tree_height_ - 1; ++i) tree_[i].clear();
+    std::unique_lock<std::mutex> lck_(mem_.get_mutex());
+    mem_.compacting_ = false;
     mem_.new_memtable();
   }
   void compact_thread() {

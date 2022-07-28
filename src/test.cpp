@@ -68,6 +68,18 @@ class KeyTests {
       _append(x);
     }
   }
+
+  template <typename Append, typename Exists>
+  void test4(const Append& _append, const Exists& _exist, int R) {
+    for (int i = 0; i < R; i++) {
+      _append(i);
+    }
+    int cnt = 0;
+    for (int i = 0; i < R; i++) {
+      cnt += _exist(i);
+    }
+    printf("%d", cnt);
+  }
 };
 
 void test_basic() {
@@ -113,7 +125,27 @@ void test_memtable() {
 
 }
 
+
+void test_decay() {
+  auto vc = VisCntsOpen("/tmp/viscnts", 1e6, 1);
+  KeyTests A;
+  A.test4([&](int x) { VisCntsAccess(vc, (char*)(&x), 4, 1); }, [&](int x) { return VisCntsIsHot(vc, (char*)(&x), 4); }, 5e6);
+  VisCntsClose(vc);
+  puts("[Decay] Pass single thread");
+  vc = VisCntsOpen("/tmp/viscnts", 1e6, 1);
+  std::vector<std::thread> v;
+  for (int i = 0; i < 10; ++i) {
+    v.emplace_back([i, &vc, &A]() {
+      A.test4([&](int x) { VisCntsAccess(vc, (char*)(&x), 4, 1); }, [&](int x) { return VisCntsIsHot(vc, (char*)(&x), 4); }, 2e5);
+    });
+  }
+  for (auto& a : v) a.join();
+  VisCntsClose(vc);
+  puts("[Decay] Pass multi-thread #1");
+}
+
 int main() {
-  test_basic();
+  // test_basic();
   // test_memtable();
+  test_decay();
 }
