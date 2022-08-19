@@ -13,13 +13,13 @@ inline int operator<=(const SKey& A, const SKey& B) {
   return memcmp(A.data(), B.data(), A.len()) <= 0;
 }
 
-inline int operator<=(const IndSKey& A, const SKey& B) { return A.ref() <= B; }
-inline int operator<=(const SKey& A, const IndSKey& B) { return A <= B.ref(); }
-inline int operator<=(const IndSKey& A, const IndSKey& B) { return A.ref() <= B.ref(); }
+// inline int operator<=(const IndSKey& A, const SKey& B) { return A.ref() <= B; }
+// inline int operator<=(const SKey& A, const IndSKey& B) { return A <= B.ref(); }
+// inline int operator<=(const IndSKey& A, const IndSKey& B) { return A.ref() <= B.ref(); }
 
-inline int operator==(const IndSKey& A, const SKey& B) { return A.ref() == B; }
-inline int operator==(const SKey& A, const IndSKey& B) { return A == B.ref(); }
-inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
+// inline int operator==(const IndSKey& A, const SKey& B) { return A.ref() == B; }
+// inline int operator==(const SKey& A, const IndSKey& B) { return A == B.ref(); }
+// inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
 struct SValue {
   double counts;

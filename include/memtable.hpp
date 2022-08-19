@@ -154,4 +154,47 @@ class MemTable : public RefCounts {
   }
 };
 
+class UnsortedBuffer {
+  std::atomic<size_t> used_size_;
+  size_t buffer_size_;
+  uint8_t* data_;
+  std::vector<std::pair<SKey, SValue>> sorted_result_;
+  public:
+    UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[buffer_size_]) {}
+    ~UnsortedBuffer() { delete[] data_; }
+    bool append(const SKey& key, const SValue& value) {
+      auto size = key.size() + sizeof(SValue);
+      auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
+      if(pos > buffer_size_) return false;
+      *reinterpret_cast<SValue*>(key.write(data_ + pos - size)) = value;
+      return true;
+    }
+    template<typename KeyComp>
+    void sort(KeyComp comp) {
+      sorted_result_.clear();
+      auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+      uint32_t len;
+      for(uint8_t* d = data_; d - data_ < limit && (len = *reinterpret_cast<uint32_t*>(d)) != 0; ) {
+        sorted_result_.emplace_back(SKey(d + sizeof(uint32_t), len), *reinterpret_cast<SValue*>(d + sizeof(uint32_t) + len));
+        d += len + sizeof(uint32_t) + sizeof(SValue);
+      }
+      std::sort(sorted_result_.begin(), sorted_result_.end(), comp);
+    }
+    void clear() {
+      auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+      memset(data_, 0, limit);
+      used_size_ = 0;
+      sorted_result_.clear();
+    }
+    class Iterator {
+      std::vector<std::pair<SKey, SValue>>::iterator iter_;
+      std::vector<std::pair<SKey, SValue>>::iterator iter_end_;
+      public:
+        Iterator(UnsortedBuffer& buf) : iter_(buf.sorted_result_.begin()), iter_end_(buf.sorted_result_.end()) {}
+        void next() { iter_++; }
+        bool valid() { return iter_ != iter_end_; }
+        std::pair<SKey, SValue> read() { return *iter_; }
+    };
+};
+
 }  // namespace viscnts_lsm
