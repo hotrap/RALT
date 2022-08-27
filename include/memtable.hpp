@@ -11,7 +11,6 @@ const static int kMaxHeight = 16;
 static std::mt19937 rndGen(time(0));
 template <class Key, class Value, class Allocator, class Comparator>
 class SkipList {
-
   static int rndHeight() { return __builtin_clz(std::max(1u, (unsigned int)rndGen() & ((1 << kMaxHeight) - 1))) - (31 - kMaxHeight); }
 
  public:
@@ -26,8 +25,8 @@ class SkipList {
   }
 
   SkipList(const SkipList &) = delete;
-  SkipList& operator=(const SkipList &) = delete;
-  SkipList& operator=(SkipList&& list) {
+  SkipList &operator=(const SkipList &) = delete;
+  SkipList &operator=(SkipList &&list) {
     alloc_ = list.alloc_;
     comp_ = list.comp_;
     height_ = list.height_.load(std::memory_order_relaxed);
@@ -131,7 +130,7 @@ class MemTable : public RefCounts {
  public:
   using Node = SkipList<SKey, SValue, MemtableAllocator, SKeyComparator>::Node;
   explicit MemTable() : size_(0), alloc_(), list_(&alloc_, SKeyComparator()) {}
-  MemTable& operator=(MemTable&& m) {
+  MemTable &operator=(MemTable &&m) {
     RefCounts::operator=(std::move(m));
     list_ = std::move(m.list_);
     alloc_ = m.alloc_;
@@ -139,17 +138,17 @@ class MemTable : public RefCounts {
     m.size_ = 0;
     return (*this);
   }
-  void append(const SKey &key, const SValue &value); 
+  void append(const SKey &key, const SValue &value);
   bool exists(const SKey &key);
-  Node *find(const SKey &key); 
+  Node *find(const SKey &key);
   Node *head() { return list_.getHead(); }
   Node *begin() { return list_.getHead()->noBarrierGetNext(0); }
   size_t size() { return size_; }
   std::pair<SKey, SKey> range() {
     auto mx = head();
     auto mn = head()->noBarrierGetNext(0);
-    for(int level = kMaxHeight - 1; level >= 0; --level)
-      while(auto c = mx->noBarrierGetNext(level)) mx = c;
+    for (int level = kMaxHeight - 1; level >= 0; --level)
+      while (auto c = mx->noBarrierGetNext(level)) mx = c;
     return std::make_pair(mn->key, mx->key);
   }
 };
@@ -157,44 +156,68 @@ class MemTable : public RefCounts {
 class UnsortedBuffer {
   std::atomic<size_t> used_size_;
   size_t buffer_size_;
-  uint8_t* data_;
+  uint8_t *data_;
   std::vector<std::pair<SKey, SValue>> sorted_result_;
-  public:
-    UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[buffer_size_]) {}
-    ~UnsortedBuffer() { delete[] data_; }
-    bool append(const SKey& key, const SValue& value) {
-      auto size = key.size() + sizeof(SValue);
-      auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
-      if(pos > buffer_size_) return false;
-      *reinterpret_cast<SValue*>(key.write(data_ + pos - size)) = value;
-      return true;
+
+ public:
+  UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[size]) {}
+  UnsortedBuffer(const UnsortedBuffer &buf) {
+    used_size_ = buf.used_size_.load();
+    buffer_size_ = buf.buffer_size_;
+    data_ = new uint8_t[buffer_size_];
+    sorted_result_ = buf.sorted_result_;
+    memcpy(data_, buf.data_, buffer_size_);
+  }
+  UnsortedBuffer(UnsortedBuffer &&buf) {
+    used_size_ = std::move(buf.used_size_);
+    buffer_size_ = buf.buffer_size_;
+    data_ = buf.data_;
+    sorted_result_ = std::move(buf.sorted_result_);
+    buf.data_ = nullptr;
+  }
+  ~UnsortedBuffer() {
+    if (data_) delete[] data_;
+  }
+  bool append(const SKey &key, const SValue &value) {
+    auto size = key.size() + sizeof(SValue);
+    auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
+    if (pos > buffer_size_) return false;
+    *reinterpret_cast<SValue *>(key.write(data_ + pos - size)) = value;
+    return true;
+  }
+  template <typename KeyComp>
+  void sort(KeyComp comp) {
+    sorted_result_.clear();
+    auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+    uint32_t len;
+    for (uint8_t *d = data_; d - data_ < limit && (len = *reinterpret_cast<uint32_t *>(d)) != 0;) {
+      sorted_result_.emplace_back(SKey(d + sizeof(uint32_t), len), *reinterpret_cast<SValue *>(d + sizeof(uint32_t) + len));
+      d += len + sizeof(uint32_t) + sizeof(SValue);
     }
-    template<typename KeyComp>
-    void sort(KeyComp comp) {
-      sorted_result_.clear();
-      auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
-      uint32_t len;
-      for(uint8_t* d = data_; d - data_ < limit && (len = *reinterpret_cast<uint32_t*>(d)) != 0; ) {
-        sorted_result_.emplace_back(SKey(d + sizeof(uint32_t), len), *reinterpret_cast<SValue*>(d + sizeof(uint32_t) + len));
-        d += len + sizeof(uint32_t) + sizeof(SValue);
-      }
-      std::sort(sorted_result_.begin(), sorted_result_.end(), comp);
-    }
-    void clear() {
-      auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
-      memset(data_, 0, limit);
-      used_size_ = 0;
-      sorted_result_.clear();
-    }
-    class Iterator {
-      std::vector<std::pair<SKey, SValue>>::iterator iter_;
-      std::vector<std::pair<SKey, SValue>>::iterator iter_end_;
-      public:
-        Iterator(UnsortedBuffer& buf) : iter_(buf.sorted_result_.begin()), iter_end_(buf.sorted_result_.end()) {}
-        void next() { iter_++; }
-        bool valid() { return iter_ != iter_end_; }
-        std::pair<SKey, SValue> read() { return *iter_; }
-    };
+    std::sort(sorted_result_.begin(), sorted_result_.end(), comp);
+  }
+  void clear() {
+    auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+    memset(data_, 0, limit);
+    used_size_ = 0;
+    sorted_result_.clear();
+  }
+  size_t size() const { return used_size_; }
+  template <typename KeyComp>
+  bool overlap(const SKey &lkey, const SKey &rkey, KeyComp comp) const {
+    if (!sorted_result_.size()) return true;
+    return !(comp(rkey, sorted_result_[0].first) < 0 || comp(sorted_result_.back().first, lkey) < 0);
+  }
+  class Iterator {
+    std::vector<std::pair<SKey, SValue>>::const_iterator iter_;
+    std::vector<std::pair<SKey, SValue>>::const_iterator iter_end_;
+
+   public:
+    Iterator(const UnsortedBuffer &buf) : iter_(buf.sorted_result_.begin()), iter_end_(buf.sorted_result_.end()) {}
+    void next() { iter_++; }
+    bool valid() { return iter_ != iter_end_; }
+    std::pair<SKey, SValue> read() { return *iter_; }
+  };
 };
 
 }  // namespace viscnts_lsm

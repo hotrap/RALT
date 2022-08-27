@@ -1,11 +1,11 @@
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <thread>
-#include <condition_variable>
 
 #include "alloc.hpp"
 #include "cache.hpp"
@@ -27,8 +27,8 @@ void logger(Args&&... a) {
 // const static size_t kDataBlockSize = 1 << 16;           // 64 KB
 const static size_t kPageSize = 4096;                   // 4 KB
 const static size_t kMagicNumber = 0x25a65facc3a23559;  // echo viscnts | sha1sum
-const static size_t kMemTable = 1 << 24;                // 1 MB
-const static size_t kSSTable = 1 << 24;
+const static size_t kMemTable = 1 << 20;                // 1 MB
+const static size_t kSSTable = 1 << 20;
 const static size_t kRatio = 10;
 const static size_t kBatchSize = 1 << 16;
 const static size_t kChunkSize = 1 << 16;  // 8 KB
@@ -62,6 +62,17 @@ struct FileBlockHandle {
   explicit FileBlockHandle(uint32_t offset, uint32_t size, uint32_t counts) : offset(offset), size(size), counts(counts) {}
 };
 
+// this iterator is used in compaction
+// or decay
+class SeqIterator {
+ public:
+  virtual ~SeqIterator() = default;
+  virtual bool valid() = 0;
+  virtual void next() = 0;
+  virtual std::pair<SKey, SValue> read() = 0;
+  virtual SeqIterator* copy() = 0;
+};
+
 // manage a temporary chunk (several pages) in SST files
 // I don't use cache here, because we don't need it?
 class Chunk {
@@ -73,7 +84,7 @@ class Chunk {
     data_ = nullptr;
     alloc_ = nullptr;
   }
-  Chunk(uint32_t file_id, uint32_t offset, BaseAllocator* alloc, RandomAccessFile* file_ptr) : alloc_(alloc) {
+  Chunk(uint32_t offset, BaseAllocator* alloc, RandomAccessFile* file_ptr) : alloc_(alloc) {
     Slice result;
     auto ptr = alloc->allocate(kChunkSize);
     auto err = file_ptr->read(offset, kChunkSize, ptr, result);
@@ -156,13 +167,22 @@ class FileBlock {     // process blocks in a file
       uint32_t _offset;
       // find offset
       auto [chunk_id, offset] = block_._value_offset(id);
+      // logger("[chunk_id, offset] = ", chunk_id, ", ", offset);
       if (current_value_id_ != chunk_id) currenct_value_chunk_ = block_.acquire(current_value_id_ = chunk_id);
       _offset = block_.read_value(offset, currenct_value_chunk_);
+      // logger("[_offset] = ", _offset);
       // read key
       auto [chunk_key_id, key_offset] = block_._key_offset(_offset);
       if (current_key_id_ != chunk_key_id) current_key_chunk_ = block_.acquire(current_key_id_ = chunk_key_id);
       block_.read_key(key_offset, current_key_chunk_, _key);
       return _key;
+    }
+
+    auto seek_offset(uint32_t id) {
+      auto [chunk_id, offset] = block_._value_offset(id);
+      // logger("[chunk_id, offset] = ", chunk_id, ", ", offset);
+      if (current_value_id_ != chunk_id) currenct_value_chunk_ = block_.acquire(current_value_id_ = chunk_id);
+      return block_.read_value(offset, currenct_value_chunk_);
     }
 
    private:
@@ -172,8 +192,12 @@ class FileBlock {     // process blocks in a file
   };
   class EnumIterator {
    public:
-    EnumIterator(FileBlock<Key, KeyComp> block, uint32_t offset, uint32_t id)
-        : block_(block), current_key_id_(-1), offset_(offset), id_(id), key_size_(0) {}
+    EnumIterator(FileBlock<Key, KeyComp> block, uint32_t offset, uint32_t id) : block_(block), id_(id), key_size_(0) {
+      auto [chunk_id, chunk_offset] = block_._key_offset(offset);
+      current_key_id_ = chunk_id;
+      offset_ = chunk_offset;
+      current_key_chunk_ = block_.acquire(current_key_id_);
+    }
     template <typename T>
     EnumIterator(T&& it) {
       (*this) = std::forward<T>(it);
@@ -190,6 +214,7 @@ class FileBlock {     // process blocks in a file
     void next() {
       if (!key_size_) read();
       offset_ += key_size_;
+      assert(offset_ < kChunkSize);
       key_size_ = 0, id_++;
       if (offset_ + sizeof(uint32_t) >= kChunkSize || block_.is_empty_key(offset_, current_key_chunk_)) {
         offset_ = 0, current_key_id_++;
@@ -223,12 +248,12 @@ class FileBlock {     // process blocks in a file
     assert(offset_index_ % kChunkSize == 0);
   }
 
-  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, uint32_t offset_index)
-      : file_id_(file_id), handle_(handle), alloc_(alloc), file_ptr_(file_ptr) {
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, uint32_t offset_index, KeyComp* comp)
+      : file_id_(file_id), handle_(handle), alloc_(alloc), file_ptr_(file_ptr), comp_(comp) {
     offset_index_ = offset_index;
   }
 
-  Chunk acquire(size_t id) { return Chunk(file_id_, id * kChunkSize, alloc_, file_ptr_); }
+  Chunk acquire(size_t id) { return Chunk(id * kChunkSize, alloc_, file_ptr_); }
 
   // assume that input is valid, read_key_offset and read_value_offset
   template <typename T>
@@ -247,6 +272,7 @@ class FileBlock {     // process blocks in a file
   ssize_t exists(const SKey& key) {
     int l = 0, r = handle_.counts - 1;
     SeekIterator it = SeekIterator(*this);
+    // logger("OK");
     while (l <= r) {
       auto mid = (l + r) >> 1;
       // compare two keys
@@ -257,6 +283,7 @@ class FileBlock {     // process blocks in a file
       else
         r = mid - 1;
     }
+    // logger("OK2");
     return 0;
   }
 
@@ -268,6 +295,7 @@ class FileBlock {     // process blocks in a file
     SeekIterator it = SeekIterator(*this);
     while (l <= r) {
       auto mid = (l + r) >> 1;
+      // logger("[l, r, mid] = ", l, ", ", r, ", ", mid);
       auto kv = it.seek_and_read(mid);
       // compare two keys
       if (comp_(key, kv.key()) <= 0) {
@@ -278,14 +306,20 @@ class FileBlock {     // process blocks in a file
     return ret;
   }
 
+  EnumIterator seek_with_offset(uint32_t offset) const {
+    SeekIterator it = SeekIterator(*this);
+    auto id = (offset - offset_index_) / sizeof(uint32_t);
+    return EnumIterator(*this, it.seek_offset(id), id);
+  }
+
   auto sub_fileblock(uint32_t offset_l, uint32_t offset_r) {
+    assert(offset_l >= offset_index_ && offset_r >= offset_index_);
     auto counts_l = (offset_l - offset_index_) / sizeof(uint32_t);
     auto counts_r = (offset_r - offset_index_) / sizeof(uint32_t);
-    return FileBlock<Key, KeyComp>(file_id_, FileBlockHandle(handle_.offset, offset_r - handle_.offset, counts_r - counts_l), alloc_,
-                                   file_ptr_, offset_l);
+    return FileBlock<Key, KeyComp>(file_id_, FileBlockHandle(handle_.offset, offset_r - handle_.offset, counts_r - counts_l), alloc_, file_ptr_,
+                                   offset_l, comp_);
   }
 };
-
 
 template <typename Value>
 class BlockKey {
@@ -377,29 +411,37 @@ class ImmutableFile {
   // I don't want to check range here...
   ssize_t exists(const SKey& key) {
     if (!in_range(key)) return 0;
+    // return data_block_.exists(key);
     auto offset = index_block_.upper(key).value();
     // return data_block_.exists(key);
     // logger("exists(): handle.v: ", handle.v);
 
     // offset_l is % kChunkSize = 0.
     auto ret = data_block_.sub_fileblock(offset / kChunkSize * kChunkSize, offset + sizeof(uint32_t)).exists(key);
+    // logger("[ret] = ", ret);
     // assert(ret == data_block_.exists(key));
     return ret;
   }
+
+  FileBlock<DataKey, KeyCompType>::EnumIterator seek(const SKey& key) {
+    auto offset = index_block_.upper(key).value();
+    return data_block_.seek_with_offset(offset);
+  }
+
   bool in_range(const SKey& key) {
     auto& [l, r] = range_;
     return comp_(l.ref(), key) <= 0 && comp_(key, r.ref()) <= 0;
   }
-  std::pair<SKey, SKey> range() { return {range_.first.ref(), range_.second.ref()}; }
+  std::pair<SKey, SKey> range() const { return {range_.first.ref(), range_.second.ref()}; }
 
-  uint32_t size() { return size_; }
+  uint32_t size() const { return size_; }
 
-  bool range_overlap(const std::pair<SKey, SKey>& range) {
+  bool range_overlap(const std::pair<SKey, SKey>& range) const {
     auto [l, r] = range_;
     return comp_(l.ref(), range.second) <= 0 && comp_(range.first, r.ref()) <= 0;
   }
 
-  FileBlock<DataKey, KeyCompType> data_block() { return data_block_; }
+  FileBlock<DataKey, KeyCompType> data_block() const { return data_block_; }
 
   void remove() {
     auto ret = file_ptr_->remove();
@@ -418,10 +460,10 @@ class WriteBatch {
   explicit WriteBatch(std::unique_ptr<AppendFile>&& file, size_t size) : file_ptr_(std::move(file)), buffer_size_(size), used_size_(0) {
     data_ = new uint8_t[size];
   }
-  ~WriteBatch() { delete data_; }
+  ~WriteBatch() { delete[] data_; }
 
   template <typename T>
-  void append(const T& kv) {
+  void append(const T& kv) noexcept {
     size_t cp_size = std::min(kv.len(), buffer_size_ - used_size_);
     memcpy(data_ + used_size_, kv.data(), cp_size);
     used_size_ += cp_size;
@@ -448,8 +490,9 @@ class WriteBatch {
       auto ptr = new uint8_t[x.size()];
       x.write(ptr);
       append(Slice(ptr, x.size()));
+      delete[] ptr;
     } else {
-      x.write(data_);
+      x.write(data_ + used_size_);
       used_size_ += x.size();
     }
   }
@@ -468,17 +511,6 @@ class WriteBatch {
     file_ptr_->write(Slice(data_, used_size_));
     used_size_ = 0;
   }
-};
-
-// this iterator is used in compaction
-// or decay
-class SeqIterator {
- public:
-  virtual ~SeqIterator() = default;
-  virtual bool valid() = 0;
-  virtual void next() = 0;
-  virtual std::pair<SKey, SValue> read() = 0;
-  virtual SeqIterator* copy() = 0;
 };
 
 class SeqIteratorSet : public SeqIterator {
@@ -537,6 +569,7 @@ class MemTableIterator : public SeqIterator {
 class SSTIterator : public SeqIterator {
  public:
   SSTIterator(ImmutableFile* file) : file_(file), kv_valid_(false), file_block_iter_(file->data_block(), 0, 0) {}
+  SSTIterator(ImmutableFile* file, const SKey& key) : file_(file), kv_valid_(false), file_block_iter_(file->seek(key)) {}
   bool valid() override { return file_block_iter_.valid(); }
   // ensure it's valid.
   void next() override { file_block_iter_.next(), kv_valid_ = false; }
@@ -579,10 +612,11 @@ class SSTBuilder {
     if (!index.size() && !counts) first_key = kv.key();
     counts++;
     if (counts == kChunkSize / sizeof(uint32_t)) {
-      index.emplace_back(kv.key(), now_offset);
+      index.emplace_back(kv.key(), offsets.size());
       counts = 0;
-    } else
+    } else {
       lst_key = kv.key();
+    }
     offsets.push_back(now_offset);
     now_offset += kv.size();
     file_->append_key(kv);
@@ -598,24 +632,24 @@ class SSTBuilder {
   }
   void make_index() {
     if (counts) {
-      index.emplace_back(lst_key, now_offset - lst_key.size());  // append last key into index block.
+      index.emplace_back(lst_key, offsets.size());  // append last key into index block.
       counts = 0;
     }
     _align();
     auto data_index_offset = now_offset;
     // append all the offsets in the data block
     for (const auto& a : offsets) {
-      _append_align(sizeof(decltype(a)));
+      if (kChunkSize % sizeof(decltype(a))) _append_align(sizeof(decltype(a)));
       file_->append_other(a);
       now_offset += sizeof(decltype(a));
     }
-    auto data_bh = FileBlockHandle(lst_offset, now_offset - lst_offset, offsets.size());
+    auto data_bh = FileBlockHandle(0, now_offset, offsets.size());
     _align();
     lst_offset = now_offset;
     std::vector<uint32_t> v;
     // append keys in the index block
     for (const auto& a : index) {
-      IndexKey index_key(a.first.ref(), a.second);
+      IndexKey index_key(a.first.ref(), a.second * sizeof(uint32_t) + data_index_offset);
       _append_align(index_key.size());
       file_->append_key(index_key);
       v.push_back(now_offset);
@@ -624,7 +658,7 @@ class SSTBuilder {
     _align();
     // append all the offsets in the index block
     for (const auto& a : v) {
-      _append_align(sizeof(decltype(a)));
+      if (kChunkSize % sizeof(decltype(a))) _append_align(sizeof(decltype(a)));
       file_->append_other(a);
       now_offset += sizeof(decltype(a));
     }
@@ -668,7 +702,6 @@ class SSTBuilder {
   IndSKey lst_key, first_key;
 };
 
-
 class Compaction {
   // builder_ is used to build one file
   // files_ is used to get global file name
@@ -681,6 +714,7 @@ class Compaction {
   Env* env_;
   bool flag_;
   std::pair<IndSKey, SValue> lst_value_;
+  std::mt19937 rndgen_;
   KeyCompType* comp_;
 
   void _begin_new_file() {
@@ -797,31 +831,26 @@ class Compaction {
     return vec_newfiles_;
   }
 
-  void flush_begin() {
+  template <typename TIter, std::enable_if_t<std::is_base_of_v<SeqIterator, TIter>, bool> = true>
+  auto flush(TIter left) {
     vec_newfiles_.clear();
     _begin_new_file();
     flag_ = false;
-  }
-
-  template <typename TIter, std::enable_if_t<std::is_base_of_v<SeqIterator, TIter>, bool> = true>
-  void flush(TIter left) {
+    double real_size = 0;
     while (left.valid()) {
       // printf("A");
       auto L = left.read();
       if (flag_ && comp_(lst_value_.first.ref(), L.first) == 0) {
         lst_value_.second += L.second;
       } else {
-        if (flag_) builder_.append(lst_value_);
+        if (flag_) real_size += _calc_decay_value(lst_value_), builder_.append(lst_value_);
         lst_value_ = L, flag_ = true;
       }
       left.next();
     }
-  }
-
-  std::vector<NewFileData> flush_end() {
-    if (flag_) builder_.append(lst_value_);
+    if (flag_) real_size += _calc_decay_value(lst_value_), builder_.append(lst_value_);
     _end_new_file();
-    return vec_newfiles_;
+    return std::make_pair(vec_newfiles_, real_size);
   }
 
   std::pair<std::vector<NewFileData>, double> decay_first(SeqIteratorSet&& iters) {
@@ -852,7 +881,7 @@ class Compaction {
         builder_.append(lst_value_);
       }
     }
-    printf("[%d]", A);
+    logger("[decay_first]: ", A);
     _end_new_file();
     return {vec_newfiles_, real_size_};
   }
@@ -926,7 +955,6 @@ class Compaction {
   }
 
  private:
-  std::mt19937 rndgen_;
   double decay_prob_;  // = 0.5 on default
   template <typename T>
   double _calc_decay_value(const std::pair<T, SValue>& kv) {
@@ -953,7 +981,6 @@ class Compaction {
   }
   std::vector<NewFileData> vec_newfiles_;
 };
-
 
 class LSMTree {
   class MemTables {
@@ -1162,14 +1189,13 @@ class LSMTree {
   bool terminate_signal_;
   KeyCompType* comp_;
 
-  void _compact_result_insert(std::vector<Compaction::NewFileData>&& vec, typename Immutables::Node* left,
-                              typename Immutables::Node* right, int level) {
+  void _compact_result_insert(std::vector<Compaction::NewFileData>&& vec, typename Immutables::Node* left, typename Immutables::Node* right,
+                              int level) {
     std::vector<std::unique_ptr<ImmutableFile>> files;
     for (auto a : vec) {
       auto rafile = env_->openRAFile(a.filename);
       assert(rafile != nullptr);
-      auto file = std::make_unique<ImmutableFile>(a.file_id, a.size, std::unique_ptr<RandomAccessFile>(rafile),
-                                                                              file_alloc_.get(), a.range, comp_);
+      auto file = std::make_unique<ImmutableFile>(a.file_id, a.size, std::unique_ptr<RandomAccessFile>(rafile), file_alloc_.get(), a.range, comp_);
       assert(file.get() != nullptr);
       files.push_back(std::move(file));
     }
@@ -1193,9 +1219,7 @@ class LSMTree {
     Compaction worker(filename_.get(), env_.get(), comp_);
     if (!left || left->next.load(std::memory_order_relaxed) == right) {
       logger("flush");
-      worker.flush_begin();
-      worker.flush(iter);
-      _compact_result_insert(worker.flush_end(), left, right, level);
+      _compact_result_insert(worker.flush(iter).first, left, right, level);
     } else {
       logger("merge with sst");
       // return;  // debug
@@ -1312,6 +1336,346 @@ class LSMTree {
   }
 };
 
+constexpr auto kLimitMin = 10;
+constexpr auto kLimitMax = 20;
+constexpr auto kMergeRatio = 0.1;
+constexpr auto kUnmergedRatio = 0.1;
+constexpr auto kUnsortedBufferSize = 1 << 20;
+
+class UnsortedBufferIterator : public SeqIterator {
+ public:
+  UnsortedBufferIterator(const UnsortedBuffer& buf) : iter_(buf) {}
+  bool valid() override { return iter_.valid(); }
+  // ensure it's valid.
+  void next() override { iter_.next(); }
+  std::pair<SKey, SValue> read() override { return iter_.read(); }
+  SeqIterator* copy() override { return new UnsortedBufferIterator(*this); }
+
+ private:
+  UnsortedBuffer::Iterator iter_;
+};
+
+class EstimateLSM {
+  struct Partition {
+    ImmutableFile file;
+    Partition(Env* env, BaseAllocator* file_alloc, KeyCompType* comp, Compaction::NewFileData data)
+        : file(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp) {}
+    SSTIterator seek(const SKey& key) {
+      if (file.in_range(key)) return nullptr;
+      return SSTIterator(&file, key);
+    }
+    SSTIterator begin() { return SSTIterator(&file); }
+    bool overlap(const SKey& lkey, const SKey& rkey) const { return file.range_overlap({lkey, rkey}); }
+    auto range() const { return file.range(); }
+    size_t size() const { return file.size(); }
+  };
+  struct Level {
+    std::vector<std::shared_ptr<Partition>> head_;
+    size_t size_;
+    double decay_size_;
+    class LevelIterator : public SeqIterator {
+      std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_;
+      std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
+      std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr_;
+      SSTIterator iter_;
+
+     public:
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter)
+          : vec_it_(vec.begin() + id), vec_it_end_(vec.end()), iter_(std::move(iter)) {}
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id)
+          : vec_it_(vec.begin() + id), vec_it_end_(vec.end()), iter_(vec[id]->begin()) {}
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator&& iter)
+          : vec_it_(vec_ptr->begin() + id), vec_it_end_(vec_ptr->end()), iter_(std::move(iter)), vec_ptr_(std::move(vec_ptr)) {}
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id)
+          : vec_it_(vec_ptr->begin() + id), vec_it_end_(vec_ptr->end()), iter_((*vec_ptr)[id]->begin()), vec_ptr_(std::move(vec_ptr)) {}
+      bool valid() { return vec_it_ != vec_it_end_; }
+      void next() {
+        iter_.next();
+        if (!iter_.valid() && vec_it_ != vec_it_end_) {
+          vec_it_++;
+          iter_ = SSTIterator(&(*vec_it_)->file);
+        }
+      }
+      std::pair<SKey, SValue> read() { return iter_.read(); }
+      SeqIterator* copy() { return new LevelIterator(*this); }
+    };
+    Level() : size_(0), decay_size_(0) {}
+    Level(size_t size, double decay_size) : size_(size), decay_size_(decay_size) {}
+    size_t size() const { return size_; }
+    double decay_size() const { return decay_size_; }
+    SeqIterator* seek(const SKey& key, KeyCompType* comp) const {
+      int l = 0, r = head_.size() - 1, where = -1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(key, head_[mid]->range().second) <= 0)
+          where = mid, r = mid - 1;
+        else
+          l = mid + 1;
+      }
+      if (where == -1) return nullptr;
+      return new LevelIterator(head_, where, head_[where]->seek(key));
+    }
+    bool overlap(const SKey& lkey, const SKey& rkey, KeyCompType* comp) const {
+      int l = 0, r = head_.size() - 1, where = -1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(lkey, head_[mid]->range().first) <= 0)
+          where = mid, l = mid + 1;
+        else
+          r = mid - 1;
+      }
+      if (where == -1 && head_.size()) {
+        return head_[0]->overlap(lkey, rkey);
+      } else
+        return head_[where]->overlap(lkey, rkey);
+    }
+    void append_par(std::shared_ptr<Partition> par) {
+      size_ += par->size();
+      head_.push_back(std::move(par));
+    }
+    void add_decay_size(double add) { decay_size_ += add; }
+  };
+  class SuperVersion {
+    std::atomic<uint32_t> ref_;
+    std::vector<std::shared_ptr<Level>> tree_;
+    std::shared_ptr<Level> largest_;
+    double decay_size_;
+    double decay_size_overestimate_;
+    double decay_limit_;
+
+    bool _decay_possible() const { return decay_size_overestimate_ >= decay_limit_; }
+
+   public:
+    class SuperVersionIterator{
+      SeqIterator* iter_;
+      SuperVersion* sv_;
+      public:
+        SuperVersionIterator(SeqIterator* iter, SuperVersion* sv) : iter_(iter), sv_(sv) {}
+        ~SuperVersionIterator() { delete iter_; sv_->unref(); }
+        auto read() { return iter_->read(); }
+        auto valid() { return iter_->valid(); }
+        auto next() { return iter_->next(); }
+    };
+    
+    
+    SuperVersion(double decay_limit) : ref_(1), decay_size_(0), decay_size_overestimate_(0), decay_limit_(decay_limit) {}
+    void ref() { ref_++; }
+    void unref() {
+      if (!--ref_) {
+        delete this;
+      }
+    }
+
+
+    SeqIterator* seek(const SKey& key, KeyCompType* comp) const {
+      SeqIteratorSet* ret = new SeqIteratorSet;
+      ret->push(std::unique_ptr<SeqIterator>(largest_->seek(key, comp)));
+      for (auto& a : tree_) ret->push(std::unique_ptr<SeqIterator>(a->seek(key, comp)));
+      return ret;
+    }
+
+    // in critical section
+    SuperVersion* compact(const std::vector<UnsortedBuffer>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc, KeyCompType* comp) const {
+      if (!bufs.size()) return nullptr;
+      auto Lsize = 0;
+      for (auto& a : bufs) Lsize += a.size();
+      for (auto& a : tree_) Lsize += a->size();
+      // check if overlap with any partition
+      auto check_func = [&bufs, comp, this](const Partition& par) {
+        for (auto& buf : bufs)
+          if (buf.overlap(par.range().first, par.range().second, comp)) return true;
+        for (auto& a : tree_)
+          if (a->overlap(par.range().first, par.range().second, comp)) return true;
+        if (largest_ && largest_->overlap(par.range().first, par.range().second, comp)) return true;
+        return false;
+      };
+      // add partitions that is overlapped with other levels.
+      // the remaining partitions are stored in a std::vector.
+      std::vector<std::shared_ptr<Partition>> rest;
+      auto add_level = [&rest, &check_func](const Level& level) {
+        auto for_iter_ptr = std::make_shared<std::vector<std::shared_ptr<Partition>>>();
+        for (auto& par : level.head_) {
+          if (check_func(*par)) {
+            for_iter_ptr->push_back(par);
+          } else
+            rest.push_back(par);
+        }
+        return for_iter_ptr;
+      };
+      // If the unmerged data is too big, and estimated decay size is large enough.
+      // all the partitions will be merged into the largest level.
+      if (largest_ == nullptr || (Lsize >= kUnmergedRatio * largest_->size() && _decay_possible())) {
+        auto iters = std::unique_ptr<SeqIteratorSet>(new SeqIteratorSet);
+
+        // push all iterators to necessary partitions to SeqIteratorSet.
+        for (auto& a : tree_) iters->push(std::unique_ptr<SeqIterator>(new Level::LevelIterator(add_level(*a), 0)));
+        if (largest_) iters->push(std::unique_ptr<SeqIterator>(new Level::LevelIterator(add_level(*largest_), 0)));
+        for (auto& buf : bufs) iters->push(std::unique_ptr<SeqIterator>(new UnsortedBufferIterator(buf)));
+
+        // compaction...
+        Compaction worker(filename, env, comp);
+        auto [files, decay_size] = worker.flush(*iters);
+        auto ret = new SuperVersion(decay_limit_);
+        // major compaction, so levels except largest_ become empty.
+        ret->decay_size_ = decay_size;
+        ret->decay_size_overestimate_ = decay_size;
+
+        auto rest_iter = rest.begin();
+
+        for (auto& a : files) {
+          auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
+          while (rest_iter != rest.end() && (*rest_iter)->range().first <= par->range().first) {
+            ret->largest_->append_par(std::move(*rest_iter));
+            rest_iter++;
+          }
+          ret->largest_->append_par(std::move(par));
+        }
+
+        return ret;
+      } else {
+        // similar to universal compaction in rocksdb
+        // if tree_[i]->size()/(\sum_{j=0..i-1}tree_[j]->size()) <= kMergeRatio
+        // then merge them.
+        // if kMergeRatio ~ 1./X, then it can be treated as (X+1)-tired compaction
+
+        // if the number of tables >= kLimitMin, then begin to merge
+        // if the number of tables >= kLimitMax, then increase kMergeRatio. (this works when the number of tables is small)
+
+        if (tree_.size() >= kLimitMin) {
+          auto _kRatio = kMergeRatio;
+          uint32_t where = -1;
+          size_t sum = tree_.back()->size();
+          for (int i = tree_.size() - 2; i >= 0; --i) {
+            if (tree_[i]->size() <= sum * _kRatio) where = i;
+            sum += tree_[i]->size();
+          }
+          if (tree_.size() >= kLimitMax)
+            while (where == -1) {
+              _kRatio += 0.05;
+              size_t sum = tree_.back()->size();
+              for (int i = tree_.size() - 2; i >= 0; --i) {
+                if (tree_[i]->size() <= sum * _kRatio) where = i;
+                sum += tree_[i]->size();
+              }
+            }
+          if (where == -1) {
+            // flush all bufs
+            auto ret = new SuperVersion(decay_limit_);
+            ret->tree_ = tree_;
+            ret->largest_ = largest_;
+            ret->decay_size_ = decay_size_;
+            ret->decay_size_overestimate_ = decay_size_overestimate_;
+            for (auto& buf : bufs) {
+              Compaction worker(filename, env, comp);
+              auto iter = std::make_unique<UnsortedBufferIterator>(buf);
+              auto [files, decay_size] = worker.flush(*iter);
+              auto level = std::make_shared<Level>(0, decay_size);
+              // decay_size_overestimate is the sum of decay_size of all SSTs.
+              ret->decay_size_overestimate_ += decay_size;
+              for (auto& a : files) level->append_par(std::make_shared<Partition>(env, file_alloc, comp, a));
+              ret->tree_.push_back(std::move(level));
+            }
+            return ret;
+          }
+          // this compaction is similar to the above
+          // but create new level
+          {
+            auto iters = std::unique_ptr<SeqIteratorSet>(new SeqIteratorSet);
+
+            // push all iterators to necessary partitions to SeqIteratorSet.
+            for (int i = where; i < tree_.size(); ++i) iters->push(std::unique_ptr<SeqIterator>(new Level::LevelIterator(add_level(*tree_[i]), 0)));
+            for (auto& buf : bufs) iters->push(std::unique_ptr<SeqIterator>(new UnsortedBufferIterator(buf)));
+
+            // compaction...
+            Compaction worker(filename, env, comp);
+            auto [files, decay_size] = worker.flush(*iters);
+            auto ret = new SuperVersion(decay_limit_);
+            // minor compaction?
+            // decay_size_overestimate = largest_ + remaining levels + new level
+            ret->tree_ = tree_;
+            ret->largest_ = largest_;
+            ret->decay_size_ = decay_size_;
+            ret->decay_size_overestimate_ = largest_->decay_size() + decay_size;
+            for (int i = 0; i < where; i++) ret->decay_size_overestimate_ += tree_[i]->decay_size();
+
+            auto rest_iter = rest.begin();
+            auto level = std::make_shared<Level>();
+
+            for (auto& a : files) {
+              auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
+              while (rest_iter != rest.end() && (*rest_iter)->range().first <= par->range().first) {
+                level->append_par(std::move(*rest_iter));
+                rest_iter++;
+              }
+              level->append_par(std::move(par));
+            }
+            ret->tree_.push_back(std::move(level));
+          }
+        }
+        return nullptr;
+      }
+    }
+  };
+  double delta_;
+  std::unique_ptr<Env> env_;
+  std::unique_ptr<FileName> filename_;
+  std::unique_ptr<BaseAllocator> file_alloc_;
+  KeyCompType* comp_;
+  std::atomic<SuperVersion*> sv_;
+  UnsortedBuffer buf_;
+  std::mutex m_;
+  std::vector<UnsortedBuffer> buf_q_;
+  std::thread compact_thread_;
+  bool terminate_signal_;
+  std::condition_variable cv_;
+
+ public:
+  EstimateLSM(double delta, std::unique_ptr<Env>&& env, std::unique_ptr<FileName>&& filename, std::unique_ptr<BaseAllocator>&& file_alloc, KeyCompType* comp) : 
+    delta_(delta), env_(std::move(env)), filename_(std::move(filename)), file_alloc_(std::move(file_alloc)), comp_(comp), 
+    sv_(new SuperVersion(delta)), buf_(kUnsortedBufferSize), terminate_signal_(0) {
+      compact_thread_ = std::thread([this]() { compact_thread(); });
+    }
+  ~EstimateLSM() {
+    terminate_signal_ = 1;
+    cv_.notify_one();
+    compact_thread_.join();
+    delete sv_.load();
+  }
+  void append(const SKey& key, const SValue& value) {
+    if (!buf_.append(key, value)) {
+      {
+        std::unique_lock<std::mutex> lck(m_);
+        if (!buf_.append(key, value)) {
+          buf_q_.push_back(std::move(buf_));
+          buf_.clear();
+          buf_.append(key, value);
+        }  
+      }
+      cv_.notify_one();
+    }
+  }
+  auto seek(const SKey& key) {
+    sv_.load()->ref();
+    auto sv = sv_.load();
+    return SuperVersion::SuperVersionIterator(sv->seek(key, comp_), sv);
+  }
+
+ private:
+  void compact_thread() {
+    // TODO.
+    while (!terminate_signal_) {
+      std::unique_lock<std::mutex> lck(m_);
+      cv_.wait(lck);
+      if (terminate_signal_) return;
+      if (buf_q_.empty()) continue;
+      auto old_sv = sv_.load();
+      auto new_sv = old_sv->compact(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
+      sv_ = new_sv;
+      old_sv->unref();
+    }
+  }
+};
+
 // Viscnts, implement lsm tree and other things.
 
 class VisCnts {
@@ -1348,3 +1712,8 @@ int VisCntsClose(void* ac) {
   delete vc;
   return 0;
 }
+
+
+
+/// testing function.
+

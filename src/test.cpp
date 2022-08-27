@@ -145,7 +145,7 @@ void test_decay() {
 }
 
 int main() {
-  // test_basic();
-  // test_memtable();
+  test_basic();
+  test_memtable();
   test_decay();
 }

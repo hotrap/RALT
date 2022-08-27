@@ -18,7 +18,7 @@ class Slice {
   uint32_t len_;
   Slice() : a_(nullptr), len_(0) {}
   explicit Slice(uint8_t* a, size_t len) : a_(a), len_(len) {}
-  size_t size() const { return len_ + sizeof(size_t); }
+  size_t size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
   uint8_t* data() const { return a_; }
   bool operator==(const Slice& S) const { return S.len_ == len_ && memcmp(S.a_, a_, len_) == 0; }
@@ -31,6 +31,7 @@ class Slice {
   uint8_t* write(uint8_t* to) const {
     *reinterpret_cast<decltype(len_)*>(to) = len_;
     to += sizeof(len_);
+    assert(a_ != nullptr);
     memcpy(to, a_, len_);
     to += len_;
     return to;
@@ -65,7 +66,7 @@ class IndSlice {
     return (*this);
   }
   virtual ~IndSlice() { delete a_; }
-  size_t size() const { return len_ + sizeof(size_t); }
+  size_t size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
   uint8_t* data() const { return a_; }
   Slice ref() const { return Slice(a_, len_); }
