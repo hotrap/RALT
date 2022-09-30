@@ -31,7 +31,7 @@ class KeyTests {
         _append(x);
         st.insert(x);
       } else {
-        if(_exist(x) != st.count(x)) {
+        if (_exist(x) != st.count(x)) {
           printf("failed: i = %d, x = %d, _exist = %d, st.count = %d\n", i, x, _exist(x), st.count(x));
           fflush(stdout);
           exit(-1);
@@ -80,6 +80,26 @@ class KeyTests {
     }
     printf("%d", cnt);
   }
+  template <typename Append>
+  void test5(const Append& _append, int R) {
+    std::random_device rd;
+    std::mt19937 rnd(19260817);
+    int S = R / 100;
+    vector<int> v(R);
+    for (int i = 0; i < R; ++i) v[i] = gen(rnd, 0, R);
+    auto start = chrono::system_clock::now();
+    for (int i = 0, x = 10; i < R; i++) {
+      x = v[i];
+      _append(x);
+      if (!--S) {
+        S = R / 100;
+        auto end = chrono::system_clock::now();
+        auto dur = chrono::duration_cast<chrono::microseconds>(end - start);
+        start = end;
+        cout << double(dur.count()) * chrono::microseconds::period::num / chrono::microseconds::period::den << "," << std::flush;
+      }
+    }
+  }
 };
 
 void test_basic() {
@@ -122,9 +142,7 @@ void test_memtable() {
   }
   for (auto& a : v) a.join();
   puts("[Memtable] Pass multi-thread #1");
-
 }
-
 
 void test_decay() {
   auto vc = VisCntsOpen("/tmp/viscnts", 1e6, 1);
@@ -144,8 +162,23 @@ void test_decay() {
   puts("[Decay] Pass multi-thread #1");
 }
 
+void test_ops() {
+  auto vc = VisCntsOpen("/tmp/viscnts", 1e7, 1);
+  KeyTests A;
+  A.test3(
+      [&](int x) {
+        char A[16];
+        memcpy(A, &x, sizeof(x));
+        VisCntsAccess(vc, A, 12, 1);
+      },
+      1e7);
+  puts("[Basic] Pass single thread");
+  VisCntsClose(vc);
+}
+
 int main() {
-  test_basic();
-  test_memtable();
-  test_decay();
+  // test_basic();
+  // test_memtable();
+  // test_decay();
+  test_ops();
 }

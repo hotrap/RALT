@@ -160,7 +160,9 @@ class UnsortedBuffer {
   std::vector<std::pair<SKey, SValue>> sorted_result_;
 
  public:
-  UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[size]) {}
+  UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[size]) {
+    memset(data_, 0, size);
+  }
   UnsortedBuffer(const UnsortedBuffer &buf) {
     used_size_ = buf.used_size_.load();
     buffer_size_ = buf.buffer_size_;
@@ -169,7 +171,7 @@ class UnsortedBuffer {
     memcpy(data_, buf.data_, buffer_size_);
   }
   UnsortedBuffer(UnsortedBuffer &&buf) {
-    used_size_ = std::move(buf.used_size_);
+    used_size_ = buf.used_size_.load();
     buffer_size_ = buf.buffer_size_;
     data_ = buf.data_;
     sorted_result_ = std::move(buf.sorted_result_);

@@ -36,6 +36,10 @@ class Slice {
     to += len_;
     return to;
   }
+  size_t read_size(uint8_t* from) {
+    auto ret = *reinterpret_cast<decltype(len_)*>(from);
+    return ret + sizeof(len_);
+  }
 };
 // Independent slice
 class IndSlice {
@@ -83,6 +87,10 @@ class IndSlice {
     memcpy(to, a_, len_);
     to += len_;
     return to;
+  }
+  size_t read_size(uint8_t* from) {
+    auto ret = *reinterpret_cast<decltype(len_)*>(from);
+    return ret + sizeof(len_);
   }
 };
 
