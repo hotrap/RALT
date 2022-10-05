@@ -36,7 +36,7 @@ class Slice {
     to += len_;
     return to;
   }
-  size_t read_size(uint8_t* from) {
+  static size_t read_size(uint8_t* from) {
     auto ret = *reinterpret_cast<decltype(len_)*>(from);
     return ret + sizeof(len_);
   }
@@ -88,7 +88,7 @@ class IndSlice {
     to += len_;
     return to;
   }
-  size_t read_size(uint8_t* from) {
+  static size_t read_size(uint8_t* from) {
     auto ret = *reinterpret_cast<decltype(len_)*>(from);
     return ret + sizeof(len_);
   }

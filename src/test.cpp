@@ -176,9 +176,14 @@ void test_ops() {
   VisCntsClose(vc);
 }
 
+extern void test_files();
+extern void test_unordered_buf();
+
 int main() {
   // test_basic();
   // test_memtable();
   // test_decay();
-  test_ops();
+  // test_ops();
+  test_files();
+  test_unordered_buf();
 }

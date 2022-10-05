@@ -64,7 +64,11 @@ void ranKV(uint8_t* ptr) {
 template <typename T>
 int KVComp(const T& a, const T& b) {
   // assert(a.klen == 16 && b.klen == 16);
-  if (a.klen == b.klen && a.klen == 16) return memcmp(a.key, b.key, a.klen);
+  
+  if (a.klen == b.klen && a.klen == 16) {
+    return a.key[0] < b.key[0] ? -1 : 1;
+    return memcmp(a.key, b.key, a.klen);
+  }
   // else printf("[%d]", a.klen);
   return a.klen < b.klen ? -1 : 1;
 }
@@ -75,7 +79,7 @@ int genfile(int id, size_t size) {
     ranKV((uint8_t*)(v.data() + i));
     assert(v[i].klen == 16);
   }
-  stable_sort(v.begin(), v.end(), [&](const KV& x, const KV& y) { return KVComp(x, y); });
+  sort(v.begin(), v.end(), [&](const KV& x, const KV& y) { return KVComp(x, y) <= 0; });
   ptr = (uint8_t*)v.data();
   auto fd = fopen((kDir + to_string(id)).c_str(), "wb");
   fwrite(ptr, size * sizeof(KV), 1, fd);
@@ -141,29 +145,37 @@ class BitTree {
     iter->next();
     auto& seg_tree_ = tree;
     auto& size_ = size;
+    // if (!seg_tree_[1]->valid()) {
+    //   seg_tree_[1] = nullptr;
+    //   int x = 1;
+    //   while ((x << 1) <= xsize) {
+    //     auto r = _min(x << 1, x << 1 | 1);
+    //     tree[x] = r;
+    //     x = tree[x << 1] == r ? x << 1 : x << 1 | 1;
+    //     tree[x] = nullptr;
+    //   }
+    //   return;
+    // }
+    // int x = 1;
+    // while ((x << 1) <= xsize) {
+    //   auto r = _min(x << 1, x << 1 | 1);
+    //   if (r == nullptr || KVComp(tree[x]->read(), r->read()) <= 0) break;
+    //   if (r == tree[x << 1]) {
+    //     swap(tree[x << 1], tree[x]);
+    //     x = x << 1;
+    //   } else {
+    //     swap(tree[x << 1 | 1], tree[x]);
+    //     x = x << 1 | 1;
+    //   }
+    // }
     if (!seg_tree_[1]->valid()) {
-      seg_tree_[1] = nullptr;
-      int x = 1;
-      while ((x << 1) <= xsize) {
-        auto r = _min(x << 1, x << 1 | 1);
-        tree[x] = r;
-        x = tree[x << 1] == r ? x << 1 : x << 1 | 1;
-        tree[x] = nullptr;
-      }
-      return;
+      size_ --;
+      seg_tree_[1] = seg_tree_[2];
     }
-    int x = 1;
-    while ((x << 1) <= xsize) {
-      auto r = _min(x << 1, x << 1 | 1);
-      if (r == nullptr || KVComp(tree[x]->read(), r->read()) <= 0) break;
-      if (r == tree[x << 1]) {
-        swap(tree[x << 1], tree[x]);
-        x = x << 1;
-      } else {
-        swap(tree[x << 1 | 1], tree[x]);
-        x = x << 1 | 1;
-      }
-    }
+    // if(seg_tree_[1]->read().klen < seg_tree_[2]->read().klen)
+    if(KVComp(seg_tree_[1]->read(), seg_tree_[2]->read()) > 0)
+      std::swap(seg_tree_[1], seg_tree_[2]);
+
     // int y = x;
     // for (x >>= 1; x; y = x, x >>= 1) {
     //   auto r = _min(x << 1, x << 1 | 1);
@@ -355,7 +367,7 @@ void mytest(vector<int> v, int L, int BEGIN = 0) {
   for (int i = BEGIN; i < v.size() * L + BEGIN; ++i) {
     if (!fs.valid()) puts("WA");
     auto p = fs.read();
-    int x = 0;
+    // int x = 0;
     // for (int i = 0; i < 16; ++i) x = (x << 8) | p.key[i];
     // printf("[%d,%d]",x,i);fflush(stdout);
     // assert(x == i);
@@ -384,7 +396,7 @@ int main() {
   global_ptr = new uint8_t[M * 32ull];
   memset(global_ptr, 0, M * 32ull);
 
-  for (int X = 1; X <= 128; X <<= 1) {
+  for (int X = 2; X <= 2; X <<= 1) {
     unsigned long long L = M / X;
     for (auto& a : v) ::close(a);
     v.clear();

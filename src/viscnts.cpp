@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <thread>
 
 #include "alloc.hpp"
@@ -28,6 +29,7 @@ template <typename... Args>
 void logger_printf(const char* str, Args&&... a) {
   std::unique_lock lck_(logger_m_);
   printf(str, a...);
+  fflush(stdout);
 }
 
 // const static size_t kDataBlockSize = 1 << 16;           // 64 KB
@@ -210,6 +212,7 @@ class FileBlock {     // process blocks in a file
   // maintain one Chunk for key. Thus, we need the offset of the first key, and its id.
   class EnumIterator {
    public:
+    EnumIterator() { id_ = block_.handle_.counts = 0; }
     EnumIterator(FileBlock<KV, KVComp> block, uint32_t offset, uint32_t id) : block_(block), id_(id), key_size_(0) {
       auto [chunk_id, chunk_offset] = block_._kv_offset(offset);
       current_key_id_ = chunk_id;
@@ -292,7 +295,7 @@ class FileBlock {     // process blocks in a file
     result.read(c.data(offset));
   }
 
-  uint32_t read_key_size(uint32_t offset, const Chunk& c) const { return (*(uint32_t*)c.data(offset)) + sizeof(uint32_t) + ; }
+  uint32_t read_key_size(uint32_t offset, const Chunk& c) const { return KV::read_size(c.data(offset)); }
 
   uint32_t read_value(uint32_t offset, const Chunk& c) const {
     assert(offset < kChunkSize);
@@ -381,8 +384,8 @@ class BlockKey {
   }
   SKey key() const { return key_; }
   Value value() const { return v_; }
-  size_t read_size(uint8_t* from) {
-    size_t ret = key_.read_size(from);
+  static size_t read_size(uint8_t* from) {
+    size_t ret = SKey::read_size(from);
     return ret + sizeof(Value);
   }
 };
@@ -437,7 +440,7 @@ class ImmutableFile {
     auto ret = file_ptr_->read(size_ - sizeof(size_t), sizeof(size_t), (uint8_t*)(&mgn), result);
     assert(ret >= 0);
     logger("file size: ", size);
-    logger("magic number: ", mgn);
+    logger("magic number: ", mgn, " - ", kMagicNumber);
     assert(mgn == kMagicNumber);
     ret = file_ptr_->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle) * 2, sizeof(FileBlockHandle), (uint8_t*)(&index_bh), result);
     assert(ret >= 0);
@@ -449,7 +452,7 @@ class ImmutableFile {
     data_block_ = FileBlock<DataKey, KeyCompType>(file_id, data_bh, alloc, file_ptr_.get(), comp_);
 
     Chunk _c(0, alloc_, file_ptr_.get());
-    for (int i = 0; i < data_bh.counts; ++i) {
+    for (uint32_t i = 0; i < data_bh.counts; ++i) {
       if (i * 32 % kChunkSize == 0) data_block_.acquire(i / kChunkSize, _c);
       assert(*(uint32_t*)(_c.data(i * 32 % kChunkSize)) == 12);
     }
@@ -554,7 +557,10 @@ class WriteBatch {
   }
 
   void flush() {
-    if (used_size_) assert(file_ptr_->write(Slice(data_, used_size_)) == 0);
+    if (used_size_) {
+      auto ret = file_ptr_->write(Slice(data_, used_size_));
+      assert(ret == 0);
+    }
     used_size_ = 0;
   }
 
@@ -574,16 +580,16 @@ class SeqIteratorSet {
   SeqIteratorSet(KVComp* comp) : size_(0), comp_(comp) {}
   SeqIteratorSet(const SeqIteratorSet& ss) { (*this) = ss; }
   SeqIteratorSet& operator=(const SeqIteratorSet& ss) {
-    for (auto& a : ss.iters_) iters_.emplace_back(a.copy());
+    for (auto& a : ss.iters_) iters_.emplace_back(a);
     build();
     return (*this);
   }
   void build() {
     size_ = iters_.size();
     seg_tree_.resize(size_ + 1, nullptr);
-    for (int i = 1; i <= iters_.size(); ++i) {
+    for (uint32_t i = 1; i <= iters_.size(); ++i) {
       seg_tree_[i] = &iters_[i - 1];
-      for (int j = i; j > 1 && _min(j, j >> 1) == j; j >>= 1) std::swap(seg_tree_[j], seg_tree_[j >> 1]);
+      for (uint32_t j = i; j > 1 && _min(j, j >> 1) == j; j >>= 1) std::swap(seg_tree_[j], seg_tree_[j >> 1]);
     }
   }
   bool valid() { return size_ >= 1; }
@@ -597,16 +603,15 @@ class SeqIteratorSet {
       seg_tree_[1] = seg_tree_[size_];
       size_--;
     }
-    int x = 1;
-    while((x << 1 | 1) <= size_) {
+    uint32_t x = 1;
+    while ((x << 1 | 1) <= size_) {
       auto r = _unsafe_min(x << 1, x << 1 | 1);
-      if(_unsafe_min(r, x) == x) return;
+      if (_unsafe_min(r, x) == x) return;
       std::swap(seg_tree_[x], seg_tree_[r]);
       x = r;
     }
     if ((x << 1) <= size_) {
-      if(_unsafe_min(x, x << 1) == (x << 1))
-        std::swap(seg_tree_[x], seg_tree_[x << 1]);
+      if (_unsafe_min(x, x << 1) == (x << 1)) std::swap(seg_tree_[x], seg_tree_[x << 1]);
     }
   }
   std::pair<SKey, SValue> read() { return seg_tree_[1]->unsafe_read(); }
@@ -614,19 +619,15 @@ class SeqIteratorSet {
     if (!new_iter.valid()) return;
     iters_.push_back(std::move(new_iter));
   }
-  SeqIterator* copy() { return new SeqIteratorSet(*this); }
 
  private:
-  SeqIterator* _min(int x, int y) {
-    return comp_(seg_tree_[x]->read(), seg_tree_[y]->read()) < 0 ? x : y;
-  }
-  SeqIterator* _unsafe_min(int x, int y) {
-    return comp_(seg_tree_[x]->unsafe_read(), seg_tree_[y]->unsafe_read()) < 0 ? x : y;
-  }
+  uint32_t _min(uint32_t x, uint32_t y) { return comp_(seg_tree_[x]->read().first, seg_tree_[y]->read().first) < 0 ? x : y; }
+  uint32_t _unsafe_min(uint32_t x, uint32_t y) { return comp_(seg_tree_[x]->unsafe_read().first, seg_tree_[y]->unsafe_read().first) < 0 ? x : y; }
 };
 
 class SSTIterator {
  public:
+  SSTIterator() : file_(nullptr) {}
   SSTIterator(ImmutableFile* file) : file_(file), kv_valid_(false), file_block_iter_(file->data_block(), 0, 0) {}
   SSTIterator(ImmutableFile* file, const SKey& key) : file_(file), kv_valid_(false), file_block_iter_(file->seek(key)) {}
   bool valid() { return file_block_iter_.valid(); }
@@ -635,14 +636,13 @@ class SSTIterator {
   // remember, SKey is a reference to file block
   std::pair<SKey, SValue> read() {
     if (kv_valid_) {
-      return {kv_pair_.key(), kv_pair_.value()};
+      return {kvpair_.key(), kvpair_.value()};
     }
     kv_valid_ = true;
-    file_block_iter_.read(kv_pair_);
-    return {kv_pair_.key(), kv_pair_.value()};
+    file_block_iter_.read(kvpair_);
+    return {kvpair_.key(), kvpair_.value()};
   }
-  std::pair<SKey, SValue> unsafe_read() { return {kv_pair_.key(), kv_pair_.value()}; }
-  SeqIterator* copy() { return new SSTIterator(*this); }
+  std::pair<SKey, SValue> unsafe_read() { return {kvpair_.key(), kvpair_.value()}; }
 
  private:
   ImmutableFile* file_;
@@ -666,10 +666,11 @@ class SSTBuilder {
   }
 
  public:
-  SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : file_(std::move(file)) {}
+  SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0) {}
   void append(const DataKey& kv) {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
+    assert(kv.size() == 32);
     if (offsets.size() % (kChunkSize / sizeof(uint32_t)) == 0) {
       index.emplace_back(kv.key(), offsets.size());
       if (offsets.size() == 0) first_key = kv.key();
@@ -695,7 +696,7 @@ class SSTBuilder {
     }
     logger("SSTB: ", now_offset, " num: ", offsets.size());
     _align();
-    file_->check(offsets.size() * 32);
+    // file_->check(offsets.size() * 32);
     logger("SSTB(AFTER ALIGN): ", now_offset);
     auto data_index_offset = now_offset;
     // append all the offsets in the data block
@@ -725,6 +726,7 @@ class SSTBuilder {
       now_offset += sizeof(decltype(a));
     }
     // append two block handles.
+    logger("[INDEX SIZE]: ", index.size());
     file_->append_other(FileBlockHandle(lst_offset, now_offset - lst_offset, index.size()));  // write offset of index block
     file_->append_other(data_bh);
     now_offset += sizeof(FileBlockHandle) * 2;
@@ -902,14 +904,13 @@ constexpr auto kMergeRatio = 0.1;
 constexpr auto kUnmergedRatio = 0.1;
 constexpr auto kUnsortedBufferSize = 1 << 20;
 
-class UnsortedBufferIterator : public SeqIterator {
+class UnsortedBufferIterator {
  public:
   UnsortedBufferIterator(const UnsortedBuffer& buf) : iter_(buf) {}
-  bool valid() override { return iter_.valid(); }
+  bool valid() { return iter_.valid(); }
   // ensure it's valid.
-  void next() override { iter_.next(); }
-  std::pair<SKey, SValue> read() override { return iter_.read(); }
-  SeqIterator* copy() override { return new UnsortedBufferIterator(*this); }
+  void next() { iter_.next(); }
+  std::pair<SKey, SValue> read() { return iter_.read(); }
 
  private:
   UnsortedBuffer::Iterator iter_;
@@ -940,6 +941,7 @@ class EstimateLSM {
       std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr_;
 
      public:
+      LevelIterator() {}
       LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter)
           : vec_it_(vec.begin() + id), vec_it_end_(vec.end()), iter_(std::move(iter)) {}
       LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id)
@@ -948,7 +950,7 @@ class EstimateLSM {
           : vec_it_(vec_ptr->begin() + id), vec_it_end_(vec_ptr->end()), iter_(std::move(iter)), vec_ptr_(std::move(vec_ptr)) {}
       LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id)
           : vec_it_(vec_ptr->begin() + id), vec_it_end_(vec_ptr->end()), iter_((*vec_ptr)[id]->begin()), vec_ptr_(std::move(vec_ptr)) {}
-      bool valid() { return vec_it_ != vec_it_end_; }
+      bool valid() { return iter_.valid(); }
       void next() {
         iter_.next();
         if (!iter_.valid() && vec_it_ != vec_it_end_) {
@@ -958,13 +960,12 @@ class EstimateLSM {
       }
       std::pair<SKey, SValue> read() { return iter_.read(); }
       std::pair<SKey, SValue> unsafe_read() { return iter_.unsafe_read(); }
-      SeqIterator* copy() { return new LevelIterator(*this); }
     };
     Level() : size_(0), decay_size_(0) {}
     Level(size_t size, double decay_size) : size_(size), decay_size_(decay_size) {}
     size_t size() const { return size_; }
     double decay_size() const { return decay_size_; }
-    SeqIterator* seek(const SKey& key, KeyCompType* comp) const {
+    LevelIterator seek(const SKey& key, KeyCompType* comp) const {
       int l = 0, r = head_.size() - 1, where = -1;
       while (l <= r) {
         int mid = (l + r) >> 1;
@@ -973,8 +974,8 @@ class EstimateLSM {
         else
           l = mid + 1;
       }
-      if (where == -1) return nullptr;
-      return new LevelIterator(head_, where, head_[where]->seek(key));
+      if (where == -1) return LevelIterator();
+      return LevelIterator(head_, where, head_[where]->seek(key));
     }
     bool overlap(const SKey& lkey, const SKey& rkey, KeyCompType* comp) const {
       int l = 0, r = head_.size() - 1, where = -1;
@@ -1008,18 +1009,15 @@ class EstimateLSM {
 
    public:
     class SuperVersionIterator {
-      SeqIterator* iter_;
+      SeqIteratorSet<Level::LevelIterator, KeyCompType> iter_;
       SuperVersion* sv_;
 
      public:
-      SuperVersionIterator(SeqIterator* iter, SuperVersion* sv) : iter_(iter), sv_(sv) {}
-      ~SuperVersionIterator() {
-        delete iter_;
-        sv_->unref();
-      }
-      auto read() { return iter_->read(); }
-      auto valid() { return iter_->valid(); }
-      auto next() { return iter_->next(); }
+      SuperVersionIterator(SeqIteratorSet<Level::LevelIterator, KeyCompType>&& iter, SuperVersion* sv) : iter_(std::move(iter)), sv_(sv) {}
+      ~SuperVersionIterator() { sv_->unref(); }
+      auto read() { return iter_.read(); }
+      auto valid() { return iter_.valid(); }
+      auto next() { return iter_.next(); }
     };
 
     SuperVersion(double decay_limit)
@@ -1031,10 +1029,10 @@ class EstimateLSM {
       }
     }
 
-    SeqIterator* seek(const SKey& key, KeyCompType* comp) const {
-      SeqIteratorSet* ret = new SeqIteratorSet;
-      ret->push(std::unique_ptr<SeqIterator>(largest_->seek(key, comp)));
-      for (auto& a : tree_) ret->push(std::unique_ptr<SeqIterator>(a->seek(key, comp)));
+    SeqIteratorSet<Level::LevelIterator, KeyCompType> seek(const SKey& key, KeyCompType* comp) const {
+      SeqIteratorSet<Level::LevelIterator, KeyCompType> ret(comp);
+      ret.push(largest_->seek(key, comp));
+      for (auto& a : tree_) ret.push(a->seek(key, comp));
       return ret;
     }
 
@@ -1069,12 +1067,11 @@ class EstimateLSM {
       // If the unmerged data is too big, and estimated decay size is large enough.
       // all the partitions will be merged into the largest level.
       if ((Lsize >= kUnmergedRatio * largest_->size() && _decay_possible())) {
-        auto iters = std::unique_ptr<SeqIteratorSet>(new SeqIteratorSet);
+        auto iters = std::unique_ptr<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(new SeqIteratorSet<Level::LevelIterator, KeyCompType>(comp));
 
         // push all iterators to necessary partitions to SeqIteratorSet.
-        for (auto& a : tree_) iters->push(std::unique_ptr<SeqIterator>(new Level::LevelIterator(add_level(*a), 0)));
-        if (largest_) iters->push(std::unique_ptr<SeqIterator>(new Level::LevelIterator(add_level(*largest_), 0)));
-        for (auto& buf : bufs) iters->push(std::unique_ptr<SeqIterator>(new UnsortedBufferIterator(buf)));
+        for (auto& a : tree_) iters->push(Level::LevelIterator(add_level(*a), 0));
+        if (largest_) iters->push(Level::LevelIterator(add_level(*largest_), 0));
 
         // compaction...
         Compaction worker(filename, env, comp);
@@ -1144,7 +1141,8 @@ class EstimateLSM {
           // this compaction is similar to the above
           // but create new level
           {
-            auto iters = std::unique_ptr<SeqIteratorSet<Level::LevelIterator>>(new SeqIteratorSet);
+            auto iters =
+                std::unique_ptr<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(new SeqIteratorSet<Level::LevelIterator, KeyCompType>(comp));
 
             // push all iterators to necessary partitions to SeqIteratorSet.
             for (uint32_t i = where; i < tree_.size(); ++i) iters->push(Level::LevelIterator(add_level(*tree_[i]), 0));
@@ -1228,7 +1226,7 @@ class EstimateLSM {
   auto seek(const SKey& key) {
     sv_.load()->ref();
     auto sv = sv_.load();
-    return SuperVersion::SuperVersionIterator(sv->seek(key, comp_), sv);
+    return new SuperVersion::SuperVersionIterator(sv->seek(key, comp_), sv);
   }
 
  private:
@@ -1286,4 +1284,127 @@ int VisCntsClose(void* ac) {
 
 /// testing function.
 
-void test_files() {}
+void test_files() {
+  using namespace viscnts_lsm;
+  SSTBuilder builder;
+  int L = 1e6;
+  uint8_t a[12];
+  memset(a, 0, sizeof(a));
+
+  std::unique_ptr<Env> env_(createDefaultEnv());
+  builder.new_file(std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(env_->openAppFile("test1")), kBatchSize));
+  for (int i = 0; i < L; i++) {
+    for (int j = 0; j < 12; j++) a[j] = i >> (j % 4) * 8 & 255;
+    builder.append({SKey(a, 12), SValue()});
+  }
+  logger_printf("[TEST] SIZE: [%d]\n", builder.size());
+  builder.make_index();
+  builder.finish();
+
+  auto file_ptr = std::unique_ptr<RandomAccessFile>(env_->openRAFile("test1"));
+
+  auto comp = +[](const SKey& a, const SKey& b) {
+    int ret = memcmp(a.a_, b.a_, std::min(a.len_, b.len_));
+    if (!ret) return (int)a.len_ - (int)b.len_;
+    return ret;
+  };
+
+  ImmutableFile file(0, builder.size(), std::move(file_ptr), new DefaultAllocator(), {}, comp);
+  FileBlock<DataKey, KeyCompType>::EnumIterator iter(file.data_block(), 0, 0);
+  for (int i = 0; i < L; i++) {
+    assert(iter.valid());
+    DataKey kv;
+    iter.read(kv);
+    int x = 0;
+    auto a = kv.key().data();
+    for (int j = 0; j < 12; j++) {
+      x |= a[j] << (j % 4) * 8;
+      assert(j % 4 != 3 || x == i);
+      if (j % 4 == 3) x = 0;
+    }
+    iter.next();
+  }
+  assert(!iter.valid());
+  logger("test_file(): OK");
+}
+
+void test_unordered_buf() {
+  using namespace viscnts_lsm;
+  UnsortedBufferPtrs bufs(kUnsortedBufferSize);
+  int L = 1e7, TH = 10;
+  std::vector<std::thread> v;
+  std::vector<std::pair<IndSKey, SValue>> result;
+
+  auto comp = +[](const SKey& a, const SKey& b) {
+    uint32_t x = a.a_[0] | ((uint32_t)a.a_[1] << 8) | ((uint32_t)a.a_[2] << 16) | ((uint32_t)a.a_[3] << 24);
+    uint32_t y = b.a_[0] | ((uint32_t)b.a_[1] << 8) | ((uint32_t)b.a_[2] << 16) | ((uint32_t)b.a_[3] << 24);
+    return (int)x - (int)y;
+  };
+  auto start = std::chrono::system_clock::now();
+  auto th = std::thread(
+      [comp](UnsortedBufferPtrs& bufs, std::vector<std::pair<IndSKey, SValue>>& result) {
+        while (true) {
+          auto buf_q_ = bufs.get();
+          // logger(buf_q_.size());
+          using namespace std::chrono;
+          if (!buf_q_.size()) {
+            if (!bufs.this_buf()) break;
+            std::this_thread::sleep_for(1ms);
+            continue;
+          }
+          for (auto& buf : buf_q_) {
+            // while(!buf->safe());
+            buf->sort(comp);
+            UnsortedBufferIterator iter(*buf);
+            while (iter.valid()) {
+              result.emplace_back(iter.read());
+              iter.next();
+            }
+            buf->clear();
+          }
+        }
+      },
+      std::ref(bufs), std::ref(result));
+  for (int i = 0; i < TH; i++) {
+    v.emplace_back(
+        [i, L, TH](UnsortedBufferPtrs& bufs) {
+          int l = L / TH * i, r = L / TH * (i + 1);
+          std::vector<int> v(r - l);
+          for (int i = l; i < r; i++) v[i - l] = i;
+          std::shuffle(v.begin(), v.end(), std::mt19937(std::random_device()()));
+          uint8_t a[12];
+          memset(a, 0, sizeof(a));
+          for (auto& i : v) {
+            for (int j = 0; j < 12; j++) a[j] = i >> (j % 4) * 8 & 255;
+            bufs.append(SKey(a, 12), SValue());
+          }
+        },
+        std::ref(bufs));
+  }
+  for (auto& a : v) a.join();
+  logger("OK!");
+  bufs.finish();
+  th.join();
+
+  auto end = std::chrono::system_clock::now();
+  auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
+
+  logger_printf("RESULT_SIZE: %d\n", result.size());
+  assert(result.size() == L);
+  std::set<int> st;
+  for (uint32_t i = 0; i < result.size(); ++i) {
+    int x = 0;
+    auto a = result[i].first.data();
+    for (int j = 0; j < 12; j++) {
+      x |= a[j] << (j % 4) * 8;
+      if (j % 4 == 3) {
+        assert(x >= 0 && x < L);
+        assert(!st.count(x));
+        st.insert(x);
+        break;
+      }
+    }
+  }
+  logger("test_unordered_buf(): OK");
+}

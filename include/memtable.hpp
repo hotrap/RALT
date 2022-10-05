@@ -1,5 +1,6 @@
 #include <atomic>
 #include <random>
+#include <mutex>
 
 #include "alloc.hpp"
 #include "common.hpp"
@@ -155,19 +156,19 @@ class MemTable : public RefCounts {
 
 class UnsortedBuffer {
   std::atomic<size_t> used_size_;
+  std::atomic<size_t> ref_;
   size_t buffer_size_;
   uint8_t *data_;
   std::vector<std::pair<SKey, SValue>> sorted_result_;
 
  public:
-  UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[size]) {
-    memset(data_, 0, size);
-  }
+  UnsortedBuffer(size_t size) : used_size_(0), ref_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
   UnsortedBuffer(const UnsortedBuffer &buf) {
     used_size_ = buf.used_size_.load();
     buffer_size_ = buf.buffer_size_;
     data_ = new uint8_t[buffer_size_];
     sorted_result_ = buf.sorted_result_;
+    ref_ = 0;
     memcpy(data_, buf.data_, buffer_size_);
   }
   UnsortedBuffer(UnsortedBuffer &&buf) {
@@ -176,6 +177,7 @@ class UnsortedBuffer {
     data_ = buf.data_;
     sorted_result_ = std::move(buf.sorted_result_);
     buf.data_ = nullptr;
+    ref_ = 0;
   }
   ~UnsortedBuffer() {
     if (data_) delete[] data_;
@@ -183,8 +185,10 @@ class UnsortedBuffer {
   bool append(const SKey &key, const SValue &value) {
     auto size = key.size() + sizeof(SValue);
     auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
-    if (pos > buffer_size_) return false;
-    *reinterpret_cast<SValue *>(key.write(data_ + pos - size)) = value;
+    if (pos + size > buffer_size_) return false;
+    ref_ += 1;
+    *reinterpret_cast<SValue *>(key.write(data_ + pos)) = value;
+    ref_ -= 1;
     return true;
   }
   template <typename KeyComp>
@@ -196,12 +200,14 @@ class UnsortedBuffer {
       sorted_result_.emplace_back(SKey(d + sizeof(uint32_t), len), *reinterpret_cast<SValue *>(d + sizeof(uint32_t) + len));
       d += len + sizeof(uint32_t) + sizeof(SValue);
     }
-    std::sort(sorted_result_.begin(), sorted_result_.end(), comp);
+    std::sort(sorted_result_.begin(), sorted_result_.end(),
+              [comp](const std::pair<SKey, SValue> &x, const std::pair<SKey, SValue> &y) { return comp(x.first, y.first) <= 0; });
   }
   void clear() {
     auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     memset(data_, 0, limit);
     used_size_ = 0;
+    ref_ = 0;
     sorted_result_.clear();
   }
   size_t size() const { return used_size_; }
@@ -210,6 +216,7 @@ class UnsortedBuffer {
     if (!sorted_result_.size()) return true;
     return !(comp(rkey, sorted_result_[0].first) < 0 || comp(sorted_result_.back().first, lkey) < 0);
   }
+  bool safe() const { return ref_ == 0; }
   class Iterator {
     std::vector<std::pair<SKey, SValue>>::const_iterator iter_;
     std::vector<std::pair<SKey, SValue>>::const_iterator iter_end_;
@@ -220,6 +227,49 @@ class UnsortedBuffer {
     bool valid() { return iter_ != iter_end_; }
     std::pair<SKey, SValue> read() { return *iter_; }
   };
+};
+
+class UnsortedBufferPtrs {
+  std::mutex m_;
+  std::atomic<UnsortedBuffer *> buf;
+  std::vector<UnsortedBuffer *> buf_q_;
+  size_t buffer_size_;
+
+ public:
+  UnsortedBufferPtrs(size_t buffer_size) : buffer_size_(buffer_size) { buf = new UnsortedBuffer(buffer_size_); }
+  ~UnsortedBufferPtrs() {
+    delete buf.load();
+    for (auto &a : buf_q_) delete a;
+  }
+  void append(const SKey &key, const SValue &value) {
+    auto bbuf = buf.load(std::memory_order_relaxed);
+    while (!bbuf->append(key, value)) {
+      std::unique_lock lck_(m_);
+      if (buf.load(std::memory_order_relaxed) != bbuf) {
+        bbuf = buf.load(std::memory_order_relaxed);
+        continue;
+      }
+      buf_q_.push_back(buf);
+      buf = bbuf = new UnsortedBuffer(buffer_size_);
+    }
+  }
+  std::vector<UnsortedBuffer *> get() {
+    if (buf_q_.size()) {
+      std::unique_lock lck_(m_);
+      auto ret = std::move(buf_q_);
+      buf_q_.clear();
+      return ret;
+    }
+    return std::vector<UnsortedBuffer*>();
+  }
+  void finish() {
+    std::unique_lock lck_(m_);
+    buf_q_.push_back(buf);
+    buf = nullptr;
+  }
+  UnsortedBuffer* this_buf() {
+    return buf.load(std::memory_order_relaxed);
+  }
 };
 
 }  // namespace viscnts_lsm
