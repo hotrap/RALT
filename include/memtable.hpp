@@ -1,6 +1,8 @@
 #include <atomic>
-#include <random>
+#include <condition_variable>
 #include <mutex>
+#include <random>
+#include <thread>
 
 #include "alloc.hpp"
 #include "common.hpp"
@@ -194,7 +196,7 @@ class UnsortedBuffer {
   template <typename KeyComp>
   void sort(KeyComp comp) {
     sorted_result_.clear();
-    auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+    ssize_t limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     uint32_t len;
     for (uint8_t *d = data_; d - data_ < limit && (len = *reinterpret_cast<uint32_t *>(d)) != 0;) {
       sorted_result_.emplace_back(SKey(d + sizeof(uint32_t), len), *reinterpret_cast<SValue *>(d + sizeof(uint32_t) + len));
@@ -230,28 +232,44 @@ class UnsortedBuffer {
 };
 
 class UnsortedBufferPtrs {
+  constexpr static size_t kWaitSleepMilliSeconds = 1;
   std::mutex m_;
+  std::condition_variable cv_;
   std::atomic<UnsortedBuffer *> buf;
   std::vector<UnsortedBuffer *> buf_q_;
   size_t buffer_size_;
+  size_t max_q_size_;
 
  public:
-  UnsortedBufferPtrs(size_t buffer_size) : buffer_size_(buffer_size) { buf = new UnsortedBuffer(buffer_size_); }
+  UnsortedBufferPtrs(size_t buffer_size, size_t max_q_size) : buffer_size_(buffer_size), max_q_size_(max_q_size) {
+    buf = new UnsortedBuffer(buffer_size_);
+  }
   ~UnsortedBufferPtrs() {
     delete buf.load();
     for (auto &a : buf_q_) delete a;
   }
-  void append(const SKey &key, const SValue &value) {
+  bool append(const SKey &key, const SValue &value) {
     auto bbuf = buf.load(std::memory_order_relaxed);
-    while (!bbuf->append(key, value)) {
-      std::unique_lock lck_(m_);
+    if (bbuf->append(key, value)) return true;
+    do {
+      m_.lock();
       if (buf.load(std::memory_order_relaxed) != bbuf) {
         bbuf = buf.load(std::memory_order_relaxed);
+        m_.unlock();
         continue;
+      }
+      while (buf_q_.size() > max_q_size_) {
+        m_.unlock();
+        cv_.notify_one();
+        // puts("WAITING"); fflush(stdout);
+        std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitSleepMilliSeconds));
+        m_.lock();
       }
       buf_q_.push_back(buf);
       buf = bbuf = new UnsortedBuffer(buffer_size_);
-    }
+      m_.unlock();
+    } while (!bbuf->append(key, value));
+    return false;
   }
   std::vector<UnsortedBuffer *> get() {
     if (buf_q_.size()) {
@@ -260,15 +278,44 @@ class UnsortedBufferPtrs {
       buf_q_.clear();
       return ret;
     }
-    return std::vector<UnsortedBuffer*>();
+    return std::vector<UnsortedBuffer *>();
   }
-  void finish() {
+
+  UnsortedBuffer *this_buf() { return buf.load(std::memory_order_relaxed); }
+
+  void notify_cv() {
+    cv_.notify_all();
+  }
+
+  std::vector<UnsortedBuffer *> wait_and_get() {
+    if (buf_q_.size()) {
+      std::unique_lock lck_(m_);
+      auto ret = std::move(buf_q_);
+      buf_q_.clear();
+      return ret;
+    }
+    std::unique_lock lck_(m_);
+    cv_.wait(lck_);
+    auto ret = std::move(buf_q_);
+    buf_q_.clear();
+    return ret;
+  }
+  void append_and_notify(const SKey &key, const SValue &value) {
+    if (!append(key, value)) {
+      cv_.notify_one();
+    }
+  }
+
+  void flush() {
     std::unique_lock lck_(m_);
     buf_q_.push_back(buf);
-    buf = nullptr;
+    buf = new UnsortedBuffer(buffer_size_);
+    cv_.notify_one();
   }
-  UnsortedBuffer* this_buf() {
-    return buf.load(std::memory_order_relaxed);
+
+  int size() {
+    std::unique_lock lck_(m_);
+    return buf_q_.size();
   }
 };
 

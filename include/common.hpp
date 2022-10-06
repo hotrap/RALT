@@ -4,18 +4,19 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <vector>
-#include <atomic>
-#include <cstdio>
 
 namespace viscnts_lsm {
 
 class Slice {
- public:
   uint8_t* a_;
   uint32_t len_;
+
+ public:
   Slice() : a_(nullptr), len_(0) {}
   explicit Slice(uint8_t* a, size_t len) : a_(a), len_(len) {}
   size_t size() const { return len_ + sizeof(len_); }
@@ -40,44 +41,79 @@ class Slice {
     auto ret = *reinterpret_cast<decltype(len_)*>(from);
     return ret + sizeof(len_);
   }
+  void print() {
+    printf("[len = %d]", len_);
+    for (int i = 0; i < len_; i++) printf("[%x]", a_[i]);
+    puts("");
+    fflush(stdout);
+  }
 };
 // Independent slice
 class IndSlice {
- public:
   uint8_t* a_;
   uint32_t len_;
+
+ public:
   IndSlice() : a_(nullptr), len_(0) {}
   explicit IndSlice(const uint8_t* a, size_t len) : a_(a == nullptr ? nullptr : new uint8_t[len]), len_(len) {
+    // printf("IndSlice(%lld)!", a_);
     if (a_) memcpy(a_, a, len);
   }
-  explicit IndSlice(Slice s) : a_(s.data() == nullptr ? nullptr : new uint8_t[s.len()]), len_(s.len()) {
-    if (a_) memcpy(a_, s.data(), s.len());
+  IndSlice(IndSlice&& s) noexcept : a_(s.a_), len_(s.len_) {
+    // printf("IndSlice&&(%lld)!", a_);
+    s.a_ = nullptr;
+    s.len_ = 0;
   }
-  IndSlice(IndSlice&& s) : a_(s.a_), len_(s.len_) { s.a_ = nullptr, s.len_ = 0; }
-  IndSlice(const IndSlice& s) : a_(s.data() == nullptr ? nullptr : new uint8_t[s.len()]), len_(s.len()) {
-    if (a_) memcpy(a_, s.data(), s.len());
+  IndSlice(const IndSlice& s) noexcept : a_(s.a_ == nullptr ? nullptr : new uint8_t[s.len_]), len_(s.len_) {
+    // printf("IndSlice&(%lld)!", a_);
+    if (a_) memcpy(a_, s.a_, s.len_);
   }
-  IndSlice& operator=(IndSlice&& s) {
+  IndSlice& operator=(IndSlice&& s) noexcept {
+    // printf("IndSlice&&=(%lld)!", a_);
+    // fflush(stdout);
     if (a_) delete a_;
-    a_ = s.a_, len_ = s.len_, s.a_ = nullptr, s.len_ = 0;
+    a_ = s.a_;
+    len_ = s.len_;
+    s.a_ = nullptr;
+    s.len_ = 0;
     return (*this);
   }
-  IndSlice& operator=(const Slice& s) {
+  IndSlice& operator=(const IndSlice& s) noexcept {
+    // printf("IndSlice&=(%lld)!", a_);
+    // fflush(stdout);
     if (a_) delete a_;
     a_ = s.data() == nullptr ? nullptr : new uint8_t[s.len()];
     len_ = s.len();
     if (a_) memcpy(a_, s.data(), s.len());
     return (*this);
   }
-  virtual ~IndSlice() { delete a_; }
+
+  IndSlice(const Slice& s) noexcept : a_(s.data() == nullptr ? nullptr : new uint8_t[s.len()]), len_(s.len()) {
+    if (a_) memcpy(a_, s.data(), s.len());
+  }
+  IndSlice& operator=(const Slice& s) noexcept {
+    if (a_) delete a_;
+    a_ = s.data() == nullptr ? nullptr : new uint8_t[s.len()];
+    len_ = s.len();
+    if (a_) memcpy(a_, s.data(), s.len());
+    return (*this);
+  }
+  ~IndSlice() {
+    // printf("~IndSlice(%lld)!", a_);
+    // fflush(stdout);
+    if (a_) delete a_;
+  }
   size_t size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
   uint8_t* data() const { return a_; }
   Slice ref() const { return Slice(a_, len_); }
   uint8_t* read(uint8_t* from) {
-    len_ = *reinterpret_cast<decltype(len_)*>(from);
-    if (a_) delete a_;
-    a_ = new uint8_t[len_];
+    auto nlen = *reinterpret_cast<decltype(len_)*>(from);
+    if (a_ && len_ != nlen) {
+      delete a_;
+      a_ = new uint8_t[len_];
+    }
+    len_ = nlen;
     memcpy(a_, from + sizeof(len_), len_);
     return from + sizeof(len_) + len_;
   }
@@ -99,14 +135,16 @@ class RefCounts {
 
  public:
   RefCounts() { __ref_counts = 1; }
-  RefCounts& operator=(RefCounts&& r){
+  RefCounts& operator=(RefCounts&& r) {
     __ref_counts.store(r.__ref_counts.load());
     return (*this);
   }
   virtual ~RefCounts() = default;
   void ref() { __ref_counts.fetch_add(1, std::memory_order_seq_cst); }
   void unref() {
-    if (!--__ref_counts) { delete this; }
+    if (!--__ref_counts) {
+      delete this;
+    }
   }
 };
 

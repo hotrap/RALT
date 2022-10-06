@@ -178,12 +178,16 @@ void test_ops() {
 
 extern void test_files();
 extern void test_unordered_buf();
+extern void test_lsm_store();
+extern void test_lsm_store_and_scan();
 
 int main() {
   // test_basic();
   // test_memtable();
   // test_decay();
   // test_ops();
-  test_files();
-  test_unordered_buf();
+  // test_files();
+  // test_unordered_buf();
+  // test_lsm_store();
+  test_lsm_store_and_scan();
 }
