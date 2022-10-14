@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.2)
 project(viscnts)
 
+set(CMAKE_CXX_FLAGS_MYREL "-O3")
+
 IF (NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE "Debug" CACHE STRING
         "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)

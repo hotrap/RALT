@@ -38,6 +38,7 @@ const static size_t kSSTable = 1 << 28;
 const static size_t kRatio = 10;
 const static size_t kBatchSize = 1 << 24;
 const static size_t kChunkSize = 1 << 12;  // 8 KB
+const static size_t kIndexChunkSize = 1 << 12;
 // about kMemTable... on average, we expect the size of index block < kDataBlockSize
 
 // generate global filename
@@ -136,7 +137,7 @@ class Chunk {
       return;
     }
     if (result.len() != kChunkSize) {
-      logger("acquire < kChunkSize");
+      // logger("acquire < kChunkSize");
       memset(data_ + result.len(), 0, kChunkSize - result.len());
     }
   }
@@ -188,7 +189,7 @@ class FileBlock {     // process blocks in a file
       auto [chunk_id, offset] = block_._pos_offset(id);
       if (current_value_id_ != chunk_id) block_.acquire(current_value_id_ = chunk_id, currenct_value_chunk_);
       _offset = block_.read_value(offset, currenct_value_chunk_);
-      logger("seek_and_read(): ", _offset);
+      // logger("seek_and_read(): ", _offset);
       // read key
       auto [chunk_key_id, key_offset] = block_._kv_offset(_offset);
       if (current_key_id_ != chunk_key_id) block_.acquire(current_key_id_ = chunk_key_id, current_key_chunk_);
@@ -198,10 +199,10 @@ class FileBlock {     // process blocks in a file
     auto seek_offset(uint32_t id) {
       // find offset
       auto [chunk_id, offset] = block_._pos_offset(id);
-      logger("seek_offset(): [chunk_id, offset] = ", chunk_id, ", ", offset);
+      // logger("seek_offset(): [chunk_id, offset] = ", chunk_id, ", ", offset);
       if (current_value_id_ != chunk_id) block_.acquire(current_value_id_ = chunk_id, currenct_value_chunk_);
       auto ret = block_.read_value(offset, currenct_value_chunk_);
-      logger("seek_offset(): return ", ret);
+      // logger("seek_offset(): return ", ret);
       return ret;
     }
 
@@ -243,8 +244,8 @@ class FileBlock {     // process blocks in a file
       id_ = it.id_;
       current_key_chunk_ = it.current_key_chunk_;
       key_size_ = 0;
-      logger("EnumIterator&!");
-      assert(0);
+      // logger("EnumIterator&!");
+      // assert(0);
       return (*this);
     }
 
@@ -367,6 +368,7 @@ class FileBlock {     // process blocks in a file
   }
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
+  // Find the biggest _key that _key <= key.
   uint32_t lower_offset(const SKey& key) {
     int l = 0, r = handle_.counts - 1;
     uint32_t ret = -1;
@@ -385,21 +387,60 @@ class FileBlock {     // process blocks in a file
     return ret;
   }
 
-  // seek with the offset storing the offset of the key.
-  EnumIterator seek_with_offset(uint32_t value_offset) const {
+  // it calculates the smallest No. of the key that >= input key.
+  uint32_t upper_key(const SKey& key, uint32_t L, uint32_t R) {
+    int l = L, r = std::min(R, handle_.counts - 1);
+    uint32_t ret = -1;
     SeekIterator it = SeekIterator(*this);
-    auto id = (value_offset - offset_index_) / sizeof(uint32_t);
-    logger("seek_with_offset(): ", id);
+    KV _key;
+    while (l <= r) {
+      auto mid = (l + r) >> 1;
+      // logger("[l, r, mid] = ", l, ", ", r, ", ", mid);
+      it.seek_and_read(mid, _key);
+      // compare two keys
+      if (comp_(key, _key.key()) <= 0) {
+        r = mid - 1, ret = mid;
+      } else
+        l = mid + 1;
+    }
+    return ret;
+  }
+
+  // it calculates the smallest No. of the key that > input key.
+  uint32_t upper_key_not_eq(const SKey& key, uint32_t L, uint32_t R) {
+    int l = L, r = std::min(R, handle_.counts - 1);
+    uint32_t ret = -1;
+    SeekIterator it = SeekIterator(*this);
+    KV _key;
+    while (l <= r) {
+      auto mid = (l + r) >> 1;
+      // logger("[l, r, mid] = ", l, ", ", r, ", ", mid);
+      it.seek_and_read(mid, _key);
+      // compare two keys
+      if (comp_(key, _key.key()) < 0) {
+        r = mid - 1, ret = mid;
+      } else
+        l = mid + 1;
+    }
+    return ret;
+  }
+
+  // seek with the offset storing the offset of the key.
+  EnumIterator seek_with_id(uint32_t id) const {
+    SeekIterator it = SeekIterator(*this);
+    // logger("seek_with_offset(): ", id);
     return EnumIterator(*this, it.seek_offset(id), id);
   }
 
-  auto sub_fileblock(uint32_t offset_l, uint32_t offset_r) {
+  auto sub_fileblock(uint32_t offset_l, uint32_t offset_r) const {
     assert(offset_l >= offset_index_ && offset_r >= offset_index_);
     auto counts_l = (offset_l - offset_index_) / sizeof(uint32_t);
     auto counts_r = (offset_r - offset_index_) / sizeof(uint32_t);
     return FileBlock<KV, KVComp>(file_id_, FileBlockHandle(handle_.offset, offset_r - handle_.offset, counts_r - counts_l), alloc_, file_ptr_,
                                  offset_l, comp_);
   }
+
+  size_t counts() const { return handle_.counts; }
 };
 
 template <typename Value>
@@ -481,15 +522,15 @@ class ImmutableFile {
     size_t mgn;
     auto ret = file_ptr_->read(size_ - sizeof(size_t), sizeof(size_t), (uint8_t*)(&mgn), result);
     assert(ret >= 0);
-    logger("file size: ", size);
-    logger("magic number: ", mgn, " - ", kMagicNumber);
+    // logger("file size: ", size);
+    // logger("magic number: ", mgn, " - ", kMagicNumber);
     assert(mgn == kMagicNumber);
     ret = file_ptr_->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle) * 2, sizeof(FileBlockHandle), (uint8_t*)(&index_bh), result);
     assert(ret >= 0);
     ret = file_ptr_->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle), sizeof(FileBlockHandle), (uint8_t*)(&data_bh), result);
     assert(ret >= 0);
-    logger_printf("index_block: [file_size=%d, counts=%d, offset=%d, size=%d]", size, index_bh.counts, index_bh.offset, index_bh.size);
-    logger_printf("data_block: [file_size=%d, counts=%d, offset=%d, size=%d]", size, data_bh.counts, data_bh.offset, data_bh.size);
+    // logger_printf("index_block: [file_size=%d, counts=%d, offset=%d, size=%d]", size, index_bh.counts, index_bh.offset, index_bh.size);
+    // logger_printf("data_block: [file_size=%d, counts=%d, offset=%d, size=%d]", size, data_bh.counts, data_bh.offset, data_bh.size);
     index_block_ = FileBlock<IndexKey, KeyCompType>(file_id, index_bh, alloc, file_ptr_.get(), comp_);
     data_block_ = FileBlock<DataKey, KeyCompType>(file_id, data_bh, alloc, file_ptr_.get(), comp_);
 
@@ -514,11 +555,50 @@ class ImmutableFile {
     return ret;
   }
 
+  FileBlock<DataKey, KeyCompType>::EnumIterator estimate_seek(const SKey& key) {
+    if (comp_(range_.second.ref(), key) < 0) return {};
+    auto id = index_block_.upper_offset(key);
+    // logger("estimate_seek(): ", id);
+    if (id == -1) return {};
+    return data_block_.seek_with_id(id);
+  }
+
   FileBlock<DataKey, KeyCompType>::EnumIterator seek(const SKey& key) {
-    if (comp_(range_.second.ref(), key) < 0) return {}; 
-    auto offset = index_block_.upper_offset(key);
-    logger("seek(): ", offset);
-    return data_block_.seek_with_offset(offset);
+    if (comp_(range_.second.ref(), key) < 0) return {};
+    auto id = index_block_.lower_offset(key);
+    // logger("seek(): ", id);
+    if (id == -1) return data_block_.seek_with_id(0);
+    id = data_block_.upper_key(key, id, id + kIndexChunkSize - 1);
+    // logger("seek(accurate)(): ", id);
+    return data_block_.seek_with_id(id);
+  }
+
+  size_t range_count(const SKey& L, const SKey& R) {
+    size_t retl = 0, retr = 0;
+    if (comp_(range_.second.ref(), L) < 0)
+      retl = data_block_.counts();
+    else if (comp_(L, range_.first.ref()) < 0)
+      retl = 0;
+    else {
+      auto id = index_block_.lower_offset(L);
+      if (id == -1)
+        retl = 0;
+      else
+        retl = data_block_.upper_key(L, id, id + kIndexChunkSize - 1);
+    }
+    if (comp_(range_.second.ref(), R) < 0)
+      retr = data_block_.counts();
+    else if (comp_(R, range_.first.ref()) < 0)
+      retr = 0;
+    else {
+      auto id = index_block_.lower_offset(R);
+      if (id == -1)
+        retr = 0;
+      else
+        retr = data_block_.upper_key_not_eq(R, id, id + kIndexChunkSize - 1);
+    }
+
+    return retr - retl;
   }
 
   bool in_range(const SKey& key) {
@@ -527,7 +607,9 @@ class ImmutableFile {
   }
   std::pair<SKey, SKey> range() const { return {range_.first.ref(), range_.second.ref()}; }
 
-  uint32_t size() const { return size_; }
+  size_t size() const { return size_; }
+
+  size_t counts() const { return data_block_.counts(); }
 
   bool range_overlap(const std::pair<SKey, SKey>& range) const {
     auto& [l, r] = range_;
@@ -757,10 +839,11 @@ class SSTBuilder {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
     assert(kv.size() == 32);
-    if (offsets.size() % (kChunkSize / sizeof(uint32_t)) == 0) {
+    if (offsets.size() % (kIndexChunkSize / sizeof(uint32_t)) == 0) {
       index.emplace_back(kv.key(), offsets.size());
       if (offsets.size() == 0) first_key = kv.key();
-    } else lst_key = kv.key();
+    } else
+      lst_key = kv.key();
     offsets.push_back(now_offset);
     now_offset += kv.size();
     file_->append_key(kv);
@@ -796,7 +879,7 @@ class SSTBuilder {
     std::vector<uint32_t> v;
     // append keys in the index block
     for (const auto& a : index) {
-      IndexKey index_key(a.first.ref(), a.second * sizeof(uint32_t) + data_index_offset);
+      IndexKey index_key(a.first.ref(), a.second);
       _append_align(index_key.size());
       file_->append_key(index_key);
       v.push_back(now_offset);
@@ -868,8 +951,8 @@ class Compaction {
   void _begin_new_file() {
     builder_.reset();
     auto [filename, id] = files_->next_pair();
-    logger("begin_new_file(): ", filename);
-    logger("begin_new_file(): size: ", builder_.size());
+    // logger("begin_new_file(): ", filename);
+    // logger("begin_new_file(): size: ", builder_.size());
     builder_.new_file(std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(env_->openAppFile(filename)), kBatchSize));
     vec_newfiles_.emplace_back();
     vec_newfiles_.back().filename = filename;
@@ -877,12 +960,12 @@ class Compaction {
   }
 
   void _end_new_file() {
-    logger("end_new_file(): kvsize: ", builder_.kv_size());
-    logger("end_new_file(): size: ", builder_.size());
+    // logger("end_new_file(): kvsize: ", builder_.kv_size());
+    // logger("end_new_file(): size: ", builder_.size());
     builder_.make_index();
-    logger("end_new_file(): size: ", builder_.size());
+    // logger("end_new_file(): size: ", builder_.size());
     builder_.finish();
-    logger("end_new_file(): size: ", builder_.size());
+    // logger("end_new_file(): size: ", builder_.size());
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = builder_.range();
     // for(auto & a:vec_newfiles_)
@@ -923,7 +1006,7 @@ class Compaction {
       }
       left.next();
     }
-    logger("flush(): ", CNT);
+    // logger("flush(): ", CNT);
     if (flag_) real_size += _calc_decay_value(lst_value_), builder_.append(lst_value_);
     _end_new_file();
     return std::make_pair(vec_newfiles_, real_size);
@@ -958,7 +1041,7 @@ class Compaction {
         builder_.append(lst_value_);
       }
     }
-    logger("[decay_first]: ", A);
+    // logger("[decay_first]: ", A);
     _end_new_file();
     return {vec_newfiles_, real_size_};
   }
@@ -983,7 +1066,7 @@ class Compaction {
   }
   void _divide_file() {
     if (builder_.kv_size() > kSSTable) {
-      logger("[divide file]");
+      // logger("[divide file]");
       _end_new_file();
       _begin_new_file();
     }
@@ -1003,6 +1086,8 @@ class EstimateLSM {
     ImmutableFile file;
     Partition(Env* env, BaseAllocator* file_alloc, KeyCompType* comp, const Compaction::NewFileData& data)
         : file(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp) {}
+    ~Partition() { file.remove(); }
+
     SSTIterator seek(const SKey& key) {
       // assert(file.in_range(key));
       return SSTIterator(&file, key);
@@ -1011,6 +1096,8 @@ class EstimateLSM {
     bool overlap(const SKey& lkey, const SKey& rkey) const { return file.range_overlap({lkey, rkey}); }
     auto range() const { return file.range(); }
     size_t size() const { return file.size(); }
+    size_t counts() const { return file.counts(); }
+    size_t range_count(const SKey& L, const SKey& R) { return file.range_count(L, R); }
   };
   struct Level {
     std::vector<std::shared_ptr<Partition>> head_;
@@ -1052,9 +1139,10 @@ class EstimateLSM {
         int mid = (l + r) >> 1;
         if (comp(key, head_[mid]->range().second) <= 0)
           where = mid, r = mid - 1;
-        else l = mid + 1;
+        else
+          l = mid + 1;
       }
-      logger("Level::seek(): ", where);
+      // logger("Level::seek(): ", where);
       if (where == -1) return LevelIterator();
       return LevelIterator(head_, where, head_[where]->seek(key));
     }
@@ -1062,7 +1150,7 @@ class EstimateLSM {
       int l = 0, r = head_.size() - 1, where = -1;
       while (l <= r) {
         int mid = (l + r) >> 1;
-        if (comp(lkey, head_[mid]->range().first) <= 0)
+        if (comp(lkey, head_[mid]->range().second) <= 0)
           where = mid, l = mid + 1;
         else
           r = mid - 1;
@@ -1077,6 +1165,39 @@ class EstimateLSM {
       head_.push_back(std::move(par));
     }
     void add_decay_size(double add) { decay_size_ += add; }
+
+    size_t range_count(const SKey& L, const SKey& R, KeyCompType* comp) {
+      int l = 0, r = head_.size() - 1, where_l = -1, where_r = -1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(L, head_[mid]->range().second) <= 0)
+          where_l = mid, r = mid - 1;
+        else
+          l = mid + 1;
+      }
+
+      l = 0, r = head_.size() - 1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(head_[mid]->range().first, R) <= 0)
+          where_r = mid, l = mid + 1;
+        else
+          r = mid - 1;
+      }
+
+      // logger_printf("where_l, where_r = %d, %d\n", where_l, where_r);
+      if (where_l == -1 || where_r == -1) return 0;
+
+      if (where_l == where_r) {
+        return head_[where_l]->range_count(L, R);
+      } else {
+        size_t ans = 0;
+        for (int i = where_l + 1; i < where_r; i++) ans += head_[i]->counts();
+        ans += head_[where_l]->range_count(L, R);
+        ans += head_[where_r]->range_count(L, R);
+        return ans;
+      }
+    }
   };
   class SuperVersion {
     std::vector<std::shared_ptr<Level>> tree_;
@@ -1086,21 +1207,24 @@ class EstimateLSM {
     double decay_size_overestimate_;
     double decay_limit_;
 
+    std::mutex* del_mutex_;
+
     bool _decay_possible() const { return decay_size_overestimate_ >= decay_limit_; }
 
    public:
-    SuperVersion(double decay_limit)
-        : largest_(std::make_shared<Level>()), ref_(1), decay_size_(0), decay_size_overestimate_(0), decay_limit_(decay_limit) {}
+    SuperVersion(double decay_limit, std::mutex* mutex)
+        : largest_(std::make_shared<Level>()), ref_(1), decay_size_(0), decay_size_overestimate_(0), decay_limit_(decay_limit), del_mutex_(mutex) {}
     void ref() { ref_++; }
     void unref() {
       if (!--ref_) {
+        // std::unique_lock lck(*del_mutex_);
         delete this;
       }
     }
 
     SeqIteratorSet<Level::LevelIterator, KeyCompType> seek(const SKey& key, KeyCompType* comp) const {
       SeqIteratorSet<Level::LevelIterator, KeyCompType> ret(comp);
-      if(largest_.get() != nullptr) ret.push(largest_->seek(key, comp));
+      if (largest_.get() != nullptr) ret.push(largest_->seek(key, comp));
       for (auto& a : tree_) ret.push(a->seek(key, comp));
       return ret;
     }
@@ -1108,7 +1232,7 @@ class EstimateLSM {
     // in critical section
     SuperVersion* flush_bufs(const std::vector<UnsortedBuffer*>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc, KeyCompType* comp) {
       if (bufs.size() == 0) return nullptr;
-      auto ret = new SuperVersion(decay_limit_);
+      auto ret = new SuperVersion(decay_limit_, del_mutex_);
       ret->tree_ = tree_;
       ret->largest_ = largest_;
       ret->decay_size_ = decay_size_;
@@ -1155,7 +1279,7 @@ class EstimateLSM {
       if ((Lsize >= kUnmergedRatio * largest_->size() && _decay_possible())) {
         auto iters = std::make_unique<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(comp);
 
-        logger("Major Compaction tree_.size() = ", tree_.size());
+        // logger("Major Compaction tree_.size() = ", tree_.size());
         // push all iterators to necessary partitions to SeqIteratorSet.
         for (auto& a : tree_) iters->push(Level::LevelIterator(add_level(*a), 0));
         if (largest_) iters->push(Level::LevelIterator(add_level(*largest_), 0));
@@ -1164,13 +1288,14 @@ class EstimateLSM {
         // compaction...
         Compaction worker(filename, env, comp);
         auto [files, decay_size] = worker.flush(*iters);
-        auto ret = new SuperVersion(decay_limit_);
+        auto ret = new SuperVersion(decay_limit_, del_mutex_);
         // major compaction, so levels except largest_ become empty.
         ret->decay_size_ = decay_size;
         ret->decay_size_overestimate_ = decay_size;
 
         auto rest_iter = rest.begin();
 
+        // std::unique_lock lck(*del_mutex_);
         for (auto& a : files) {
           auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
           while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
@@ -1179,7 +1304,7 @@ class EstimateLSM {
           }
           ret->largest_->append_par(std::move(par));
         }
-        while (rest_iter != rest.end()) ret->largest_->append_par(*rest_iter++);
+        while (rest_iter != rest.end()) ret->largest_->append_par(std::move(*rest_iter++));
 
         return ret;
       } else {
@@ -1191,31 +1316,35 @@ class EstimateLSM {
         // if the number of tables >= kLimitMin, then begin to merge
         // if the number of tables >= kLimitMax, then increase kMergeRatio. (this works when the number of tables is small)
 
-        logger("tree_.size() = ", tree_.size());
+        // logger("tree_.size() = ", tree_.size());
 
         if (tree_.size() >= kLimitMin) {
           auto _kRatio = kMergeRatio;
           double min_ratio = 1e30;
-          int where = -1;
+          int where = -1, _where = -1;
           size_t sum = tree_.back()->size();
           for (int i = tree_.size() - 2; i >= 0; --i) {
             if (tree_[i]->size() <= sum * _kRatio)
               where = i;
-            else
-              min_ratio = std::min(min_ratio, tree_[i]->size() / (double)sum);
+            else if (auto t = tree_[i]->size() / (double)sum; min_ratio < t) {
+              _where = i;
+              min_ratio = t;
+            }
             sum += tree_[i]->size();
           }
           if (tree_.size() >= kLimitMax) {
+            where = _where;
             size_t sum = tree_.back()->size();
             for (int i = tree_.size() - 2; i >= 0; --i) {
               if (tree_[i]->size() <= sum * min_ratio) where = i;
               sum += tree_[i]->size();
             }
           }
+          if (where == -1) return nullptr;
 
           auto iters = std::make_unique<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(comp);
 
-          logger("where = ", where);
+          // logger("compact(): where = ", where);
           // push all iterators to necessary partitions to SeqIteratorSet.
           for (uint32_t i = where; i < tree_.size(); ++i) iters->push(Level::LevelIterator(add_level(*tree_[i]), 0));
           iters->build();
@@ -1223,7 +1352,7 @@ class EstimateLSM {
           // compaction...
           Compaction worker(filename, env, comp);
           auto [files, decay_size] = worker.flush(*iters);
-          auto ret = new SuperVersion(decay_limit_);
+          auto ret = new SuperVersion(decay_limit_, del_mutex_);
           // minor compaction?
           // decay_size_overestimate = largest_ + remaining levels + new level
           ret->tree_ = tree_;
@@ -1235,6 +1364,7 @@ class EstimateLSM {
           auto rest_iter = rest.begin();
           auto level = std::make_shared<Level>();
 
+          // std::unique_lock lck(*del_mutex_);
           for (auto& a : files) {
             auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
             while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
@@ -1243,7 +1373,7 @@ class EstimateLSM {
             }
             level->append_par(std::move(par));
           }
-          while (rest_iter != rest.end()) level->append_par(*rest_iter++);
+          while (rest_iter != rest.end()) level->append_par(std::move(*rest_iter++));
           ret->tree_.erase(ret->tree_.begin() + where, ret->tree_.end());
           ret->tree_.push_back(std::move(level));
           return ret;
@@ -1251,16 +1381,25 @@ class EstimateLSM {
         return nullptr;
       }
     }
+
+    size_t range_count(const SKey& L, const SKey& R, KeyCompType* comp) {
+      size_t ans = 0;
+      if (largest_) ans += largest_->range_count(L, R, comp);
+      for (auto& a : tree_) ans += a->range_count(L, R, comp);
+      return ans;
+    }
   };
   double delta_;
   std::unique_ptr<Env> env_;
   std::unique_ptr<FileName> filename_;
   std::unique_ptr<BaseAllocator> file_alloc_;
   KeyCompType* comp_;
-  std::atomic<SuperVersion*> sv_;
+  SuperVersion* sv_;
   std::thread compact_thread_;
   bool terminate_signal_;
   UnsortedBufferPtrs bufs_;
+  std::mutex sv_mutex_;
+  std::mutex sv_load_mutex_;
 
  public:
   class SuperVersionIterator {
@@ -1283,7 +1422,7 @@ class EstimateLSM {
         filename_(std::move(filename)),
         file_alloc_(std::move(file_alloc)),
         comp_(comp),
-        sv_(new SuperVersion(delta)),
+        sv_(new SuperVersion(delta, &sv_mutex_)),
         terminate_signal_(0),
         bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
@@ -1292,18 +1431,25 @@ class EstimateLSM {
     terminate_signal_ = 1;
     bufs_.notify_cv();
     compact_thread_.join();
-    sv_.load()->unref();
+    std::unique_lock lck(sv_load_mutex_);
+    sv_->unref();
   }
   void append(const SKey& key, const SValue& value) { bufs_.append_and_notify(key, value); }
   auto seek(const SKey& key) {
-    sv_.load()->ref();
-    auto sv = sv_.load();
+    auto sv = get_current_sv();
     return new SuperVersionIterator(sv->seek(key, comp_), sv);
+  }
+
+  size_t range_count(const SKey& L, const SKey& R) {
+    if (comp_(L, R) > 0) return 0;
+    auto sv = get_current_sv();
+    return sv->range_count(L, R, comp_);
   }
 
   void all_flush() {
     bufs_.flush();
-    while(bufs_.size());
+    while (bufs_.size())
+      ;
   }
 
  private:
@@ -1312,20 +1458,33 @@ class EstimateLSM {
       auto buf_q_ = terminate_signal_ ? bufs_.get() : bufs_.wait_and_get();
       if (buf_q_.empty() && terminate_signal_) return;
       if (buf_q_.empty()) continue;
-      logger("FLUSH");
-      auto old_sv = sv_.load();
+      // logger("FLUSH");
+      auto old_sv = sv_;
       auto new_sv = old_sv->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
       if (new_sv != nullptr) {
+        sv_load_mutex_.lock();
         sv_ = new_sv;
+        sv_load_mutex_.unlock();
         old_sv->unref();
       }
-      logger("COMPACT");
-      old_sv = sv_.load();
+      // logger("COMPACT");
+      old_sv = sv_;
       new_sv = old_sv->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_);
-      if (new_sv == nullptr) continue;
-      sv_ = new_sv;
-      old_sv->unref();
+      if (new_sv != nullptr) {
+        sv_load_mutex_.lock();
+        sv_ = new_sv;
+        sv_load_mutex_.unlock();
+        old_sv->unref();
+      }
     }
+  }
+
+  SuperVersion* get_current_sv() {
+    sv_load_mutex_.lock();
+    auto sv = sv_;
+    sv->ref();
+    sv_load_mutex_.unlock();
+    return sv;
   }
 };
 
@@ -1554,8 +1713,11 @@ void test_lsm_store_and_scan() {
     int L = 1e7;
     uint8_t a[12];
     memset(a, 0, sizeof(a));
+    std::vector<int> numbers(L);
+    for (int i = 0; i < L; i++) numbers[i] = i;
+    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
     for (int i = 0; i < L; i++) {
-      for (int j = 0; j < 12; j++) a[j] = i >> (j % 4) * 8 & 255;
+      for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
       tree.append(SKey(a, 12), SValue(1, 1));
     }
     tree.all_flush();
@@ -1566,13 +1728,21 @@ void test_lsm_store_and_scan() {
     for (int i = 0; i < L; i++) {
       assert(iter->valid());
       auto kv = iter->read();
-      int x = 0;
+      int x = 0, y = 0;
       auto a = kv.first.data();
       for (int j = 0; j < 12; j++) {
         x |= a[j] << (j % 4) * 8;
         assert(j % 4 != 3 || x == i);
-        if (j % 4 == 3) x = 0;
+        if (j % 4 == 3) {
+          if (j > 3) {
+            assert(y == x);
+          }
+          y = x;
+          x = 0;
+        }
       }
+      assert(kv.second.counts == 1);
+      assert(kv.second.vlen == 1);
       iter->next();
     }
   }
@@ -1581,4 +1751,124 @@ void test_lsm_store_and_scan() {
   auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
   std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
   logger("test_lsm_store_and_scan(): OK");
+}
+
+void test_random_scan_and_count() {
+  using namespace viscnts_lsm;
+
+  auto start = std::chrono::system_clock::now();
+  {
+    EstimateLSM tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                     std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+    int L = 1e8, Q = 1e4;
+    std::vector<int> numbers(L);
+    auto comp2 = +[](int x, int y) {
+      uint8_t a[12], b[12];
+      for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
+      for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
+      return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
+    };
+    auto mx = std::max_element(numbers.begin(), numbers.begin() + L / 2, comp2) - numbers.begin();
+    for (int i = 0; i < L; i++) numbers[i] = i;
+    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+    srand(std::random_device()());
+    for (int i = 0; i < L / 2; i++) {
+      uint8_t a[12];
+      for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
+      tree.append(SKey(a, 12), SValue(1, 1));
+      // if (rand() % std::max(1, L / 1000) == 0) {
+      //   std::thread(
+      //       [](EstimateLSM& tree) {
+      //         uint8_t a[12];
+      //         int id = abs(rand()) % 100000;
+      //         for (int j = 0; j < 12; j++) a[j] = id >> (j % 4) * 8 & 255;
+      //         auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+      //       },
+      //       std::ref(tree))
+      //       .detach();
+      // }
+    }
+    tree.all_flush();
+    
+    auto end = std::chrono::system_clock::now();
+    auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    start = end;
+    logger("flush used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+    auto numbers2 = std::vector<int>(numbers.begin(), numbers.begin() + L / 2);
+    std::sort(numbers2.begin(), numbers2.end(), comp2);
+
+    for (int i = 0; i < Q; i++) {
+      uint8_t a[12], b[12];
+      int id = abs(rand()) % numbers.size();
+      int x = numbers[id];
+      for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
+      id = abs(rand()) % numbers.size();
+      int y = numbers[id];
+      for (int j = 0; j < 12; j++) b[j] = numbers[id] >> (j % 4) * 8 & 255;
+      int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
+      ans = std::max(ans, 0);
+      int output = tree.range_count(SKey(b, 12), SKey(a, 12));
+      assert(ans == output);
+    }
+
+
+    int QLEN = 1000;
+
+    end = std::chrono::system_clock::now();
+    dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    start = end;
+    logger("range count used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+
+    
+    
+    for (int i = 0; i < Q; i++) {
+      uint8_t a[12];
+      int id = abs(rand()) % numbers.size();
+      for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
+
+      auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+      auto check_func = [](uint8_t* a, int goal) {
+        int x = 0, y = 0;
+        for (int j = 0; j < 12; j++) {
+          x |= a[j] << (j % 4) * 8;
+          assert(j % 4 != 3 || x == goal);
+          if (j % 4 == 3) {
+            if (j > 3) {
+              assert(y == x);
+            }
+            y = x;
+            x = 0;
+          }
+        }
+      };
+      if (id < L / 2) {
+        assert(iter->valid());
+        auto kv = iter->read();
+        auto a = kv.first.data();
+        check_func(a, numbers[id]);
+        iter->next();
+      } else {
+        // assert(iter->valid() || i == mx);
+        // assert(!iter->valid() || i != mx);
+      }
+      int x = a[0] | ((uint32_t)a[1] << 8) | ((uint32_t)a[2] << 16) | ((uint32_t)a[3] << 24);
+
+      int cnt = 0;
+      auto it = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2);
+      while (true) {
+        if (++cnt > QLEN) break;
+        assert((it != numbers2.end()) == (iter->valid()));
+        if (it == numbers2.end()) break;
+        auto a = iter->read().first.data();
+        check_func(a, *it);
+        it++;
+        iter->next();
+      }
+    }
+    end = std::chrono::system_clock::now();
+    dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    logger("random scan used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+  }
+  logger("test_random_scan(): OK");
 }
