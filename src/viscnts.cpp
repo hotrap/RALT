@@ -252,7 +252,7 @@ class FileBlock {     // process blocks in a file
     void next() {
       assert(valid());
       if (!key_size_) _read_size();
-      assert(key_size_ == 32);
+      // assert(key_size_ == 32);
       offset_ += key_size_;
       assert(offset_ <= kChunkSize);
       key_size_ = 0, id_++;
@@ -838,7 +838,7 @@ class SSTBuilder {
     // kv.key().print();
     assert(kv.key().len() > 0);
     _append_align(kv.size());
-    assert(kv.size() == 32);
+    // assert(kv.size() == 32);
     if (offsets.size() % (kIndexChunkSize / sizeof(uint32_t)) == 0) {
       index.emplace_back(kv.key(), offsets.size());
       if (offsets.size() == 0) first_key = kv.key();
@@ -1024,7 +1024,7 @@ class Compaction {
       if (flag_ && comp_(lst_value_.first.ref(), L.first) == 0) {
         lst_value_.second += L.second;
       } else {
-        if (_decay_kv(lst_value_)) {
+        if (flag_ && _decay_kv(lst_value_)) {
           A++;
           real_size_ += _calc_decay_value(lst_value_);
           builder_.append(lst_value_);
@@ -1041,7 +1041,7 @@ class Compaction {
         builder_.append(lst_value_);
       }
     }
-    // logger("[decay_first]: ", A);
+    logger("[decay_first]: ", A);
     _end_new_file();
     return {vec_newfiles_, real_size_};
   }
@@ -1078,8 +1078,8 @@ constexpr auto kLimitMin = 10;
 constexpr auto kLimitMax = 20;
 constexpr auto kMergeRatio = 0.1;
 constexpr auto kUnmergedRatio = 0.1;
-constexpr auto kUnsortedBufferSize = 1 << 22;
-constexpr auto kUnsortedBufferMaxQueue = 10;
+constexpr auto kUnsortedBufferSize = 1 << 20;
+constexpr auto kUnsortedBufferMaxQueue = 8;
 
 class EstimateLSM {
   struct Partition {
@@ -1203,7 +1203,6 @@ class EstimateLSM {
     std::vector<std::shared_ptr<Level>> tree_;
     std::shared_ptr<Level> largest_;
     std::atomic<uint32_t> ref_;
-    double decay_size_;
     double decay_size_overestimate_;
     double decay_limit_;
 
@@ -1213,7 +1212,7 @@ class EstimateLSM {
 
    public:
     SuperVersion(double decay_limit, std::mutex* mutex)
-        : largest_(std::make_shared<Level>()), ref_(1), decay_size_(0), decay_size_overestimate_(0), decay_limit_(decay_limit), del_mutex_(mutex) {}
+        : largest_(std::make_shared<Level>()), ref_(1), decay_size_overestimate_(0), decay_limit_(decay_limit), del_mutex_(mutex) {}
     void ref() { ref_++; }
     void unref() {
       if (!--ref_) {
@@ -1235,7 +1234,6 @@ class EstimateLSM {
       auto ret = new SuperVersion(decay_limit_, del_mutex_);
       ret->tree_ = tree_;
       ret->largest_ = largest_;
-      ret->decay_size_ = decay_size_;
       ret->decay_size_overestimate_ = decay_size_overestimate_;
       for (auto& buf : bufs) {
         Compaction worker(filename, env, comp);
@@ -1277,21 +1275,22 @@ class EstimateLSM {
       // If the unmerged data is too big, and estimated decay size is large enough.
       // all the partitions will be merged into the largest level.
       if ((Lsize >= kUnmergedRatio * largest_->size() && _decay_possible())) {
+        logger("[decay size, Lsize, largest_->size()]: ", decay_size_overestimate_, ", ", Lsize, ", ", largest_->size());
         auto iters = std::make_unique<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(comp);
 
         // logger("Major Compaction tree_.size() = ", tree_.size());
         // push all iterators to necessary partitions to SeqIteratorSet.
         for (auto& a : tree_) iters->push(Level::LevelIterator(add_level(*a), 0));
-        if (largest_) iters->push(Level::LevelIterator(add_level(*largest_), 0));
+        if (largest_ && largest_->size() != 0) iters->push(Level::LevelIterator(add_level(*largest_), 0));
         iters->build();
 
         // compaction...
         Compaction worker(filename, env, comp);
-        auto [files, decay_size] = worker.flush(*iters);
+        auto [files, decay_size] = worker.decay_first(*iters);
         auto ret = new SuperVersion(decay_limit_, del_mutex_);
         // major compaction, so levels except largest_ become empty.
-        ret->decay_size_ = decay_size;
         ret->decay_size_overestimate_ = decay_size;
+        logger("[new decay size]: ", ret->decay_size_overestimate_);
 
         auto rest_iter = rest.begin();
 
@@ -1357,7 +1356,6 @@ class EstimateLSM {
           // decay_size_overestimate = largest_ + remaining levels + new level
           ret->tree_ = tree_;
           ret->largest_ = largest_;
-          ret->decay_size_ = decay_size_;
           ret->decay_size_overestimate_ = largest_->decay_size() + decay_size;
           for (int i = 0; i < where; i++) ret->decay_size_overestimate_ += tree_[i]->decay_size();
 
@@ -1768,7 +1766,6 @@ void test_random_scan_and_count() {
       for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
       return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
     };
-    auto mx = std::max_element(numbers.begin(), numbers.begin() + L / 2, comp2) - numbers.begin();
     for (int i = 0; i < L; i++) numbers[i] = i;
     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
     srand(std::random_device()());
@@ -1871,4 +1868,44 @@ void test_random_scan_and_count() {
     logger("random scan used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
   }
   logger("test_random_scan(): OK");
+}
+
+void test_lsm_decay() {
+  using namespace viscnts_lsm;
+
+  auto start = std::chrono::system_clock::now();
+  {
+    EstimateLSM tree(1e7, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                     std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+    int L = 3e7, Q = 1e4;
+    std::vector<int> numbers(L);
+    auto comp2 = +[](int x, int y) {
+      uint8_t a[12], b[12];
+      for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
+      for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
+      return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
+    };
+    for (int i = 0; i < L; i++) numbers[i] = i;
+    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+    srand(std::random_device()());
+    for (int i = 0; i < L; i++) {
+      uint8_t a[12];
+      for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
+      tree.append(SKey(a, 12), SValue(1, 1));
+    }
+    uint8_t a[12];
+    memset(a, 0, sizeof(a));
+    auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+    double ans = 0;
+    while(iter->valid()) {
+      auto kv = iter->read();
+      ans += (kv.second.vlen + 12) * std::min(kv.second.counts * 0.5, 1.); 
+      iter->next();
+    }
+    logger("decay size: ", ans);
+    auto end = std::chrono::system_clock::now();
+    auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    logger("decay used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+  }
+  logger("test_lsm_decay(): OK");
 }
