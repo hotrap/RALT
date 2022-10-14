@@ -52,21 +52,39 @@ class Slice {
 class IndSlice {
   uint8_t* a_;
   uint32_t len_;
+  uint32_t a_len_;
+
+  void _read_from(const uint8_t* a, uint32_t len) {
+    if(!a) {
+      len_ = 0;
+    } else if (a_ == nullptr || a_len_ < len) {
+      if(a_) delete a_;
+      a_ = new uint8_t[a_len_ = len_ = len];
+    } else {
+      len_ = len;
+    }
+    if(len_) memcpy(a_, a, len_);
+  }
 
  public:
-  IndSlice() : a_(nullptr), len_(0) {}
-  explicit IndSlice(const uint8_t* a, size_t len) : a_(a == nullptr ? nullptr : new uint8_t[len]), len_(len) {
-    // printf("IndSlice(%lld)!", a_);
-    if (a_) memcpy(a_, a, len);
+  IndSlice() : a_(nullptr), len_(0), a_len_(0) {}
+  explicit IndSlice(const uint8_t* a, size_t len) {
+    a_ = nullptr, len_ = a_len_ = 0;
+    _read_from(a, len);
   }
-  IndSlice(IndSlice&& s) noexcept : a_(s.a_), len_(s.len_) {
+  IndSlice(IndSlice&& s) noexcept {
     // printf("IndSlice&&(%lld)!", a_);
+    a_ = s.a_;
+    len_ = s.len_;
+    a_len_ = s.a_len_;
     s.a_ = nullptr;
     s.len_ = 0;
+    s.a_len_ = 0;
   }
-  IndSlice(const IndSlice& s) noexcept : a_(s.a_ == nullptr ? nullptr : new uint8_t[s.len_]), len_(s.len_) {
+  IndSlice(const IndSlice& s) noexcept {
     // printf("IndSlice&(%lld)!", a_);
-    if (a_) memcpy(a_, s.a_, s.len_);
+    a_ = nullptr, len_ = a_len_ = 0;
+    _read_from(s.a_, s.len_);
   }
   IndSlice& operator=(IndSlice&& s) noexcept {
     // printf("IndSlice&&=(%lld)!", a_);
@@ -74,28 +92,25 @@ class IndSlice {
     if (a_) delete a_;
     a_ = s.a_;
     len_ = s.len_;
+    a_len_ = s.a_len_;
     s.a_ = nullptr;
     s.len_ = 0;
+    s.a_len_ = 0;
     return (*this);
   }
   IndSlice& operator=(const IndSlice& s) noexcept {
     // printf("IndSlice&=(%lld)!", a_);
     // fflush(stdout);
-    if (a_) delete a_;
-    a_ = s.data() == nullptr ? nullptr : new uint8_t[s.len()];
-    len_ = s.len();
-    if (a_) memcpy(a_, s.data(), s.len());
+    _read_from(s.a_, s.len_);
     return (*this);
   }
 
-  IndSlice(const Slice& s) noexcept : a_(s.data() == nullptr ? nullptr : new uint8_t[s.len()]), len_(s.len()) {
-    if (a_) memcpy(a_, s.data(), s.len());
+  IndSlice(const Slice& s) noexcept {
+    a_ = nullptr, len_ = a_len_ = 0;
+    _read_from(s.data(), s.len());
   }
   IndSlice& operator=(const Slice& s) noexcept {
-    if (a_) delete a_;
-    a_ = s.data() == nullptr ? nullptr : new uint8_t[s.len()];
-    len_ = s.len();
-    if (a_) memcpy(a_, s.data(), s.len());
+    _read_from(s.data(), s.len());
     return (*this);
   }
   ~IndSlice() {
@@ -105,16 +120,11 @@ class IndSlice {
   }
   size_t size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
-  uint8_t* data() const { return a_; }
-  Slice ref() const { return Slice(a_, len_); }
+  uint8_t* data() const { return len_ == 0 ? nullptr : a_; }
+  Slice ref() const { return Slice(len_ == 0 ? nullptr : a_, len_); }
   uint8_t* read(uint8_t* from) {
     auto nlen = *reinterpret_cast<decltype(len_)*>(from);
-    if (a_ && len_ != nlen) {
-      delete a_;
-      a_ = new uint8_t[len_];
-    }
-    len_ = nlen;
-    memcpy(a_, from + sizeof(len_), len_);
+    _read_from(from + sizeof(len_), nlen);
     return from + sizeof(len_) + len_;
   }
   uint8_t* write(uint8_t* to) const {
