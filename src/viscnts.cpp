@@ -715,7 +715,7 @@ class DeletedRange {
 
    public:
     CompareNode(KVComp* comp) : comp_(comp) {}
-    int operator()(const Node& x, const Node& y) { return comp(x.key, y.key); }
+    int operator()(const Node& x, const Node& y) { return comp_(x.key, y.key); }
     KVComp* func() { return comp_; }
   };
   DeletedRange(KVComp comp) : tree_(_update, _solo_update, _empty_update, _dup_update, CompareNode(comp)) {}
@@ -740,14 +740,19 @@ class DeletedRange {
     typename SplayType::NodeData* iter_;
     int sum_;
     KVComp* comp_;
-    public: 
-    Iterator(const Key& k, const DeletedRange& range) : iter_(range.tree_.upper(k)), sum_(range.tree_.presum(k)), comp_(range.tree_.Compare.func()) {}
-    Iterator(const DeletedRange& range) : iter_(range.tree_.begin()), sum_(0), comp_(range.tree_.Compare.func()) {}
+
+   public:
+    Iterator() : iter_(nullptr), sum_(0), comp_(nullptr) {}
+    Iterator(const Key& k, DeletedRange& range) : iter_(range.tree_.upper(Node{k, 0, 0})), comp_(range.tree_.comp().func()) {
+      auto output = range.tree_.presum(Node{k, 0, 0});
+      sum_ = output == nullptr ? 0 : output->sum;
+    }
+    Iterator(DeletedRange& range) : iter_(range.tree_.begin()), sum_(0), comp_(range.tree_.comp().func()) {}
     bool valid() { return iter_ != nullptr; }
     int read() { return sum_; }
     void next(const Key& k) {
-      while(iter_ != nullptr && comp_(iter_->key.key, k) < 0) {
-        sum_ += iter_->val;
+      while (iter_ != nullptr && comp_(iter_->key.key, k) < 0) {
+        sum_ += iter_->key.val;
         iter_ = iter_->nxt;
       }
     }
@@ -1141,8 +1146,10 @@ constexpr auto kUnsortedBufferMaxQueue = 8;
 class EstimateLSM {
   struct Partition {
     ImmutableFile file;
+    DeletedRange<SKey, KeyCompType> deleted_ranges;
     Partition(Env* env, BaseAllocator* file_alloc, KeyCompType* comp, const Compaction::NewFileData& data)
-        : file(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp) {}
+        : file(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp),
+          deleted_ranges(comp) {}
     ~Partition() { file.remove(); }
 
     SSTIterator seek(const SKey& key) {
@@ -1165,20 +1172,42 @@ class EstimateLSM {
       std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
       SSTIterator iter_;
       std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr_;
+      DeletedRange<SKey, KeyCompType>::Iterator del_ranges_iterator_;
 
      public:
       LevelIterator() {}
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter)
-          : vec_it_(vec.begin() + id + 1), vec_it_end_(vec.end()), iter_(std::move(iter)) {}
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter,
+                    DeletedRange<SKey, KeyCompType>::Iterator&& del_iter)
+          : vec_it_(vec.begin() + id + 1), vec_it_end_(vec.end()), iter_(std::move(iter)), del_ranges_iterator_(std::move(del_iter)) {}
       LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id)
-          : vec_it_(vec.begin() + id + 1), vec_it_end_(vec.end()), iter_(vec[id]->begin()) {}
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator&& iter)
-          : vec_it_(vec_ptr->begin() + id + 1), vec_it_end_(vec_ptr->end()), iter_(std::move(iter)), vec_ptr_(std::move(vec_ptr)) {}
+          : vec_it_(vec.begin() + id + 1), vec_it_end_(vec.end()), iter_(vec[id]->begin()), del_ranges_iterator_(vec[id]->deleted_ranges) {}
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator&& iter,
+                    DeletedRange<SKey, KeyCompType>::Iterator&& del_iter)
+          : vec_it_(vec_ptr->begin() + id + 1),
+            vec_it_end_(vec_ptr->end()),
+            iter_(std::move(iter)),
+            vec_ptr_(std::move(vec_ptr)),
+            del_ranges_iterator_(std::move(del_iter)) {}
       LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id)
-          : vec_it_(vec_ptr->begin() + id + 1), vec_it_end_(vec_ptr->end()), iter_((*vec_ptr)[id]->begin()), vec_ptr_(std::move(vec_ptr)) {}
+          : vec_it_(vec_ptr->begin() + id + 1),
+            vec_it_end_(vec_ptr->end()),
+            iter_((*vec_ptr)[id]->begin()),
+            vec_ptr_(std::move(vec_ptr)),
+            del_ranges_iterator_((*vec_ptr)[id]->deleted_ranges) {}
       bool valid() { return iter_.valid(); }
       void next() {
         iter_.next();
+        if (del_ranges_iterator_.valid()) {
+          DataKey kv;
+          iter_.read(kv);
+          while (del_ranges_iterator_.valid()) del_ranges_iterator_.next(kv.key());
+          while (iter_.valid() && del_ranges_iterator_.read()) {
+            assert(del_ranges_iterator_.valid());
+            iter_.next();
+            iter_.read(kv);
+            while (del_ranges_iterator_.valid()) del_ranges_iterator_.next(kv.key());
+          }
+        }
         if (!iter_.valid() && vec_it_ != vec_it_end_) {
           iter_ = SSTIterator(&(*vec_it_)->file);
           vec_it_++;
@@ -1201,7 +1230,7 @@ class EstimateLSM {
       }
       // logger("Level::seek(): ", where);
       if (where == -1) return LevelIterator();
-      return LevelIterator(head_, where, head_[where]->seek(key));
+      return LevelIterator(head_, where, head_[where]->seek(key), DeletedRange<SKey, KeyCompType>::Iterator(key, head_[where]->deleted_ranges));
     }
     bool overlap(const SKey& lkey, const SKey& rkey, KeyCompType* comp) const {
       int l = 0, r = head_.size() - 1, where = -1;

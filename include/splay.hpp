@@ -83,6 +83,7 @@ class Splay {
 
   NodeData* begin() {
     auto x = rt_;
+    if (x) return nullptr;
     while (x->lc) x = x->lc;
     _splay(x);
     return x;
@@ -99,6 +100,8 @@ class Splay {
       return &x->lc->key;
     }
   }
+
+  CompareT comp() { return Compare; }
 
   // auto& print(NodeData* x, std::string s = "") {
   //   if (!x) return std::cout;
