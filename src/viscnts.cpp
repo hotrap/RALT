@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <queue>
 #include <set>
 #include <thread>
 
@@ -15,6 +16,7 @@
 #include "hash.hpp"
 #include "key.hpp"
 #include "memtable.hpp"
+#include "splay.hpp"
 
 namespace viscnts_lsm {
 
@@ -697,6 +699,61 @@ class WriteBatch {
   }
 };
 
+template <typename Key, typename KVComp>
+class DeletedRange {
+ public:
+  struct Node {
+    Key key;
+    int sum, val;
+  };
+  struct RangeData {
+    std::pair<Key, Key> range;
+    size_t seq_num;
+  };
+  class CompareNode {
+    KVComp* comp_;
+
+   public:
+    CompareNode(KVComp* comp) : comp_(comp) {}
+    int operator()(const Node& x, const Node& y) { return comp(x.key, y.key); }
+    KVComp* func() { return comp_; }
+  };
+  DeletedRange(KVComp comp) : tree_(_update, _solo_update, _empty_update, _dup_update, CompareNode(comp)) {}
+  void insert(std::pair<Key, Key> range, size_t seq_number) {
+    tree_.insert({range.first, 1, 1});
+    tree_.insert({range.second, -1, -1});
+  }
+
+ private:
+  static void _update(Node& x, const Node& lc, const Node& rc) { x.sum = lc.sum + rc.sum + x.val; }
+  static void _solo_update(Node& x, const Node& lc) { x.sum = lc.sum + x.val; }
+  static void _empty_update(Node& x) { x.sum = x.val; }
+  static void _dup_update(Node& x, const Node& y) {
+    x.val += y.val;
+    x.sum += y.val;
+  }
+  using SplayType = Splay<Node, decltype(&_update), decltype(&_solo_update), decltype(&_empty_update), decltype(&_dup_update), CompareNode>;
+  SplayType tree_;
+
+ public:
+  class Iterator {
+    typename SplayType::NodeData* iter_;
+    int sum_;
+    KVComp* comp_;
+    public: 
+    Iterator(const Key& k, const DeletedRange& range) : iter_(range.tree_.upper(k)), sum_(range.tree_.presum(k)), comp_(range.tree_.Compare.func()) {}
+    Iterator(const DeletedRange& range) : iter_(range.tree_.begin()), sum_(0), comp_(range.tree_.Compare.func()) {}
+    bool valid() { return iter_ != nullptr; }
+    int read() { return sum_; }
+    void next(const Key& k) {
+      while(iter_ != nullptr && comp_(iter_->key.key, k) < 0) {
+        sum_ += iter_->val;
+        iter_ = iter_->nxt;
+      }
+    }
+  };
+};
+
 template <typename Iterator, typename KVComp>
 class SeqIteratorSet {
   std::vector<Iterator> iters_;
@@ -865,7 +922,7 @@ class SSTBuilder {
     _align();
     // file_->check(offsets.size() * 32);
     // logger("SSTB(AFTER ALIGN): ", now_offset);
-    auto data_index_offset = now_offset;
+    // auto data_index_offset = now_offset;
     // append all the offsets in the data block
     for (const auto& a : offsets) {
       if (kChunkSize % sizeof(decltype(a))) _append_align(sizeof(decltype(a)));
@@ -1065,7 +1122,7 @@ class Compaction {
     return true;
   }
   void _divide_file() {
-    if (builder_.kv_size() > kSSTable) {
+    if (builder_.kv_size() > kSSTable - 512) {
       // logger("[divide file]");
       _end_new_file();
       _begin_new_file();
@@ -1398,6 +1455,7 @@ class EstimateLSM {
   UnsortedBufferPtrs bufs_;
   std::mutex sv_mutex_;
   std::mutex sv_load_mutex_;
+  size_t sv_seq_number_;  // Every Partion has a sequential number, used in Range Delete.
 
  public:
   class SuperVersionIterator {
@@ -1786,7 +1844,7 @@ void test_random_scan_and_count() {
       // }
     }
     tree.all_flush();
-    
+
     auto end = std::chrono::system_clock::now();
     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     start = end;
@@ -1809,7 +1867,6 @@ void test_random_scan_and_count() {
       assert(ans == output);
     }
 
-
     int QLEN = 1000;
 
     end = std::chrono::system_clock::now();
@@ -1817,8 +1874,6 @@ void test_random_scan_and_count() {
     start = end;
     logger("range count used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
 
-    
-    
     for (int i = 0; i < Q; i++) {
       uint8_t a[12];
       int id = abs(rand()) % numbers.size();
@@ -1897,9 +1952,9 @@ void test_lsm_decay() {
     memset(a, 0, sizeof(a));
     auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
     double ans = 0;
-    while(iter->valid()) {
+    while (iter->valid()) {
       auto kv = iter->read();
-      ans += (kv.second.vlen + 12) * std::min(kv.second.counts * 0.5, 1.); 
+      ans += (kv.second.vlen + 12) * std::min(kv.second.counts * 0.5, 1.);
       iter->next();
     }
     logger("decay size: ", ans);
