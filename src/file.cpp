@@ -58,7 +58,10 @@ class PosixRandomAccessFile : public RandomAccessFile {
  public:
   PosixRandomAccessFile(int fd, std::string fname, Limiter* fd_limit) : fd_(fd), use_fd_(fd_limit->acquire()), fname_(fname), fd_limit_(fd_limit) {}
   ~PosixRandomAccessFile() {
-    if (use_fd_) fd_limit_->release();
+    if (use_fd_) {
+      ::close(fd_);
+      fd_limit_->release();
+    }
   }
   ssize_t read(size_t offset, size_t n, uint8_t* data, Slice& result) override {
     int xfd;

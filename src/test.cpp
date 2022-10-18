@@ -29,7 +29,7 @@ int main() {
   // test_unordered_buf();
   // test_lsm_store();
   // test_lsm_store_and_scan();
-  // test_random_scan_and_count();
+  test_random_scan_and_count();
   // test_lsm_decay();
-  test_splay();
+  // test_splay();
 }

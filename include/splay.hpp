@@ -83,7 +83,7 @@ class Splay {
 
   NodeData* begin() {
     auto x = rt_;
-    if (x) return nullptr;
+    if (!x) return nullptr;
     while (x->lc) x = x->lc;
     _splay(x);
     return x;
