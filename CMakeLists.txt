@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.2)
 project(viscnts)
 
-set(CMAKE_CXX_FLAGS_MYREL "-O3")
+set(CMAKE_CXX_FLAGS_MYREL "-Ofast -march=native -g")
 
 IF (NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE "Debug" CACHE STRING

@@ -161,7 +161,7 @@ class UnsortedBuffer {
   std::atomic<size_t> ref_;
   size_t buffer_size_;
   uint8_t *data_;
-  std::vector<std::pair<SKey, SValue>> sorted_result_;
+  std::vector<std::pair<SKey, const uint8_t *>> sorted_result_;
 
  public:
   UnsortedBuffer(size_t size) : used_size_(0), ref_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
@@ -193,46 +193,50 @@ class UnsortedBuffer {
     ref_ -= 1;
     return true;
   }
+
   template <typename KeyComp>
   void sort(KeyComp comp) {
     sorted_result_.clear();
     ssize_t limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     uint32_t len;
+    auto comp_func = [comp](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
+      return comp(x.first, y.first) < 0;
+    };
     for (uint8_t *d = data_; d - data_ < limit && (len = *reinterpret_cast<uint32_t *>(d)) != 0;) {
-      sorted_result_.emplace_back(SKey(d + sizeof(uint32_t), len), *reinterpret_cast<SValue *>(d + sizeof(uint32_t) + len));
+      SKey key;
+      const uint8_t *v = key.read(d);
+      sorted_result_.emplace_back(std::pair<SKey, const uint8_t *>(key, v));
       d += len + sizeof(uint32_t) + sizeof(SValue);
     }
-    std::sort(sorted_result_.begin(), sorted_result_.end(),
-              [comp](const std::pair<SKey, SValue> &x, const std::pair<SKey, SValue> &y) { return comp(x.first, y.first) <= 0; });
+    // tim::timsort(sorted_result_.begin(), sorted_result_.end(), comp_func);
+    std::sort(sorted_result_.begin(), sorted_result_.end(), comp_func);
   }
   void clear() {
     auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     memset(data_, 0, limit);
     used_size_ = 0;
     ref_ = 0;
-    sorted_result_.clear();
   }
   size_t size() const { return used_size_; }
-  template <typename KeyComp>
-  bool overlap(const SKey &lkey, const SKey &rkey, KeyComp comp) const {
-    if (!sorted_result_.size()) return true;
-    return !(comp(rkey, sorted_result_[0].first) < 0 || comp(sorted_result_.back().first, lkey) < 0);
-  }
   bool safe() const { return ref_ == 0; }
   class Iterator {
-    std::vector<std::pair<SKey, SValue>>::const_iterator iter_;
-    std::vector<std::pair<SKey, SValue>>::const_iterator iter_end_;
+    std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_;
+    std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_end_;
 
    public:
     Iterator(const UnsortedBuffer &buf) : iter_(buf.sorted_result_.begin()), iter_end_(buf.sorted_result_.end()) {}
     void next() { iter_++; }
     bool valid() { return iter_ != iter_end_; }
-    std::pair<SKey, SValue> read() { return *iter_; }
+    std::pair<SKey, SValue> read() {
+      SValue value;
+      value = *reinterpret_cast<const SValue *>(iter_->second);
+      return {iter_->first, value};
+    }
   };
 };
 
 class UnsortedBufferPtrs {
-  constexpr static size_t kWaitSleepMilliSeconds = 1;
+  constexpr static size_t kWaitSleepMilliSeconds = 10;
   std::mutex m_;
   std::condition_variable cv_;
   std::atomic<UnsortedBuffer *> buf;
@@ -258,13 +262,19 @@ class UnsortedBufferPtrs {
         m_.unlock();
         continue;
       }
-      while (buf_q_.size() > max_q_size_) {
+      while (buf.load(std::memory_order_relaxed) == bbuf && buf_q_.size() >= max_q_size_) {
         m_.unlock();
         cv_.notify_one();
-        // puts("WAITING"); fflush(stdout);
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitSleepMilliSeconds));
         m_.lock();
       }
+      if (buf.load(std::memory_order_relaxed) != bbuf) {
+        bbuf = buf.load(std::memory_order_relaxed);
+        m_.unlock();
+        if (bbuf->append(key, value)) return true;
+        continue;
+      }
+      // printf("[%llu]", buf.load()); fflush(stdout);
       buf_q_.push_back(buf);
       buf = bbuf = new UnsortedBuffer(buffer_size_);
       m_.unlock();
@@ -283,9 +293,7 @@ class UnsortedBufferPtrs {
 
   UnsortedBuffer *this_buf() { return buf.load(std::memory_order_relaxed); }
 
-  void notify_cv() {
-    cv_.notify_all();
-  }
+  void notify_cv() { cv_.notify_all(); }
 
   std::vector<UnsortedBuffer *> wait_and_get() {
     if (buf_q_.size()) {

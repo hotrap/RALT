@@ -13,19 +13,19 @@
 namespace viscnts_lsm {
 
 class Slice {
-  uint8_t* a_;
+  const uint8_t* a_;
   uint32_t len_;
 
  public:
   Slice() : a_(nullptr), len_(0) {}
-  explicit Slice(uint8_t* a, size_t len) : a_(a), len_(len) {}
+  explicit Slice(const uint8_t* a, size_t len) : a_(a), len_(len) {}
   size_t size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
-  uint8_t* data() const { return a_; }
+  const uint8_t* data() const { return a_; }
   bool operator==(const Slice& S) const { return S.len_ == len_ && memcmp(S.a_, a_, len_) == 0; }
   bool operator!=(const Slice& S) const { return S.len_ != len_ || memcmp(S.a_, a_, len_) != 0; }
-  uint8_t* read(uint8_t* from) {
-    len_ = *reinterpret_cast<decltype(len_)*>(from);
+  const uint8_t* read(const uint8_t* from) {
+    len_ = *reinterpret_cast<const decltype(len_)*>(from);
     a_ = from + sizeof(len_);
     return from + sizeof(len_) + len_;
   }
@@ -122,8 +122,8 @@ class IndSlice {
   size_t len() const { return len_; }
   uint8_t* data() const { return len_ == 0 ? nullptr : a_; }
   Slice ref() const { return Slice(len_ == 0 ? nullptr : a_, len_); }
-  uint8_t* read(uint8_t* from) {
-    auto nlen = *reinterpret_cast<decltype(len_)*>(from);
+  const uint8_t* read(const uint8_t* from) {
+    auto nlen = *reinterpret_cast<const decltype(len_)*>(from);
     _read_from(from + sizeof(len_), nlen);
     return from + sizeof(len_) + len_;
   }
