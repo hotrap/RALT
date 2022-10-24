@@ -327,6 +327,26 @@ class FileBlock {     // process blocks in a file
     }
     bool valid() { return id_ < block_.handle_.counts; }
 
+    int rank() { return id_; }
+
+    void jump(int new_id) {
+      if (new_id >= block_.handle_.counts) {
+        id_ = block_.handle_.counts;
+        return;
+      }
+      if (new_id - id_ < kIndexChunkSize) {
+        while (id_ < new_id) next();
+      } else {
+        SeekIterator it = SeekIterator(block_);
+        id_ = new_id;
+        offset_ = it.seek_offset(id_);
+        auto [chunk_id, chunk_offset] = block_._kv_offset(offset_);
+        current_key_id_ = chunk_id;
+        offset_ = chunk_offset;
+        current_key_chunk_ = block_.acquire(current_key_id_);
+      }
+    }
+
    private:
     FileBlock<KV, KVComp> block_;
     Chunk current_key_chunk_;
@@ -830,38 +850,34 @@ class DeletedRange {
   };
 };*/
 
-template <typename Key, typename KVComp>
 class DeletedRange {
  public:
   struct Node {
-    std::pair<Key, Key> range;
     std::pair<int, int> ranks;
-    Node(std::pair<Key, Key> _range = std::pair<Key, Key>(), std::pair<int, int> _rank = std::pair<int, int>()) : range(_range), ranks(_rank) {}
+    Node(std::pair<int, int> _rank = std::pair<int, int>()) : ranks(_rank) {}
   };
 
-  DeletedRange(KVComp comp) : comp_(comp), nodes_(CompareNode(comp)) {}
+  DeletedRange() : nodes_(CompareNode()) {}
 
-  void insert(std::pair<Key, Key> range, std::pair<int, int> rank) {
+  void insert(std::pair<int, int> rank) {
     if (nodes_.empty()) {
-      nodes_.insert(Node(range, rank));
+      nodes_.insert(Node(rank));
       return;
     }
-    auto L = nodes_.lower_bound(Node(std::make_pair(Key(), range.first), std::make_pair(0, rank.first)));
-    auto R = nodes_.lower_bound(Node(std::make_pair(Key(), range.second), std::make_pair(0, rank.second)));
+    auto L = nodes_.lower_bound(std::make_pair(0, rank.first));
+    auto R = nodes_.lower_bound(std::make_pair(0, rank.second));
     if (L == nodes_.end() || (rank.second < L->ranks.first)) {
-      nodes_.insert(Node(range, rank));
+      nodes_.insert(Node(rank));
     } else {
       if (L->ranks.first <= rank.first) {
-        range.first = L->range.first;
         rank.first = L->ranks.first;
       }
       if (R != nodes_.end() && R->ranks.first <= rank.second) {
-        range.second = R->range.second;
         rank.second = R->ranks.second;
         R = std::next(R);
       }
       nodes_.erase(L, R);
-      nodes_.insert(Node(range, rank));
+      nodes_.insert(Node(rank));
     }
     // for (auto& n : nodes_) {
     //   logger_printf("[%d,%d]", n.ranks.first, n.ranks.second);
@@ -869,12 +885,12 @@ class DeletedRange {
     // logger("<<<");
   }
 
-  int deleted_counts(const std::pair<Key, Key>& range, std::pair<int, int> rank) {
+  int deleted_counts(std::pair<int, int> rank) {
     if (nodes_.empty()) {
       return rank.second - rank.first;
     }
-    auto L = nodes_.lower_bound(Node(std::make_pair(Key(), range.first), std::make_pair(0, rank.first)));
-    auto R = nodes_.lower_bound(Node(std::make_pair(Key(), range.second), std::make_pair(0, rank.second)));
+    auto L = nodes_.lower_bound(std::make_pair(0, rank.first));
+    auto R = nodes_.lower_bound(std::make_pair(0, rank.second));
     if (L == nodes_.end()) {
       // logger_printf("{fuck}\n");
       return rank.second - rank.first;
@@ -907,52 +923,29 @@ class DeletedRange {
 
  private:
   class CompareNode {
-    KVComp* comp_;
-
    public:
-    CompareNode(KVComp* comp) : comp_(comp) {}
     int operator()(const Node& x, const Node& y) const { return x.ranks.second < y.ranks.second; }
   };
 
   std::set<Node, CompareNode> nodes_;
-  KVComp* comp_;
 
  public:
   class Iterator {
     typename std::set<Node, CompareNode>::iterator iter_;
     typename std::set<Node, CompareNode>::iterator iter_end_;
-    bool is_in_range_;
-    KVComp* comp_;
 
    public:
-    Iterator() : comp_(nullptr), is_in_range_(false) {}
-    Iterator(const Key& k, DeletedRange& range)
-        : iter_(range.nodes_.lower_bound(Node(std::make_pair(Key(), k)))), iter_end_(range.nodes_.end()), comp_(range.comp_) {
-      is_in_range_ = false;
-      if (iter_ != iter_end_) {
-        is_in_range_ = comp_(iter_->range.first.ref(), k.ref()) <= 0 && comp_(k.ref(), iter_->range.second.ref()) <= 0;
-      }
-    }
-    Iterator(DeletedRange& range) : iter_(range.nodes_.begin()), is_in_range_(false), comp_(range.comp_) {}
+    Iterator() {}
+    Iterator(int k, DeletedRange& range) : iter_(range.nodes_.lower_bound(Node(std::make_pair(0, k)))), iter_end_(range.nodes_.end()) {}
+    Iterator(DeletedRange& range) : iter_(range.nodes_.begin()), iter_end_(range.nodes_.end()) {}
     bool valid() { return iter_ != iter_end_; }
-    int read() { return is_in_range_; }
-    void next(const Key& k) {
-      while (iter_ != iter_end_) {
-        if (!is_in_range_) {
-          if (comp_(iter_->range.first.ref(), k.ref()) <= 0) {
-            is_in_range_ = true;
-            continue;
-          } else
-            break;
-        } else {
-          if (comp_(k.ref(), iter_->range.second.ref()) > 0) {
-            is_in_range_ = false;
-            iter_ = std::next(iter_);
-            continue;
-          } else
-            break;
-        }
+    int jump(int k) {
+      while (iter_->ranks.first <= k) {
+        k = iter_->ranks.second;
+        iter_ = std::next(iter_);
+        if (iter_ == iter_end_) return k;
       }
+      return k;
     }
   };
 };
@@ -1117,6 +1110,10 @@ class SSTIterator {
   void next() { file_block_iter_.next(); }
   // remember, SKey is a reference to file block
   void read(DataKey& kv) { file_block_iter_.read(kv); }
+
+  int rank() { return file_block_iter_.rank(); }
+
+  void jump(int new_id) { file_block_iter_.jump(new_id); }
 
  private:
   ImmutableFile* file_;
@@ -1402,11 +1399,11 @@ constexpr auto kUnsortedBufferMaxQueue = 4;
 class EstimateLSM {
   struct Partition {
     ImmutableFile file;
-    DeletedRange<IndSKey, KeyCompType> deleted_ranges;
+    DeletedRange deleted_ranges;
     int global_range_counts;
     Partition(Env* env, BaseAllocator* file_alloc, KeyCompType* comp, const Compaction::NewFileData& data)
         : file(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp),
-          deleted_ranges(comp) {
+          deleted_ranges() {
       global_range_counts = file.counts();
     }
     ~Partition() { file.remove(); }
@@ -1420,12 +1417,12 @@ class EstimateLSM {
     size_t range_count(const std::pair<SKey, SKey>& range) {
       auto rank_pair = file.rank_pair(range);
       logger("q[rank_pair]=", rank_pair.first, ",", rank_pair.second);
-      return deleted_ranges.deleted_counts(range, rank_pair);
+      return deleted_ranges.deleted_counts(rank_pair);
     }
     void delete_range(const std::pair<SKey, SKey>& range) {
       auto rank_pair = file.rank_pair(range);
       logger("[rank_pair]=", rank_pair.first, ",", rank_pair.second);
-      deleted_ranges.insert(range, {rank_pair.first, rank_pair.second});
+      deleted_ranges.insert({rank_pair.first, rank_pair.second});
       global_range_counts = file.counts() - deleted_ranges.sum();
     }
   };
@@ -1438,12 +1435,11 @@ class EstimateLSM {
       std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
       SSTIterator iter_;
       std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr_;
-      DeletedRange<IndSKey, KeyCompType>::Iterator del_ranges_iterator_;
+      DeletedRange::Iterator del_ranges_iterator_;
 
      public:
       LevelIterator() {}
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter,
-                    DeletedRange<IndSKey, KeyCompType>::Iterator&& del_iter)
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter, DeletedRange::Iterator&& del_iter)
           : vec_it_(vec.size() == 0 ? vec.end() : vec.begin() + id + 1),
             vec_it_end_(vec.end()),
             iter_(std::move(iter)),
@@ -1452,7 +1448,7 @@ class EstimateLSM {
       }
       LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id) {
         if (vec.size()) {
-          del_ranges_iterator_ = DeletedRange<IndSKey, KeyCompType>::Iterator(vec[id]->deleted_ranges);
+          del_ranges_iterator_ = DeletedRange::Iterator(vec[id]->deleted_ranges);
           vec_it_ = vec.begin() + id + 1;
           vec_it_end_ = vec.begin();
           iter_ = SSTIterator(vec[id]->begin());
@@ -1462,8 +1458,7 @@ class EstimateLSM {
         }
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator&& iter,
-                    DeletedRange<IndSKey, KeyCompType>::Iterator&& del_iter)
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator&& iter, DeletedRange::Iterator&& del_iter)
           : vec_it_(vec_ptr->size() == 0 ? vec_ptr->end() : vec_ptr->begin() + id + 1),
             vec_it_end_(vec_ptr->end()),
             iter_(std::move(iter)),
@@ -1473,7 +1468,7 @@ class EstimateLSM {
       }
       LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id) : vec_ptr_(std::move(vec_ptr)) {
         if (vec_ptr_->size()) {
-          del_ranges_iterator_ = DeletedRange<IndSKey, KeyCompType>::Iterator((*vec_ptr_)[id]->deleted_ranges);
+          del_ranges_iterator_ = DeletedRange::Iterator((*vec_ptr_)[id]->deleted_ranges);
           vec_it_ = vec_ptr_->begin() + id + 1;
           vec_it_end_ = vec_ptr_->end();
           iter_ = SSTIterator((*vec_ptr_)[id]->begin());
@@ -1497,21 +1492,19 @@ class EstimateLSM {
 
      private:
       void _del_next() {
-        if (del_ranges_iterator_.valid()) {
-          DataKey kv;
-          iter_.read(kv);
-          del_ranges_iterator_.next(kv.key());
-          while (del_ranges_iterator_.read()) {
-            assert(del_ranges_iterator_.valid());
-            iter_.next();
+        while (del_ranges_iterator_.valid()) {
+          auto id = iter_.rank();
+          auto new_id = del_ranges_iterator_.jump(id);
+          if (id != new_id) {
+            iter_.jump(new_id);
             if (!iter_.valid() && vec_it_ != vec_it_end_) {
               iter_ = SSTIterator(&(*vec_it_)->file);
+              del_ranges_iterator_ = DeletedRange::Iterator((*vec_it_)->deleted_ranges);
               vec_it_++;
+              continue;
             }
-            if (!iter_.valid()) return;
-            iter_.read(kv);
-            del_ranges_iterator_.next(kv.key());
           }
+          return;
         }
       }
     };
@@ -1528,9 +1521,9 @@ class EstimateLSM {
         else
           l = mid + 1;
       }
-      // logger("Level::seek(): ", where);
       if (where == -1) return LevelIterator();
-      return LevelIterator(head_, where, head_[where]->seek(key), DeletedRange<IndSKey, KeyCompType>::Iterator(key, head_[where]->deleted_ranges));
+      auto sst_iter = head_[where]->seek(key);
+      return LevelIterator(head_, where, std::move(sst_iter), DeletedRange::Iterator(sst_iter.rank(), head_[where]->deleted_ranges));
     }
     bool overlap(const SKey& lkey, const SKey& rkey, KeyCompType* comp) const {
       if (!head_.size()) return false;
@@ -1764,6 +1757,7 @@ class EstimateLSM {
           for (uint32_t i = where; i < tree_.size(); ++i) iters->push(Level::LevelIterator(add_level(*tree_[i]), 0));
           iters->build();
 
+          // logger("compact...");
           // compaction...
           Compaction worker(filename, env, comp);
           auto [files, decay_size] = worker.flush(*iters);
@@ -1774,6 +1768,8 @@ class EstimateLSM {
           ret->largest_ = largest_;
           ret->decay_size_overestimate_ = largest_->decay_size() + decay_size;
           for (int i = 0; i < where; i++) ret->decay_size_overestimate_ += tree_[i]->decay_size();
+          
+          // logger("compact owari");
 
           auto rest_iter = rest.begin();
           auto level = std::make_shared<Level>();
@@ -1895,6 +1891,7 @@ class EstimateLSM {
       auto buf_q_ = terminate_signal_ ? bufs_.get() : bufs_.wait_and_get();
       if (buf_q_.empty() && terminate_signal_) return;
       if (buf_q_.empty()) continue;
+      // logger("WAIT_DELETE");
       std::unique_lock del_range_lck(sv_modify_mutex_);
       // logger("FLUSH");
       auto old_sv = sv_;
@@ -2397,10 +2394,10 @@ void test_delete_range() {
       int Qs = 10;
       for (int i = 0; i < Qs; i++) {
         uint8_t a[12], b[12];
-        int id = abs(rand()) % (numbers2.size() - 1000);
+        int id = abs(rand()) % (numbers2.size() - std::min(1000, L / 4));
         int x = numbers2[id];
         for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
-        id += 1000;
+        id += std::min(1000, L / 4);
         int y = numbers[id];
         for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
         auto R = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2);
