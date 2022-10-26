@@ -20,6 +20,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE pthread)
 
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(/home/yfzcsc/hotrap/hotrap/include)
 
 target_compile_features(test PRIVATE cxx_std_17)
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
