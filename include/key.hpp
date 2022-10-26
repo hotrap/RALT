@@ -8,23 +8,23 @@ namespace viscnts_lsm {
 using SKey = Slice;
 using IndSKey = IndSlice;
 
-inline int operator<=(const SKey& A, const SKey& B) {
-  if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
-  return memcmp(A.data(), B.data(), A.len()) <= 0;
-}
+// inline int operator<=(const SKey& A, const SKey& B) {
+//   if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
+//   return memcmp(A.data(), B.data(), A.len()) <= 0;
+// }
 
-inline int operator<=(const IndSKey& A, const SKey& B) { return A.ref() <= B; }
-inline int operator<=(const SKey& A, const IndSKey& B) { return A <= B.ref(); }
-inline int operator<=(const IndSKey& A, const IndSKey& B) { return A.ref() <= B.ref(); }
+// inline int operator<=(const IndSKey& A, const SKey& B) { return A.ref() <= B; }
+// inline int operator<=(const SKey& A, const IndSKey& B) { return A <= B.ref(); }
+// inline int operator<=(const IndSKey& A, const IndSKey& B) { return A.ref() <= B.ref(); }
 
-inline int operator==(const IndSKey& A, const SKey& B) { return A.ref() == B; }
-inline int operator==(const SKey& A, const IndSKey& B) { return A == B.ref(); }
-inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
+// inline int operator==(const IndSKey& A, const SKey& B) { return A.ref() == B; }
+// inline int operator==(const SKey& A, const IndSKey& B) { return A == B.ref(); }
+// inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
 struct SValue {
   double counts;
   size_t vlen;
-  SValue() = default;
+  SValue() : counts(0), vlen(0) {}
   SValue(double _counts, size_t _vlen) : counts(_counts), vlen(_vlen) {}
 };
 
