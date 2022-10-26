@@ -22,16 +22,12 @@ extern void test_splay();
 extern void test_delete_range();
 
 int main() {
-  // test_basic();
-  // test_memtable();
-  // test_decay();
-  // test_ops();
-  // test_files();
-  // test_unordered_buf();
-  // test_lsm_store();
-  // test_lsm_store_and_scan();
-  // test_random_scan_and_count();
-  // test_lsm_decay();
-  // test_splay();
+  test_files();
+  test_unordered_buf();
+  test_lsm_store();
+  test_lsm_store_and_scan();
+  test_random_scan_and_count();
+  test_lsm_decay();
+  test_splay();
   test_delete_range();
 }

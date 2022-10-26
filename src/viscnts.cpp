@@ -62,6 +62,7 @@
  *  We must consider the deleted range when scanning and range counting.
  *  While scanning, if it has a deleted range, then we must compare the next key to the deleted range.
  *  While range counting, we must count the number of kvpairs that is deleted in [L, R]. Because we don't change the file itself.
+ *  Since the file is immutable, so we don't actually store and compare Slices, instead, we store and compare their ranks in the file.
  *
  *  It requires that there is no Delete Range operations during Scans.
  *
@@ -222,7 +223,7 @@ class FileBlock {     // process blocks in a file
   // attention: the size of value is fixed.
 
   uint32_t offset_index_;
-  KVComp* comp_;
+  KVComp comp_;
 
   constexpr static auto kValuePerChunk = kChunkSize / sizeof(uint32_t);
 
@@ -361,13 +362,13 @@ class FileBlock {     // process blocks in a file
     file_ptr_ = nullptr;
     offset_index_ = 0;
   }
-  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, KVComp* comp)
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, const KVComp& comp)
       : file_id_(file_id), handle_(handle), alloc_(alloc), file_ptr_(file_ptr), comp_(comp) {
     offset_index_ = handle_.offset + handle_.size - handle_.counts * sizeof(uint32_t);
     assert(offset_index_ % kChunkSize == 0);
   }
 
-  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, uint32_t offset_index, KVComp* comp)
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, uint32_t offset_index, const KVComp& comp)
       : file_id_(file_id), handle_(handle), alloc_(alloc), file_ptr_(file_ptr), comp_(comp) {
     offset_index_ = offset_index;
   }
@@ -399,26 +400,8 @@ class FileBlock {     // process blocks in a file
 
   bool is_empty_key(uint32_t offset, const Chunk& c) const { return *reinterpret_cast<uint32_t*>(c.data(offset)) == 0; }
 
-  ssize_t exists(const SKey& key) {
-    int l = 0, r = handle_.counts - 1;
-    SeekIterator it = SeekIterator(*this);
-    KV _kv;
-    while (l <= r) {
-      auto mid = (l + r) >> 1;
-      // compare two keys
-      it.seek_and_read(mid, _kv);
-      auto cmp = comp_(_kv.key(), key);
-      if (!cmp) return 1;
-      if (cmp < 0)
-        l = mid + 1;
-      else
-        r = mid - 1;
-    }
-    return 0;
-  }
-
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
-  uint32_t upper_offset(const SKey& key) {
+  uint32_t upper_offset(const SKey& key) const {
     int l = 0, r = handle_.counts - 1;
     uint32_t ret = -1;
     SeekIterator it = SeekIterator(*this);
@@ -437,7 +420,7 @@ class FileBlock {     // process blocks in a file
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
   // Find the biggest _key that _key <= key.
-  uint32_t lower_offset(const SKey& key) {
+  uint32_t lower_offset(const SKey& key) const {
     int l = 0, r = handle_.counts - 1;
     uint32_t ret = -1;
     SeekIterator it = SeekIterator(*this);
@@ -455,7 +438,7 @@ class FileBlock {     // process blocks in a file
   }
 
   // it calculates the smallest No. of the key that >= input key.
-  uint32_t upper_key(const SKey& key, uint32_t L, uint32_t R) {
+  uint32_t upper_key(const SKey& key, uint32_t L, uint32_t R) const {
     int l = L, r = std::min(R, handle_.counts - 1);
     uint32_t ret = r + 1;
     SeekIterator it = SeekIterator(*this);
@@ -473,7 +456,7 @@ class FileBlock {     // process blocks in a file
   }
 
   // it calculates the smallest No. of the key that > input key.
-  uint32_t upper_key_not_eq(const SKey& key, uint32_t L, uint32_t R) {
+  uint32_t upper_key_not_eq(const SKey& key, uint32_t L, uint32_t R) const {
     int l = L, r = std::min(R, handle_.counts - 1);
     uint32_t ret = r + 1;
     SeekIterator it = SeekIterator(*this);
@@ -494,14 +477,6 @@ class FileBlock {     // process blocks in a file
   EnumIterator seek_with_id(uint32_t id) const {
     SeekIterator it = SeekIterator(*this);
     return EnumIterator(*this, it.seek_offset(id), id);
-  }
-
-  auto sub_fileblock(uint32_t offset_l, uint32_t offset_r) const {
-    assert(offset_l >= offset_index_ && offset_r >= offset_index_);
-    auto counts_l = (offset_l - offset_index_) / sizeof(uint32_t);
-    auto counts_r = (offset_r - offset_index_) / sizeof(uint32_t);
-    return FileBlock<KV, KVComp>(file_id_, FileBlockHandle(handle_.offset, offset_r - handle_.offset, counts_r - counts_l), alloc_, file_ptr_,
-                                 offset_l, comp_);
   }
 
   size_t counts() const { return handle_.counts; }
@@ -548,6 +523,7 @@ int SKeyCompFunc(const SKey& A, const SKey& B) {
 using KeyCompType = int(const SKey&, const SKey&);
 
 // one SST
+template<typename KeyCompT>
 class ImmutableFile {
   // The structure of the file:
   // [A data block]
@@ -570,15 +546,15 @@ class ImmutableFile {
   // I don't consider the deletion of this pointer now
   // 1000 (limitation of file handles) files of 64MB, then 64GB of data, it may be enough?
   std::unique_ptr<RandomAccessFile> file_ptr_;
-  FileBlock<IndexKey, KeyCompType> index_block_;
-  FileBlock<DataKey, KeyCompType> data_block_;
+  FileBlock<IndexKey, KeyCompT> index_block_;
+  FileBlock<DataKey, KeyCompT> data_block_;
   // LRUCache pointer reference to the one in VisCnts (is deleted)
   BaseAllocator* alloc_;
-  KeyCompType* comp_;
+  KeyCompT comp_;
 
  public:
   ImmutableFile(uint32_t file_id, uint32_t size, std::unique_ptr<RandomAccessFile>&& file_ptr, BaseAllocator* alloc,
-                const std::pair<IndSKey, IndSKey>& range, KeyCompType* comp)
+                const std::pair<IndSKey, IndSKey>& range, const KeyCompT& comp)
       : file_id_(file_id), size_(size), range_(range), file_ptr_(std::move(file_ptr)), alloc_(alloc), comp_(comp) {
     // read index block
     Slice result(nullptr, 0);
@@ -591,21 +567,12 @@ class ImmutableFile {
     assert(ret >= 0);
     ret = file_ptr_->read(size_ - sizeof(size_t) - sizeof(FileBlockHandle), sizeof(FileBlockHandle), (uint8_t*)(&data_bh), result);
     assert(ret >= 0);
-    index_block_ = FileBlock<IndexKey, KeyCompType>(file_id, index_bh, alloc, file_ptr_.get(), comp_);
-    data_block_ = FileBlock<DataKey, KeyCompType>(file_id, data_bh, alloc, file_ptr_.get(), comp_);
-  }
-
-  // ensure key is in range!!
-  // I don't want to check range here...
-  ssize_t exists(const SKey& key) {
-    if (!in_range(key)) return 0;
-    auto offset = index_block_.upper_offset(key);
-    auto ret = data_block_.sub_fileblock(offset / kChunkSize * kChunkSize, offset + sizeof(uint32_t)).exists(key);
-    return ret;
+    index_block_ = FileBlock<IndexKey, KeyCompT>(file_id, index_bh, alloc, file_ptr_.get(), comp_);
+    data_block_ = FileBlock<DataKey, KeyCompT>(file_id, data_bh, alloc, file_ptr_.get(), comp_);
   }
 
   // seek the first key that >= key, but only seek index block.
-  FileBlock<DataKey, KeyCompType>::EnumIterator estimate_seek(const SKey& key) {
+  typename FileBlock<DataKey, KeyCompT>::EnumIterator estimate_seek(const SKey& key) {
     if (comp_(range_.second.ref(), key) < 0) return {};
     auto id = index_block_.upper_offset(key);
     if (id == -1) return {};
@@ -613,7 +580,7 @@ class ImmutableFile {
   }
 
   // seek the first key that >= key
-  FileBlock<DataKey, KeyCompType>::EnumIterator seek(const SKey& key) {
+  typename FileBlock<DataKey, KeyCompT>::EnumIterator seek(const SKey& key) const {
     if (comp_(range_.second.ref(), key) < 0) return {};
     auto id = index_block_.lower_offset(key);
     if (id == -1) return data_block_.seek_with_id(0);
@@ -621,7 +588,7 @@ class ImmutableFile {
     return data_block_.seek_with_id(id);
   }
 
-  std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range) {
+  std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range) const {
     int retl = 0, retr = 0;
     auto& [L, R] = range;
     if (comp_(range_.second.ref(), L) < 0)
@@ -671,7 +638,7 @@ class ImmutableFile {
     return comp_(l.ref(), range.second) <= 0 && comp_(range.first, r.ref()) <= 0;
   }
 
-  FileBlock<DataKey, KeyCompType> data_block() const { return data_block_; }
+  FileBlock<DataKey, KeyCompT> data_block() const { return data_block_; }
 
   void remove() {
     auto ret = file_ptr_->remove();
@@ -931,13 +898,13 @@ class DeletedRange {
 
  public:
   class Iterator {
-    typename std::set<Node, CompareNode>::iterator iter_;
-    typename std::set<Node, CompareNode>::iterator iter_end_;
+    typename std::set<Node, CompareNode>::const_iterator iter_;
+    typename std::set<Node, CompareNode>::const_iterator iter_end_;
 
    public:
     Iterator() {}
-    Iterator(int k, DeletedRange& range) : iter_(range.nodes_.lower_bound(Node(std::make_pair(0, k)))), iter_end_(range.nodes_.end()) {}
-    Iterator(DeletedRange& range) : iter_(range.nodes_.begin()), iter_end_(range.nodes_.end()) {}
+    Iterator(int k, const DeletedRange& range) : iter_(range.nodes_.lower_bound(Node(std::make_pair(0, k)))), iter_end_(range.nodes_.end()) {}
+    Iterator(const DeletedRange& range) : iter_(range.nodes_.begin()), iter_end_(range.nodes_.end()) {}
     bool valid() { return iter_ != iter_end_; }
     int jump(int k) {
       while (iter_->ranks.first <= k) {
@@ -958,10 +925,10 @@ class SeqIteratorSet {
   std::vector<SKey> keys_;
   std::vector<SValue> values_;
   uint32_t size_;
-  KVComp* comp_;
+  KVComp comp_;
 
  public:
-  SeqIteratorSet(KVComp* comp) : size_(0), comp_(comp) {}
+  SeqIteratorSet(const KVComp& comp) : size_(0), comp_(comp) {}
   SeqIteratorSet(const SeqIteratorSet& ss) { (*this) = ss; }
   SeqIteratorSet(SeqIteratorSet&& ss) { (*this) = std::move(ss); }
   SeqIteratorSet& operator=(const SeqIteratorSet& ss) {
@@ -1031,7 +998,7 @@ class SeqIteratorSet {
     iters_.push_back(std::move(new_iter));
   }
 
-  KVComp* comp_func() { return comp_; }
+  KVComp comp_func() { return comp_; }
 
  private:
   uint32_t _min(uint32_t x, uint32_t y) {
@@ -1083,11 +1050,12 @@ class SeqIteratorSetForScan {
   bool valid() { return valid_; }
 };
 
+template<typename KeyCompT>
 class SSTIterator {
  public:
   SSTIterator() : file_(nullptr) {}
-  SSTIterator(ImmutableFile* file) : file_(file), file_block_iter_(file->data_block(), 0, 0) {}
-  SSTIterator(ImmutableFile* file, const SKey& key) : file_(file), file_block_iter_(file->seek(key)) {}
+  SSTIterator(const ImmutableFile<KeyCompT>* file) : file_(file), file_block_iter_(file->data_block(), 0, 0) {}
+  SSTIterator(const ImmutableFile<KeyCompT>* file, const SKey& key) : file_(file), file_block_iter_(file->seek(key)) {}
   SSTIterator(SSTIterator&& it) noexcept {
     file_ = it.file_;
     file_block_iter_ = std::move(it.file_block_iter_);
@@ -1116,8 +1084,8 @@ class SSTIterator {
   void jump(int new_id) { file_block_iter_.jump(new_id); }
 
  private:
-  ImmutableFile* file_;
-  FileBlock<DataKey, KeyCompType>::EnumIterator file_block_iter_;
+  const ImmutableFile<KeyCompT>* file_;
+  typename FileBlock<DataKey, KeyCompT>::EnumIterator file_block_iter_;
 };
 
 class SSTBuilder {
@@ -1248,6 +1216,7 @@ class SSTBuilder {
   IndSKey lst_key, first_key;
 };
 
+template<typename KeyCompT>
 class Compaction {
   // builder_ is used to build one file
   // files_ is used to get global file name
@@ -1266,7 +1235,10 @@ class Compaction {
   bool flag_;
   std::pair<IndSKey, SValue> lst_value_;
   std::mt19937 rndgen_;
-  KeyCompType* comp_;
+  KeyCompT comp_;
+  double real_size_;
+  double lst_real_size_;
+  double decay_prob_;  // = 0.5 on default
 
   void _begin_new_file() {
     builder_.reset();
@@ -1282,6 +1254,8 @@ class Compaction {
     builder_.finish();
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = std::move(builder_.range());
+    vec_newfiles_.back().decay_size = real_size_ - lst_real_size_;
+    lst_real_size_ = real_size_;
   }
 
  public:
@@ -1290,8 +1264,9 @@ class Compaction {
     size_t file_id;
     size_t size;
     std::pair<IndSKey, IndSKey> range;
+    double decay_size;
   };
-  Compaction(FileName* files, Env* env, KeyCompType* comp) : files_(files), env_(env), flag_(false), rndgen_(std::random_device()()), comp_(comp) {
+  Compaction(FileName* files, Env* env, const KeyCompT& comp) : files_(files), env_(env), flag_(false), rndgen_(std::random_device()()), comp_(comp) {
     decay_prob_ = 0.5;
   }
 
@@ -1300,7 +1275,8 @@ class Compaction {
     vec_newfiles_.clear();
     _begin_new_file();
     flag_ = false;
-    double real_size = 0;
+    real_size_ = 0;
+    lst_real_size_ = 0;
     int CNT = 0;
     RefDataKey lst_kv;
     while (left.valid()) {
@@ -1312,7 +1288,7 @@ class Compaction {
         *lst_kv.value() += L.second;
       } else {
         if (flag_) {
-          real_size += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value()));
+          real_size_ += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value()));
           _divide_file();
         }
         // logger("flush key: ", L.first.len(), ", ", (int)L.first.data()[0], " ", (int)L.first.data()[1], " ", (int)L.first.data()[2], " ",
@@ -1323,14 +1299,15 @@ class Compaction {
       left.next();
     }
     // logger("flush(): ", CNT);
-    if (flag_) real_size += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value()));
+    if (flag_) real_size_ += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value()));
     _end_new_file();
-    return std::make_pair(vec_newfiles_, real_size);
+    return std::make_pair(vec_newfiles_, real_size_);
   }
 
   template <typename TIter>
   std::pair<std::vector<NewFileData>, double> decay_first(TIter&& iters) {
-    double real_size_ = 0;  // re-calculate size
+    real_size_ = 0;  // re-calculate size
+    lst_real_size_ = 0;
     vec_newfiles_.clear();
     _begin_new_file();
     flag_ = false;
@@ -1363,7 +1340,6 @@ class Compaction {
   }
 
  private:
-  double decay_prob_;  // = 0.5 on default
   template <typename T>
   double _calc_decay_value(const std::pair<T, SValue>& kv) {
     return (kv.first.len() + kv.second.vlen) * std::min(kv.second.counts * .5, 1.);
@@ -1396,70 +1372,78 @@ constexpr auto kUnmergedRatio = 0.1;
 constexpr auto kUnsortedBufferSize = kSSTable;
 constexpr auto kUnsortedBufferMaxQueue = 4;
 
+template<typename KeyCompT>
 class EstimateLSM {
   struct Partition {
-    ImmutableFile file;
-    DeletedRange deleted_ranges;
-    int global_range_counts;
-    Partition(Env* env, BaseAllocator* file_alloc, KeyCompType* comp, const Compaction::NewFileData& data)
-        : file(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp),
-          deleted_ranges() {
-      global_range_counts = file.counts();
-    }
-    ~Partition() { file.remove(); }
+    ImmutableFile<KeyCompT> file_;
+    DeletedRange deleted_ranges_;
+    int global_range_counts_;
+    double decay_size_;
 
-    SSTIterator seek(const SKey& key) { return SSTIterator(&file, key); }
-    SSTIterator begin() { return SSTIterator(&file); }
-    bool overlap(const SKey& lkey, const SKey& rkey) const { return file.range_overlap({lkey, rkey}); }
-    auto range() const { return file.range(); }
-    size_t size() const { return file.size(); }
-    size_t counts() const { return global_range_counts; }
+   public:
+    Partition(Env* env, BaseAllocator* file_alloc, KeyCompT comp, const typename Compaction<KeyCompT>::NewFileData& data)
+        : file_(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp),
+          deleted_ranges_(),
+          decay_size_(data.decay_size) {
+      global_range_counts_ = file_.counts();
+    }
+    ~Partition() { file_.remove(); }
+
+    SSTIterator<KeyCompT> seek(const SKey& key) { return SSTIterator(&file_, key); }
+    SSTIterator<KeyCompT> begin() { return SSTIterator(&file_); }
+    bool overlap(const SKey& lkey, const SKey& rkey) const { return file_.range_overlap({lkey, rkey}); }
+    auto range() const { return file_.range(); }
+    size_t size() const { return file_.size(); }
+    size_t counts() const { return global_range_counts_; }
     size_t range_count(const std::pair<SKey, SKey>& range) {
-      auto rank_pair = file.rank_pair(range);
-      logger("q[rank_pair]=", rank_pair.first, ",", rank_pair.second);
-      return deleted_ranges.deleted_counts(rank_pair);
+      auto rank_pair = file_.rank_pair(range);
+      // logger("q[rank_pair]=", rank_pair.first, ",", rank_pair.second);
+      return deleted_ranges_.deleted_counts(rank_pair);
     }
     void delete_range(const std::pair<SKey, SKey>& range) {
-      auto rank_pair = file.rank_pair(range);
-      logger("[rank_pair]=", rank_pair.first, ",", rank_pair.second);
-      deleted_ranges.insert({rank_pair.first, rank_pair.second});
-      global_range_counts = file.counts() - deleted_ranges.sum();
+      auto rank_pair = file_.rank_pair(range);
+      // logger("[rank_pair]=", rank_pair.first, ",", rank_pair.second);
+      deleted_ranges_.insert({rank_pair.first, rank_pair.second});
+      global_range_counts_ = file_.counts() - deleted_ranges_.sum();
     }
+    double decay_size() { return decay_size_; }
+    const DeletedRange& deleted_ranges() { return deleted_ranges_; }
+    const ImmutableFile<KeyCompT>& file() { return file_; }
   };
   struct Level {
     std::vector<std::shared_ptr<Partition>> head_;
     size_t size_;
     double decay_size_;
     class LevelIterator {
-      std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_;
-      std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
-      SSTIterator iter_;
+      typename std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_;
+      typename std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
+      SSTIterator<KeyCompT> iter_;
       std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr_;
       DeletedRange::Iterator del_ranges_iterator_;
 
      public:
       LevelIterator() {}
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator&& iter, DeletedRange::Iterator&& del_iter)
-          : vec_it_(vec.size() == 0 ? vec.end() : vec.begin() + id + 1),
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator<KeyCompT>&& iter, DeletedRange::Iterator&& del_iter)
+          : vec_it_(id >= vec.size() ? vec.end() : vec.begin() + id + 1),
             vec_it_end_(vec.end()),
             iter_(std::move(iter)),
             del_ranges_iterator_(std::move(del_iter)) {
         if (iter_.valid()) _del_next();
       }
       LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id) {
-        if (vec.size()) {
-          del_ranges_iterator_ = DeletedRange::Iterator(vec[id]->deleted_ranges);
+        if (id < vec.size()) {
+          del_ranges_iterator_ = DeletedRange::Iterator(vec[id]->deleted_ranges());
           vec_it_ = vec.begin() + id + 1;
-          vec_it_end_ = vec.begin();
+          vec_it_end_ = vec.end();
           iter_ = SSTIterator(vec[id]->begin());
         } else {
-          vec_it_ = vec_ptr_->begin();
-          vec_it_end_ = vec_ptr_->end();
+          vec_it_ = vec.end();
+          vec_it_end_ = vec.end();
         }
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator&& iter, DeletedRange::Iterator&& del_iter)
-          : vec_it_(vec_ptr->size() == 0 ? vec_ptr->end() : vec_ptr->begin() + id + 1),
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator<KeyCompT>&& iter, DeletedRange::Iterator&& del_iter)
+          : vec_it_(id >= vec_ptr->size() ? vec_ptr->end() : vec_ptr->begin() + id + 1),
             vec_it_end_(vec_ptr->end()),
             iter_(std::move(iter)),
             vec_ptr_(std::move(vec_ptr)),
@@ -1467,13 +1451,13 @@ class EstimateLSM {
         if (iter_.valid()) _del_next();
       }
       LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id) : vec_ptr_(std::move(vec_ptr)) {
-        if (vec_ptr_->size()) {
-          del_ranges_iterator_ = DeletedRange::Iterator((*vec_ptr_)[id]->deleted_ranges);
+        if (id < vec_ptr_->size()) {
+          del_ranges_iterator_ = DeletedRange::Iterator((*vec_ptr_)[id]->deleted_ranges());
           vec_it_ = vec_ptr_->begin() + id + 1;
           vec_it_end_ = vec_ptr_->end();
           iter_ = SSTIterator((*vec_ptr_)[id]->begin());
         } else {
-          vec_it_ = vec_ptr_->begin();
+          vec_it_ = vec_ptr_->end();
           vec_it_end_ = vec_ptr_->end();
         }
 
@@ -1483,7 +1467,7 @@ class EstimateLSM {
       void next() {
         iter_.next();
         if (!iter_.valid() && vec_it_ != vec_it_end_) {
-          iter_ = SSTIterator(&(*vec_it_)->file);
+          iter_ = SSTIterator(&(*vec_it_)->file());
           vec_it_++;
         }
         if (iter_.valid()) _del_next();
@@ -1498,8 +1482,8 @@ class EstimateLSM {
           if (id != new_id) {
             iter_.jump(new_id);
             if (!iter_.valid() && vec_it_ != vec_it_end_) {
-              iter_ = SSTIterator(&(*vec_it_)->file);
-              del_ranges_iterator_ = DeletedRange::Iterator((*vec_it_)->deleted_ranges);
+              iter_ = SSTIterator(&(*vec_it_)->file());
+              del_ranges_iterator_ = DeletedRange::Iterator((*vec_it_)->deleted_ranges());
               vec_it_++;
               continue;
             }
@@ -1512,7 +1496,7 @@ class EstimateLSM {
     Level(size_t size, double decay_size) : size_(size), decay_size_(decay_size) {}
     size_t size() const { return size_; }
     double decay_size() const { return decay_size_; }
-    LevelIterator seek(const SKey& key, KeyCompType* comp) const {
+    LevelIterator seek(const SKey& key, const KeyCompT& comp) const {
       int l = 0, r = head_.size() - 1, where = -1;
       while (l <= r) {
         int mid = (l + r) >> 1;
@@ -1523,9 +1507,12 @@ class EstimateLSM {
       }
       if (where == -1) return LevelIterator();
       auto sst_iter = head_[where]->seek(key);
-      return LevelIterator(head_, where, std::move(sst_iter), DeletedRange::Iterator(sst_iter.rank(), head_[where]->deleted_ranges));
+      return LevelIterator(head_, where, std::move(sst_iter), DeletedRange::Iterator(sst_iter.rank(), head_[where]->deleted_ranges()));
     }
-    bool overlap(const SKey& lkey, const SKey& rkey, KeyCompType* comp) const {
+    LevelIterator seek_to_first() const {
+      return LevelIterator(head_, 0);
+    }
+    bool overlap(const SKey& lkey, const SKey& rkey, const KeyCompT& comp) const {
       if (!head_.size()) return false;
       int l = 0, r = head_.size() - 1, where = -1;
       while (l <= r) {
@@ -1544,9 +1531,9 @@ class EstimateLSM {
     }
     void add_decay_size(double add) { decay_size_ += add; }
 
-    size_t range_count(const std::pair<SKey, SKey>& range, KeyCompType* comp) {
+    size_t range_count(const std::pair<SKey, SKey>& range, const KeyCompT& comp) {
       auto [where_l, where_r] = _get_range_in_head(range, comp);
-      logger_printf("where[%d, %d]", where_l, where_r);
+      // logger_printf("where[%d, %d]", where_l, where_r);
       if (where_l == -1 || where_r == -1 || where_l > where_r) return 0;
 
       if (where_l == where_r) {
@@ -1560,7 +1547,7 @@ class EstimateLSM {
       }
     }
 
-    void delete_range(const std::pair<SKey, SKey>& range, KeyCompType* comp) {
+    void delete_range(const std::pair<SKey, SKey>& range, const KeyCompT& comp) {
       auto [where_l, where_r] = _get_range_in_head(range, comp);
       if (where_l == -1 || where_r == -1 || where_l > where_r) return;
       if (where_l == where_r)
@@ -1570,10 +1557,12 @@ class EstimateLSM {
         head_[where_r]->delete_range(range);
         head_.erase(head_.begin() + where_l + 1, head_.begin() + where_r);
       }
+      decay_size_ = 0;
+      for (auto& a : head_) decay_size_ += a->decay_size();
     }
 
    private:
-    std::pair<int, int> _get_range_in_head(const std::pair<SKey, SKey>& range, KeyCompType* comp) {
+    std::pair<int, int> _get_range_in_head(const std::pair<SKey, SKey>& range, const KeyCompT& comp) {
       int l = 0, r = head_.size() - 1, where_l = -1, where_r = -1;
       while (l <= r) {
         int mid = (l + r) >> 1;
@@ -1605,6 +1594,8 @@ class EstimateLSM {
 
     bool _decay_possible() const { return decay_size_overestimate_ >= decay_limit_; }
 
+    using LevelIteratorSetT = SeqIteratorSet<typename Level::LevelIterator, KeyCompT>;
+
    public:
     SuperVersion(double decay_limit, std::mutex* mutex)
         : largest_(std::make_shared<Level>()), ref_(1), decay_size_overestimate_(0), decay_limit_(decay_limit), del_mutex_(mutex) {}
@@ -1616,22 +1607,29 @@ class EstimateLSM {
       }
     }
 
-    SeqIteratorSet<Level::LevelIterator, KeyCompType> seek(const SKey& key, KeyCompType* comp) const {
-      SeqIteratorSet<Level::LevelIterator, KeyCompType> ret(comp);
+    LevelIteratorSetT seek(const SKey& key, const KeyCompT& comp) const {
+      LevelIteratorSetT ret(comp);
       if (largest_.get() != nullptr) ret.push(largest_->seek(key, comp));
       for (auto& a : tree_) ret.push(a->seek(key, comp));
       return ret;
     }
 
+    LevelIteratorSetT seek_to_first(const KeyCompT& comp) const {
+      LevelIteratorSetT ret(comp);
+      if (largest_.get() != nullptr) ret.push(largest_->seek_to_first());
+      for (auto& a : tree_) ret.push(a->seek_to_first());
+      return ret;
+    }
+
     // in critical section
-    SuperVersion* flush_bufs(const std::vector<UnsortedBuffer*>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc, KeyCompType* comp) {
+    SuperVersion* flush_bufs(const std::vector<UnsortedBuffer*>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc, const KeyCompT& comp) {
       if (bufs.size() == 0) return nullptr;
       // for (auto& a : bufs) logger_printf("[%llu]", a); logger_printf("\n");
       auto ret = new SuperVersion(decay_limit_, del_mutex_);
       ret->tree_ = tree_;
       ret->largest_ = largest_;
       ret->decay_size_overestimate_ = decay_size_overestimate_;
-      auto flush_func = [](FileName* filename, Env* env, KeyCompType* comp, UnsortedBuffer* buf, std::mutex& mu, BaseAllocator* file_alloc,
+      auto flush_func = [](FileName* filename, Env* env, const KeyCompT& comp, UnsortedBuffer* buf, std::mutex& mu, BaseAllocator* file_alloc,
                            SuperVersion* ret) {
         Compaction worker(filename, env, comp);
         buf->sort(comp);
@@ -1658,7 +1656,7 @@ class EstimateLSM {
       for (auto& a : thread_pool) a.join();
       return ret;
     }
-    SuperVersion* compact(FileName* filename, Env* env, BaseAllocator* file_alloc, KeyCompType* comp) const {
+    SuperVersion* compact(FileName* filename, Env* env, BaseAllocator* file_alloc, const KeyCompT& comp, bool trigger_decay = false) const {
       auto Lsize = 0;
       for (auto& a : tree_) Lsize += a->size();
       // check if overlap with any partition
@@ -1683,14 +1681,14 @@ class EstimateLSM {
       };
       // If the unmerged data is too big, and estimated decay size is large enough.
       // all the partitions will be merged into the largest level.
-      if ((Lsize >= kUnmergedRatio * largest_->size() && _decay_possible())) {
+      if ((Lsize >= kUnmergedRatio * largest_->size() && _decay_possible()) || trigger_decay) {
         logger("[decay size, Lsize, largest_->size()]: ", decay_size_overestimate_, ", ", Lsize, ", ", largest_->size());
-        auto iters = std::make_unique<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(comp);
+        auto iters = std::make_unique<LevelIteratorSetT>(comp);
 
         // logger("Major Compaction tree_.size() = ", tree_.size());
         // push all iterators to necessary partitions to SeqIteratorSet.
-        for (auto& a : tree_) iters->push(Level::LevelIterator(add_level(*a), 0));
-        if (largest_ && largest_->size() != 0) iters->push(Level::LevelIterator(add_level(*largest_), 0));
+        for (auto& a : tree_) iters->push(typename Level::LevelIterator(add_level(*a), 0));
+        if (largest_ && largest_->size() != 0) iters->push(typename Level::LevelIterator(add_level(*largest_), 0));
         iters->build();
 
         // compaction...
@@ -1750,11 +1748,11 @@ class EstimateLSM {
           }
           if (where == -1) return nullptr;
 
-          auto iters = std::make_unique<SeqIteratorSet<Level::LevelIterator, KeyCompType>>(comp);
+          auto iters = std::make_unique<LevelIteratorSetT>(comp);
 
           // logger("compact(): where = ", where);
           // push all iterators to necessary partitions to SeqIteratorSet.
-          for (uint32_t i = where; i < tree_.size(); ++i) iters->push(Level::LevelIterator(add_level(*tree_[i]), 0));
+          for (uint32_t i = where; i < tree_.size(); ++i) iters->push(typename Level::LevelIterator(add_level(*tree_[i]), 0));
           iters->build();
 
           // logger("compact...");
@@ -1768,7 +1766,7 @@ class EstimateLSM {
           ret->largest_ = largest_;
           ret->decay_size_overestimate_ = largest_->decay_size() + decay_size;
           for (int i = 0; i < where; i++) ret->decay_size_overestimate_ += tree_[i]->decay_size();
-          
+
           // logger("compact owari");
 
           auto rest_iter = rest.begin();
@@ -1792,14 +1790,14 @@ class EstimateLSM {
       }
     }
 
-    size_t range_count(const std::pair<SKey, SKey>& range, KeyCompType* comp) {
+    size_t range_count(const std::pair<SKey, SKey>& range, const KeyCompT& comp) {
       size_t ans = 0;
       if (largest_) ans += largest_->range_count(range, comp);
       for (auto& a : tree_) ans += a->range_count(range, comp);
       return ans;
     }
 
-    SuperVersion* delete_range(std::pair<SKey, SKey> range, KeyCompType* comp) {
+    SuperVersion* delete_range(std::pair<SKey, SKey> range, const KeyCompT& comp) {
       auto ret = new SuperVersion(decay_limit_, del_mutex_);
       ret->tree_ = tree_;
       ret->largest_ = largest_;
@@ -1808,12 +1806,14 @@ class EstimateLSM {
       for (auto& a : ret->tree_) a->delete_range(range, comp);
       return ret;
     }
+
+    double get_current_decay_size() { return decay_size_overestimate_; }
   };
   double delta_;
   std::unique_ptr<Env> env_;
   std::unique_ptr<FileName> filename_;
   std::unique_ptr<BaseAllocator> file_alloc_;
-  KeyCompType* comp_;
+  KeyCompT comp_;
   SuperVersion* sv_;
   std::thread compact_thread_;
   bool terminate_signal_;
@@ -1825,11 +1825,12 @@ class EstimateLSM {
 
  public:
   class SuperVersionIterator {
-    SeqIteratorSetForScan<Level::LevelIterator, KeyCompType> iter_;
+    using LevelIteratorSetTForScan = SeqIteratorSetForScan<typename Level::LevelIterator, KeyCompT>;
+    LevelIteratorSetTForScan iter_;
     SuperVersion* sv_;
 
    public:
-    SuperVersionIterator(SeqIteratorSet<Level::LevelIterator, KeyCompType>&& iter, SuperVersion* sv) : iter_(std::move(iter)), sv_(sv) {
+    SuperVersionIterator(LevelIteratorSetTForScan&& iter, SuperVersion* sv) : iter_(std::move(iter)), sv_(sv) {
       iter_.build();
     }
     ~SuperVersionIterator() { sv_->unref(); }
@@ -1838,7 +1839,7 @@ class EstimateLSM {
     auto next() { return iter_.next(); }
   };
   EstimateLSM(double delta, std::unique_ptr<Env>&& env, std::unique_ptr<FileName>&& filename, std::unique_ptr<BaseAllocator>&& file_alloc,
-              KeyCompType* comp)
+              const KeyCompT& comp)
       : delta_(delta),
         env_(std::move(env)),
         filename_(std::move(filename)),
@@ -1862,6 +1863,11 @@ class EstimateLSM {
     return new SuperVersionIterator(sv->seek(key, comp_), sv);
   }
 
+  auto seek_to_first() {
+    auto sv = get_current_sv();
+    return new SuperVersionIterator(sv->seek_to_first(comp_), sv);
+  }
+
   size_t range_count(const std::pair<SKey, SKey>& range) {
     if (comp_(range.first, range.second) > 0) return 0;
     auto sv = get_current_sv();
@@ -1874,16 +1880,32 @@ class EstimateLSM {
       ;
   }
 
-  void delete_range(std::pair<SKey, SKey> range) {
-    if (comp_(range.first, range.second) > 0) return;
+  double delete_range(std::pair<SKey, SKey> range) {
+    if (comp_(range.first, range.second) > 0) return get_current_decay_size();
     std::unique_lock del_range_lck(sv_modify_mutex_);
     auto old_sv = sv_;
     auto new_sv = old_sv->delete_range(range, comp_);
     sv_load_mutex_.lock();
     sv_ = new_sv;
+    auto ret = sv_->get_current_decay_size();
     sv_load_mutex_.unlock();
     old_sv->unref();
+    return ret;
   }
+
+  double trigger_decay() {
+    std::unique_lock del_range_lck(sv_modify_mutex_);
+    auto old_sv = sv_;
+    auto new_sv = old_sv->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_, true);
+    sv_load_mutex_.lock();
+    sv_ = new_sv;
+    auto ret = sv_->get_current_decay_size();
+    sv_load_mutex_.unlock();
+    old_sv->unref();
+    return ret;
+  }
+
+  double get_current_decay_size() { return get_current_sv()->get_current_decay_size(); }
 
  private:
   void compact_thread() {
@@ -1925,39 +1947,132 @@ class EstimateLSM {
 
 // Viscnts, implement lsm tree and other things.
 
+template<typename KeyCompT>
 class VisCnts {
-  EstimateLSM tree;
+  EstimateLSM<KeyCompT> tree;
 
  public:
-  VisCnts(const std::string& path, double delta, bool createIfMissing)
+  VisCnts(const KeyCompT& comp, const std::string& path, double delta, bool createIfMissing)
       : tree(delta, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path), std::make_unique<DefaultAllocator>(),
-             SKeyCompFunc) {}
+             comp) {}
   void access(const std::pair<SKey, SValue>& kv) { tree.append(kv.first, kv.second); }
-  bool is_hot(const SKey& key) { return true; }
+  double trigger_decay() { return tree.trigger_decay(); }
+  double delete_range(const std::pair<SKey, SKey>& range) {
+    return tree.delete_range(range);
+  }
+  auto seek_to_first() { return tree.seek_to_first(); }
+  auto seek(const SKey& key) { return tree.seek(key); }
+
 };
 
 }  // namespace viscnts_lsm
 
-void* VisCntsOpen(const char* path, double delta, bool createIfMissing) {
-  auto ret = new viscnts_lsm::VisCnts(path, delta, createIfMissing);
-  return ret;
+#include "rocksdb/compaction_router.h"
+#include "rocksdb/comparator.h"
+
+struct SKeyComparatorFromRocksDB {
+  const rocksdb::Comparator *ucmp;
+  SKeyComparatorFromRocksDB() : ucmp(nullptr) {}
+  SKeyComparatorFromRocksDB(const rocksdb::Comparator *_ucmp) : ucmp(_ucmp) {}
+  int operator()(const viscnts_lsm::SKey& x, const viscnts_lsm::SKey& y) const {
+    rocksdb::Slice rx(reinterpret_cast<const char*>(x.data(), x.len()));
+    rocksdb::Slice ry(reinterpret_cast<const char*>(y.data(), y.len()));
+    return ucmp->Compare(rx, ry); 
+  }
+};
+
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB>;
+
+struct HotRecInfoAndIter {
+  viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator *iter;
+  VisCntsType* vc;
+  rocksdb::HotRecInfo result;
+};
+
+
+void *VisCntsOpen(const rocksdb::Comparator *ucmp, const char *path,
+		bool createIfMissing) {
+	// return rust_viscnts_new(ucmp, path, createIfMissing);
+  auto vc = new VisCntsType(SKeyComparatorFromRocksDB(ucmp), path, 1e100, createIfMissing);
+  return vc;
 }
 
-int VisCntsAccess(void* ac, const char* key, size_t klen, size_t vlen) {
-  auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
-  vc->access({viscnts_lsm::SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen), viscnts_lsm::SValue(1, vlen)});
+int VisCntsAccess(void* ac, const rocksdb::Slice* key, size_t vlen, double weight) {
+  auto vc = reinterpret_cast<VisCntsType*>(ac);
+  vc->access({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key->data()), key->size()), viscnts_lsm::SValue(weight, vlen)});
   return 0;
 }
 
-bool VisCntsIsHot(void* ac, const char* key, size_t klen) {
-  auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
-  return vc->is_hot(viscnts_lsm::SKey(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(key)), klen)) == 1;
+double VisCntsDecay(void* ac) {
+  auto vc = reinterpret_cast<VisCntsType*>(ac);
+  return vc->trigger_decay();
+}
+
+double VisCntsRangeDel(void* ac, const rocksdb::Slice* L, const rocksdb::Slice* R) {
+  auto vc = reinterpret_cast<VisCntsType*>(ac);
+  return vc->delete_range({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(L->data()), L->size()),
+                           viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(R->data()), R->size())});
 }
 
 int VisCntsClose(void* ac) {
-  auto vc = reinterpret_cast<viscnts_lsm::VisCnts*>(ac);
+  auto vc = reinterpret_cast<VisCntsType*>(ac);
   delete vc;
   return 0;
+}
+
+void *VisCntsNewIter(void *ac) {
+  auto vc = reinterpret_cast<VisCntsType*>(ac);
+  auto ret = new HotRecInfoAndIter();
+  ret->vc = vc;
+  ret->iter = nullptr;
+  return ret;
+}
+
+const rocksdb::HotRecInfo *VisCntsSeekToFirst(void *iter) {
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+  if (!ac->iter) delete ac->iter;
+  ac->iter = ac->vc->seek_to_first();
+  if (!ac->iter->valid()) return nullptr;
+  auto [key, value] = ac->iter->read();
+  ac->result = rocksdb::HotRecInfo {
+    .slice = rocksdb::Slice(reinterpret_cast<const char*>(key.data()), key.len()),
+    .count = value.counts,
+    .vlen = value.vlen  
+  };
+  return &ac->result;
+}
+
+const rocksdb::HotRecInfo *VisCntsSeek(void *iter, const rocksdb::Slice *key) {
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+  if (!ac->iter) delete ac->iter;
+  ac->iter = ac->vc->seek(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key->data()), key->size()));
+  if (!ac->iter->valid()) return nullptr;
+  auto [rkey, rvalue] = ac->iter->read();
+  ac->result = rocksdb::HotRecInfo {
+    .slice = rocksdb::Slice(reinterpret_cast<const char*>(rkey.data()),rkey.len()),
+    .count = rvalue.counts,
+    .vlen = rvalue.vlen  
+  };
+  return &ac->result;
+}
+
+const rocksdb::HotRecInfo *VisCntsNext(void *iter) {
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+  ac->iter->next();
+  if (!ac->iter->valid()) return nullptr;
+  auto [rkey, rvalue] = ac->iter->read();
+  ac->result = rocksdb::HotRecInfo {
+    .slice = rocksdb::Slice(reinterpret_cast<const char*>(rkey.data()),rkey.len()),
+    .count = rvalue.counts,
+    .vlen = rvalue.vlen  
+  };
+  return &ac->result;
+}
+
+void VisCntsDelIter(void *iter) {
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+  if (ac->iter) delete ac->iter;
+  delete ac;
 }
 
 /// testing function.
@@ -1993,11 +2108,11 @@ void test_files() {
     return (int)x - (int)y;
   };
 
-  std::vector<ImmutableFile> files;
+  std::vector<ImmutableFile<KeyCompType*>> files;
   for (int i = 0; i < FS; ++i)
-    files.push_back(ImmutableFile(0, builders[i].size(), std::unique_ptr<RandomAccessFile>(env_->openRAFile("/tmp/viscnts/test" + std::to_string(i))),
+    files.push_back(ImmutableFile<KeyCompType*>(0, builders[i].size(), std::unique_ptr<RandomAccessFile>(env_->openRAFile("/tmp/viscnts/test" + std::to_string(i))),
                                   new DefaultAllocator(), {}, comp));
-  auto iters = std::make_unique<SeqIteratorSet<SSTIterator, KeyCompType>>(comp);
+  auto iters = std::make_unique<SeqIteratorSet<SSTIterator<KeyCompType*>, KeyCompType*>>(comp);
   for (int i = 0; i < FS; ++i) {
     SSTIterator iter(&files[i]);
     iters->push(std::move(iter));
@@ -2108,7 +2223,7 @@ void test_lsm_store() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                      std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 1e7;
     uint8_t a[12];
@@ -2138,9 +2253,7 @@ void test_lsm_store_and_scan() {
   {
     EstimateLSM tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                      std::make_unique<DefaultAllocator>(), comp);
-    int L = 2e8;
-    uint8_t a[16];
-    memset(a, 0, sizeof(a));
+    int L = 3e8;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
@@ -2149,7 +2262,7 @@ void test_lsm_store_and_scan() {
     int TH = 4;
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
-          [i, L, TH](std::vector<int>& numbers, EstimateLSM& tree) {
+          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*>& tree) {
             uint8_t a[16];
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
@@ -2163,9 +2276,12 @@ void test_lsm_store_and_scan() {
     // threads.clear();
     // std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
 
+    auto _numbers = numbers;
+    std::shuffle(_numbers.begin(), _numbers.end(), std::mt19937(std::random_device()()));
+
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
-          [i, L, TH](std::vector<int>& numbers, EstimateLSM& tree) {
+          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*>& tree) {
             uint8_t a[16];
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
@@ -2173,7 +2289,7 @@ void test_lsm_store_and_scan() {
               tree.append(SKey(a, 16), SValue(numbers[i], 1));
             }
           },
-          std::ref(numbers), std::ref(tree));
+          std::ref(_numbers), std::ref(tree));
     }
     for (auto& a : threads) a.join();
     tree.all_flush();
@@ -2182,8 +2298,7 @@ void test_lsm_store_and_scan() {
     std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(5000));
     start = std::chrono::system_clock::now();
-    memset(a, 0, sizeof(a));
-    auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 16)));
+    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*>::SuperVersionIterator>(tree.seek_to_first());
     for (int i = 0; i < L; i++) {
       assert(iter->valid());
       auto kv = iter->read();
@@ -2200,7 +2315,7 @@ void test_lsm_store_and_scan() {
           x = 0;
         }
       }
-      assert(kv.second.counts == 1 + i);
+      assert(kv.second.counts == i + 1);
       assert(kv.second.vlen == 1);
       iter->next();
     }
@@ -2217,9 +2332,9 @@ void test_random_scan_and_count() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                      std::make_unique<DefaultAllocator>(), SKeyCompFunc);
-    int L = 3e6, Q = 1e4;
+    int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
       uint8_t a[12], b[12];
@@ -2272,7 +2387,7 @@ void test_random_scan_and_count() {
       int id = abs(rand()) % numbers.size();
       for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
 
-      auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
       auto check_func = [](const uint8_t* a, int goal) {
         int x = 0, y = 0;
         for (int j = 0; j < 12; j++) {
@@ -2323,7 +2438,7 @@ void test_lsm_decay() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM tree(1e7, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(1e7, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                      std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 3e7, Q = 1e4;
     std::vector<int> numbers(L);
@@ -2343,7 +2458,7 @@ void test_lsm_decay() {
     }
     uint8_t a[12];
     memset(a, 0, sizeof(a));
-    auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
     double ans = 0;
     while (iter->valid()) {
       auto kv = iter->read();
@@ -2363,9 +2478,9 @@ void test_delete_range() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                      std::make_unique<DefaultAllocator>(), SKeyCompFunc);
-    int L = 3e7, Q = 1e4;
+    int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
       uint8_t a[12], b[12];
@@ -2391,14 +2506,14 @@ void test_delete_range() {
     auto numbers2 = std::vector<int>(numbers.begin(), numbers.begin() + L / 2);
     std::sort(numbers2.begin(), numbers2.end(), comp2);
     {
-      int Qs = 10;
+      int Qs = 1000;
       for (int i = 0; i < Qs; i++) {
         uint8_t a[12], b[12];
         int id = abs(rand()) % (numbers2.size() - std::min(1000, L / 4));
         int x = numbers2[id];
         for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
         id += std::min(1000, L / 4);
-        int y = numbers[id];
+        int y = numbers2[id];
         for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
         auto R = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2);
         auto L = std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
@@ -2424,7 +2539,7 @@ void test_delete_range() {
       int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
       ans = std::max(ans, 0);
       int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
-      logger("[ans,output]=", ans, ",", output);
+      // logger("[ans,output]=", ans, ",", output);
       assert(ans == output);
     }
 
@@ -2440,7 +2555,7 @@ void test_delete_range() {
       int id = abs(rand()) % numbers.size();
       for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
 
-      auto iter = std::unique_ptr<EstimateLSM::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
       auto check_func = [](const uint8_t* a, int goal) {
         int x = 0, y = 0;
         for (int j = 0; j < 12; j++) {
