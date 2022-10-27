@@ -79,6 +79,16 @@
  *   We support multithreading appending.
  *   We atomically append kv pairs to unsorted buffer, then we append the full buffer to the queue under a lock.
  *   We support scanning while compacting. This is done by refcounts in SuperVersion, and compact_thread() is copy-on-write.
+ *
+ * [Notes]
+ * - Compare with RocksDB, why we are slow? RocksDB "Bulk Load of keys in Random Order" 80MB/sec, "Bulk Load of keys in Sequential Order" 370MB/sec.
+ *   Our performance is ~93MB/sec when inserting 6e8 random keys of 3e8 different kinds. (write 4492*18777920B data)
+ *   ~218MB/sec when inserting 6e8 sequential keys. (write 5665*18777920B data)
+ *   Scan performance ~200MB/sec
+ * - First, RocksDB is multi-threaded. And the set-up is 12 cores, 24 vCPUs. However we use 4 cores, 8 vCPUs.
+ *   And we only use multithread in SuperVersion->flush_bufs() (This will be optimized in the future)
+ * - Second, the value size of RocksDB is 800B, which means it needs less comparision to flush a file block and to read a file block. Although
+ *    RA and WA are big, the bandwidth of SSD can be utilized better.
  * */
 
 namespace viscnts_lsm {
@@ -283,9 +293,8 @@ class FileBlock {     // process blocks in a file
         auto [chunk_id, chunk_offset] = block_._kv_offset(offset);
         current_key_id_ = chunk_id;
         offset_ = chunk_offset;
-        current_key_chunk_ = block_.acquire(current_key_id_);  
+        current_key_chunk_ = block_.acquire(current_key_id_);
       }
-      
     }
     EnumIterator(const EnumIterator& it) noexcept { (*this) = (it); }
 
@@ -333,7 +342,7 @@ class FileBlock {     // process blocks in a file
 
     int rank() { return id_; }
 
-    void jump(int new_id) {
+    void jump(uint32_t new_id) {
       if (new_id >= block_.handle_.counts) {
         id_ = block_.handle_.counts;
         return;
@@ -424,9 +433,9 @@ class FileBlock {     // process blocks in a file
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
   // Find the biggest _key that _key <= key.
-  uint32_t lower_offset(const SKey& key) const {
+  int lower_offset(const SKey& key) const {
     int l = 0, r = handle_.counts - 1;
-    uint32_t ret = -1;
+    int ret = -1;
     SeekIterator it = SeekIterator(*this);
     KV _key;
     while (l <= r) {
@@ -741,85 +750,6 @@ class WriteBatch {
     for (int i = 0; i < C; i += 32) assert(*(uint32_t*)(data_ + i) != 0);
   }
 };
-
-/*
-// We use splay tree, because there may be many ranges(?) on the largest level.
-// We can try std::vector, because std::vector stores data in sequence.
-template <typename Key, typename KVComp>
-class DeletedRange {
- public:
-  // key is the two key of the range [l, r]
-  // val is +1/-1, and sum is the sum in the subtree
-  // val_counts is the rank of the key in the SSTable, -rank/+rank
-  // sum_counts is the sum of the val_counts in the subtree
-  struct Node {
-    Key key;
-    int sum, val;
-    int sum_counts, val_counts;
-  };
-  struct RangeData {
-    std::pair<Key, Key> range;
-    size_t seq_num;
-  };
-  class CompareNode {
-    KVComp* comp_;
-
-   public:
-    CompareNode(KVComp* comp) : comp_(comp) {}
-    int operator()(const Node& x, const Node& y) { return comp_(x.key, y.key); }
-    KVComp* func() { return comp_; }
-  };
-  DeletedRange(KVComp comp) : tree_(_update, _solo_update, _empty_update, _dup_update, CompareNode(comp)) {}
-  void insert(const std::pair<Key, Key>& range, const std::pair<int, int>& rank) {
-    tree_.insert({range.first, 1, 1, rank.first, rank.first});
-    tree_.insert({range.second, -1, -1, rank.second, rank.second});
-  }
-
- private:
-  static void _update(Node& x, const Node& lc, const Node& rc) {
-    x.sum = lc.sum + rc.sum + x.val;
-    x.sum_counts = lc.sum_counts + rc.sum_counts + x.val_counts;
-  }
-  static void _solo_update(Node& x, const Node& lc) {
-    x.sum = lc.sum + x.val;
-    x.sum_counts = lc.sum_counts + x.val_counts;
-  }
-  static void _empty_update(Node& x) {
-    x.sum = x.val;
-    x.sum_counts = x.val_counts;
-  }
-  static void _dup_update(Node& x, const Node& y) {
-    x.val += y.val;
-    x.sum += y.val;
-    x.sum_counts += y.sum_counts;
-    x.val_counts += y.val_counts;
-  }
-  using SplayType = Splay<Node, decltype(&_update), decltype(&_solo_update), decltype(&_empty_update), decltype(&_dup_update), CompareNode>;
-  SplayType tree_;
-
- public:
-  class Iterator {
-    typename SplayType::NodeData* iter_;
-    int sum_;
-    KVComp* comp_;
-
-   public:
-    Iterator() : iter_(nullptr), sum_(0), comp_(nullptr) {}
-    Iterator(const Key& k, DeletedRange& range) : iter_(range.tree_.upper(Node{k, 0, 0})), comp_(range.tree_.comp().func()) {
-      auto output = range.tree_.presum(Node{k, 0, 0});
-      sum_ = output == nullptr ? 0 : output->sum;
-    }
-    Iterator(DeletedRange& range) : iter_(range.tree_.begin()), sum_(0), comp_(range.tree_.comp().func()) {}
-    bool valid() { return iter_ != nullptr; }
-    int read() { return sum_; }
-    void next(const Key& k) {
-      while (iter_ != nullptr && comp_(iter_->key.key, k) < 0) {
-        sum_ += iter_->key.val;
-        iter_ = iter_->nxt;
-      }
-    }
-  };
-};*/
 
 class DeletedRange {
  public:
@@ -1423,14 +1353,14 @@ class EstimateLSM {
 
      public:
       LevelIterator() {}
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id, SSTIterator<KeyCompT>&& iter, DeletedRange::Iterator&& del_iter)
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, uint32_t id, SSTIterator<KeyCompT>&& iter, DeletedRange::Iterator&& del_iter)
           : vec_it_(id >= vec.size() ? vec.end() : vec.begin() + id + 1),
             vec_it_end_(vec.end()),
             iter_(std::move(iter)),
             del_ranges_iterator_(std::move(del_iter)) {
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, int id) {
+      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, uint32_t id) {
         if (id < vec.size()) {
           del_ranges_iterator_ = DeletedRange::Iterator(vec[id]->deleted_ranges());
           vec_it_ = vec.begin() + id + 1;
@@ -1442,7 +1372,7 @@ class EstimateLSM {
         }
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id, SSTIterator<KeyCompT>&& iter,
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, uint32_t id, SSTIterator<KeyCompT>&& iter,
                     DeletedRange::Iterator&& del_iter)
           : vec_it_(id >= vec_ptr->size() ? vec_ptr->end() : vec_ptr->begin() + id + 1),
             vec_it_end_(vec_ptr->end()),
@@ -1451,7 +1381,7 @@ class EstimateLSM {
             del_ranges_iterator_(std::move(del_iter)) {
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, int id) : vec_ptr_(std::move(vec_ptr)) {
+      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, uint32_t id) : vec_ptr_(std::move(vec_ptr)) {
         if (id < vec_ptr_->size()) {
           del_ranges_iterator_ = DeletedRange::Iterator((*vec_ptr_)[id]->deleted_ranges());
           vec_it_ = vec_ptr_->begin() + id + 1;
@@ -1525,7 +1455,7 @@ class EstimateLSM {
       return head_[where]->overlap(lkey, rkey);
     }
     void append_par(std::shared_ptr<Partition> par) {
-      logger("[append_par]: ", par->size());
+      // logger("[append_par]: ", par->size());
       size_ += par->size();
       decay_size_ += par->decay_size();
       head_.push_back(std::move(par));
@@ -1645,7 +1575,7 @@ class EstimateLSM {
       std::vector<std::thread> thread_pool;
       std::mutex thread_mutex;
       // We now expect the number of SSTs is small, e.g. 4
-      for (int i = 1; i < bufs.size(); i++) {
+      for (uint32_t i = 1; i < bufs.size(); i++) {
         thread_pool.emplace_back(flush_func, filename, env, comp, bufs[i], std::ref(thread_mutex), file_alloc, ret);
       }
       if (bufs.size() >= 1) {
@@ -1962,7 +1892,7 @@ class VisCnts {
   EstimateLSM<KeyCompT> tree;
 
  public:
-  VisCnts(const KeyCompT& comp, const std::string& path, double delta, bool createIfMissing)
+  VisCnts(const KeyCompT& comp, const std::string& path, double delta, [[maybe_unused]] bool createIfMissing)
       : tree(delta, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path), std::make_unique<DefaultAllocator>(), comp) {}
   void access(const std::pair<SKey, SValue>& kv) { tree.append(kv.first, kv.second); }
   double trigger_decay() { return tree.trigger_decay(); }
@@ -2196,7 +2126,7 @@ void test_unordered_buf() {
   std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
 
   logger_printf("RESULT_SIZE: %d\n", result.size());
-  assert(result.size() == L);
+  assert(result.size() == (uint32_t) L);
   std::set<int> st;
   for (uint32_t i = 0; i < result.size(); ++i) {
     int x = 0;
@@ -2252,10 +2182,10 @@ void test_lsm_store_and_scan() {
     int L = 3e8;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
-    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+    // std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
     start = std::chrono::system_clock::now();
     std::vector<std::thread> threads;
-    int TH = 4;
+    int TH = 1;
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
           [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*>& tree) {
@@ -2268,12 +2198,12 @@ void test_lsm_store_and_scan() {
           },
           std::ref(numbers), std::ref(tree));
     }
-    // for(auto& a : threads) a.join();
-    // threads.clear();
+    for (auto& a : threads) a.join();
+    threads.clear();
     // std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
 
     auto _numbers = numbers;
-    std::shuffle(_numbers.begin(), _numbers.end(), std::mt19937(std::random_device()()));
+    // std::shuffle(_numbers.begin(), _numbers.end(), std::mt19937(std::random_device()()));
 
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
@@ -2436,14 +2366,14 @@ void test_lsm_decay() {
   {
     EstimateLSM<KeyCompType*> tree(1e7, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                    std::make_unique<DefaultAllocator>(), SKeyCompFunc);
-    int L = 3e7, Q = 1e4;
+    int L = 3e7;
     std::vector<int> numbers(L);
-    auto comp2 = +[](int x, int y) {
-      uint8_t a[12], b[12];
-      for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
-      for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
-      return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
-    };
+    // auto comp2 = +[](int x, int y) {
+    //   uint8_t a[12], b[12];
+    //   for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
+    //   for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
+    //   return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
+    // };
     for (int i = 0; i < L; i++) numbers[i] = i;
     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
     srand(std::random_device()());

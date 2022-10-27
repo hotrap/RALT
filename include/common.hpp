@@ -43,7 +43,7 @@ class Slice {
   }
   void print() {
     printf("[len = %d]", len_);
-    for (int i = 0; i < len_; i++) printf("[%x]", a_[i]);
+    for (uint32_t i = 0; i < len_; i++) printf("[%x]", a_[i]);
     puts("");
     fflush(stdout);
   }
