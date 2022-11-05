@@ -185,10 +185,13 @@ class UnsortedBuffer {
     if (data_) delete[] data_;
   }
   bool append(const SKey &key, const SValue &value) {
+    ref_ += 1;
     auto size = key.size() + sizeof(SValue);
     auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
-    if (pos + size > buffer_size_) return false;
-    ref_ += 1;
+    if (pos + size > buffer_size_) {
+      ref_ -= 1;
+      return false;
+    }
     *reinterpret_cast<SValue *>(key.write(data_ + pos)) = value;
     ref_ -= 1;
     return true;
@@ -197,16 +200,15 @@ class UnsortedBuffer {
   template <typename KeyComp>
   void sort(KeyComp comp) {
     sorted_result_.clear();
-    ssize_t limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
-    uint32_t len;
+    size_t limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     auto comp_func = [comp](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
       return comp(x.first, y.first) < 0;
     };
-    for (uint8_t *d = data_; d - data_ < limit && (len = *reinterpret_cast<uint32_t *>(d)) != 0;) {
+    for (uint8_t *d = data_; d - data_ + sizeof(uint32_t) < limit && *reinterpret_cast<uint32_t *>(d) != 0;) {
       SKey key;
       const uint8_t *v = key.read(d);
       sorted_result_.emplace_back(std::pair<SKey, const uint8_t *>(key, v));
-      d += len + sizeof(uint32_t) + sizeof(SValue);
+      d += key.size() + sizeof(SValue);
     }
     // tim::timsort(sorted_result_.begin(), sorted_result_.end(), comp_func);
     std::sort(sorted_result_.begin(), sorted_result_.end(), comp_func);

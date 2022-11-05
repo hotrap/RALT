@@ -82,13 +82,15 @@
  *
  * [Notes]
  * - Compare with RocksDB, why we are slow? RocksDB "Bulk Load of keys in Random Order" 80MB/sec, "Bulk Load of keys in Sequential Order" 370MB/sec.
- *   Our performance is ~93MB/sec when inserting 6e8 random keys of 3e8 different kinds. (write 4492*18777920B data)
- *   ~218MB/sec when inserting 6e8 sequential keys. (write 5665*18777920B data)
- *   Scan performance ~200MB/sec
- * - First, RocksDB is multi-threaded. And the set-up is 12 cores, 24 vCPUs. However we use 4 cores, 8 vCPUs.
- *   And we only use multithread in SuperVersion->flush_bufs() (This will be optimized in the future)
+ * RocksDB "... in Random Order" 400MB/sec if it is configured to first load all data in L0 with compaction switched off and using an unsorted vector
+ * memtable. Our performance is ~93MB/sec when inserting 6e8 random keys of 3e8 different kinds. (write 4492*18777920B data) ~218MB/sec when inserting
+ * 6e8 sequential keys. (write 5665*18777920B data) Scan performance ~200MB/sec
+ * - First, RocksDB is multi-threaded. And the set-up is 12 cores, 24 vCPUs (This is the configuration in the old performance benchmark in 2017, 8
+ * vCPUs are set in the latest). However we use 4 cores, 8 vCPUs. And we only use multithread in SuperVersion->flush_bufs() (This will be optimized in
+ * the future). And we don't flush buffers while compaction.
  * - Second, the value size of RocksDB is 800B, which means it needs less comparision to flush a file block and to read a file block. Although
  *    RA and WA are big, the bandwidth of SSD can be utilized better.
+ * - But, RocksDB "Random Read" is about ~1.3e5 ops/sec. But we are 1.2e6 ops/sec. This throughput is enough.
  * */
 
 namespace viscnts_lsm {
@@ -289,6 +291,7 @@ class FileBlock {     // process blocks in a file
    public:
     EnumIterator() { id_ = block_.handle_.counts = 0; }
     EnumIterator(FileBlock<KV, KVComp> block, uint32_t offset, uint32_t id) : block_(block), id_(id), key_size_(0) {
+      // logger_printf("EI[%d, %d]", id_, block_.counts());
       if (valid()) {
         auto [chunk_id, chunk_offset] = block_._kv_offset(offset);
         current_key_id_ = chunk_id;
@@ -322,6 +325,7 @@ class FileBlock {     // process blocks in a file
     }
 
     void next() {
+      // logger_printf("nextEI[%d, %d]", id_, block_.counts());
       assert(valid());
       // logger("[next]", id_, " ", block_.handle_.counts);
       if (!key_size_) _read_size();
@@ -343,6 +347,7 @@ class FileBlock {     // process blocks in a file
     int rank() { return id_; }
 
     void jump(uint32_t new_id) {
+      // logger_printf("jumpEI[%d, %d]", id_, new_id);
       if (new_id >= block_.handle_.counts) {
         id_ = block_.handle_.counts;
         return;
@@ -780,10 +785,6 @@ class DeletedRange {
       nodes_.erase(L, R);
       nodes_.insert(Node(rank));
     }
-    // for (auto& n : nodes_) {
-    //   logger_printf("[%d,%d]", n.ranks.first, n.ranks.second);
-    // }
-    // logger("<<<");
   }
 
   int deleted_counts(std::pair<int, int> rank) {
@@ -891,6 +892,7 @@ class SeqIteratorSet {
   }
   bool valid() { return size_ >= 1; }
   void next() {
+    // logger_printf("[S.Set, next, %d]", size_);
     seg_tree_[1]->next();
     if (!seg_tree_[1]->valid()) {
       if (size_ == 1) {
@@ -959,17 +961,11 @@ class SeqIteratorSetForScan {
     auto result = iter_.read();
     current_key_ = result.first;
     current_value_ = result.second;
-    // logger("key: ", result.first.len(), ", ", (int)result.first.data()[0], " ", (int)result.first.data()[1], " ", (int)result.first.data()[2], " ",
-    //        (int)result.first.data()[3]);
-    // logger("vcounts0: ", current_value_.counts, ", ", result.second.counts);
     iter_.next();
     while (iter_.valid()) {
       result = iter_.read();
       if (iter_.comp_func()(result.first, current_key_.ref()) == 0) {
-        // logger("key: ", result.first.len(), ", ", (int)result.first.data()[0], " ", (int)result.first.data()[1], " ", (int)result.first.data()[2],
-        //        " ", (int)result.first.data()[3]);
         current_value_ += result.second;
-        // logger("vcounts: ", current_value_.counts, ", ", result.second.counts);
       } else
         break;
       iter_.next();
@@ -1234,7 +1230,7 @@ class Compaction {
   }
 
   template <typename TIter>
-  std::pair<std::vector<NewFileData>, double> decay_first(TIter&& iters) {
+  auto decay_first(TIter& iters) {
     real_size_ = 0;  // re-calculate size
     lst_real_size_ = 0;
     vec_newfiles_.clear();
@@ -1242,12 +1238,12 @@ class Compaction {
     flag_ = false;
     int A = 0;
     while (iters.valid()) {
+      A++;
       auto L = iters.read();
       if (flag_ && comp_(lst_value_.first.ref(), L.first) == 0) {
         lst_value_.second += L.second;
       } else {
         if (flag_ && _decay_kv(lst_value_)) {
-          A++;
           real_size_ += _calc_decay_value(lst_value_);
           builder_.append(lst_value_);
           _divide_file();
@@ -1265,7 +1261,7 @@ class Compaction {
     }
     logger("[decay_first]: ", A);
     _end_new_file();
-    return {vec_newfiles_, real_size_};
+    return std::make_pair(vec_newfiles_, real_size_);
   }
 
  private:
@@ -1277,7 +1273,6 @@ class Compaction {
   bool _decay_kv(std::pair<T, SValue>& kv) {
     kv.second.counts *= decay_prob_;
     if (kv.second.counts < 1) {
-      // logger_printf("[%.6lf]", kv.second.counts);
       std::uniform_real_distribution<> dis(0, 1.);
       if (dis(rndgen_) < kv.second.counts) {
         return false;
@@ -1332,7 +1327,7 @@ class EstimateLSM {
     }
     void delete_range(const std::pair<SKey, SKey>& range) {
       auto rank_pair = file_.rank_pair(range);
-      // logger("[rank_pair]=", rank_pair.first, ",", rank_pair.second);
+      logger("delete_range[rank_pair]=", rank_pair.first, ",", rank_pair.second);
       deleted_ranges_.insert({rank_pair.first, rank_pair.second});
       global_range_counts_ = file_.counts() - deleted_ranges_.sum();
     }
@@ -1455,7 +1450,7 @@ class EstimateLSM {
       return head_[where]->overlap(lkey, rkey);
     }
     void append_par(std::shared_ptr<Partition> par) {
-      // logger("[append_par]: ", par->size());
+      logger("[append_par]: ", par->size());
       size_ += par->size();
       decay_size_ += par->decay_size();
       head_.push_back(std::move(par));
@@ -1561,6 +1556,8 @@ class EstimateLSM {
       auto flush_func = [](FileName* filename, Env* env, const KeyCompT& comp, UnsortedBuffer* buf, std::mutex& mu, BaseAllocator* file_alloc,
                            SuperVersion* ret) {
         Compaction worker(filename, env, comp);
+        while (!buf->safe())
+          ;
         buf->sort(comp);
         auto iter = std::make_unique<UnsortedBuffer::Iterator>(*buf);
         auto [files, decay_size] = worker.flush(*iter);
@@ -1602,22 +1599,25 @@ class EstimateLSM {
         auto for_iter_ptr = std::make_shared<std::vector<std::shared_ptr<Partition>>>();
         for (auto& par : level.head_) {
           if (check_func(*par)) {
+            logger("fuck<", par->size(), ">");
             for_iter_ptr->push_back(par);
-          } else
+          } else {
+            logger("fuck_rest<", par->size(), ">");
             rest.push_back(par);
+          }
         }
         return for_iter_ptr;
       };
       // If the unmerged data is too big, and estimated decay size is large enough.
       // all the partitions will be merged into the largest level.
       if ((Lsize >= kUnmergedRatio * largest_->size() && _decay_possible()) || trigger_decay) {
-        logger("[decay size, Lsize, largest_->size()]: ", decay_size_overestimate_, ", ", Lsize, ", ", largest_->size());
+        logger("[addr, decay size, Lsize, largest_->size()]: ", this, ", ", decay_size_overestimate_, ", ", Lsize, ", ", largest_->size());
         auto iters = std::make_unique<LevelIteratorSetT>(comp);
 
         // logger("Major Compaction tree_.size() = ", tree_.size());
         // push all iterators to necessary partitions to SeqIteratorSet.
-        for (auto& a : tree_) iters->push(typename Level::LevelIterator(add_level(*a), 0));
-        if (largest_ && largest_->size() != 0) iters->push(typename Level::LevelIterator(add_level(*largest_), 0));
+        for (auto& a : tree_) iters->push(a->seek_to_first());
+        if (largest_ && largest_->size() != 0) iters->push(largest_->seek_to_first());
         iters->build();
 
         // compaction...
@@ -1686,6 +1686,9 @@ class EstimateLSM {
           // push all iterators to necessary partitions to SeqIteratorSet.
           for (uint32_t i = where; i < tree_.size(); ++i) iters->push(typename Level::LevelIterator(add_level(*tree_[i]), 0));
           iters->build();
+          std::sort(rest.begin(), rest.end(), [comp](const std::shared_ptr<Partition>& x, const std::shared_ptr<Partition>& y) {
+            return comp(x->range().first, y->range().second) < 0;
+          });
 
           // logger("compact...");
           // compaction...
@@ -1955,6 +1958,7 @@ int VisCntsClose(void* ac) {
 }
 
 void* VisCntsNewIter(void* ac) {
+  viscnts_lsm::logger("[new_iter]"); 
   auto vc = reinterpret_cast<VisCntsType*>(ac);
   auto ret = new HotRecInfoAndIter();
   ret->vc = vc;
@@ -1985,6 +1989,7 @@ const rocksdb::HotRecInfo* VisCntsSeek(void* iter, const rocksdb::Slice* key) {
 }
 
 const rocksdb::HotRecInfo* VisCntsNext(void* iter) {
+  viscnts_lsm::logger("[next]"); 
   auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
   ac->iter->next();
   if (!ac->iter->valid()) return nullptr;
@@ -2126,7 +2131,7 @@ void test_unordered_buf() {
   std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
 
   logger_printf("RESULT_SIZE: %d\n", result.size());
-  assert(result.size() == (uint32_t) L);
+  assert(result.size() == (uint32_t)L);
   std::set<int> st;
   for (uint32_t i = 0; i < result.size(); ++i) {
     int x = 0;
