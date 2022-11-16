@@ -280,7 +280,7 @@ class UnsortedBufferPtrs {
       m_.unlock();
       cv_.notify_one();
     } while (!bbuf->append(key, value));
-    return false;
+    return true;
   }
   std::vector<UnsortedBuffer *> get() {
     if (buf_q_.size()) {
@@ -304,7 +304,9 @@ class UnsortedBufferPtrs {
       return ret;
     }
     std::unique_lock lck_(m_);
-    cv_.wait(lck_, [&]() { return buf_q_.size() > 0; });
+    cv_.wait(lck_);
+    // It may return empty queue.
+    // Because I must let it return to terminate the compact thread.
     auto ret = std::move(buf_q_);
     buf_q_.clear();
     return ret;

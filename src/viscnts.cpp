@@ -93,6 +93,11 @@
  * - Second, the value size of RocksDB is 800B, which means it needs less comparision to flush a file block and to read a file block. Although
  *    RA and WA are big, the bandwidth of SSD can be utilized better.
  * - But, RocksDB "Random Read" is about ~1.3e5 ops/sec. But we are 1.2e6 ops/sec. This throughput is enough.
+ * 
+ * - I add two threads to deal with buffers, one flushes buffers to the disk and the other compacts these buffer to the main tree. Buffers cannot be seen until they are compacted.
+ *   I optimize the file dividing method in _divide_file(), surprisingly it improves performance a lot. Why?
+ *   Maybe it's because we don't need to open/close file handles because there're only 817 files vs 5641 files (file handle limit: 1024) ?
+ *   The speed is ~377MB/sec, it costs 39s to flush 3e8 keys (817 * 18888736B).
  * */
 
 namespace viscnts_lsm {
@@ -752,10 +757,6 @@ class WriteBatch {
     }
     used_size_ = 0;
   }
-
-  void check(int C) {
-    for (int i = 0; i < C; i += 32) assert(*(uint32_t*)(data_ + i) != 0);
-  }
 };
 
 class DeletedRange {
@@ -1216,7 +1217,7 @@ class Compaction {
       } else {
         if (flag_) {
           real_size_ += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value()));
-          _divide_file();
+          _divide_file(DataKey(L.first, L.second).size());
         }
         // logger("flush key: ", L.first.len(), ", ", (int)L.first.data()[0], " ", (int)L.first.data()[1], " ", (int)L.first.data()[2], " ",
         //    (int)L.first.data()[3], "--", L.second.counts);
@@ -1247,8 +1248,8 @@ class Compaction {
       } else {
         if (flag_ && _decay_kv(lst_value_)) {
           real_size_ += _calc_decay_value(lst_value_);
+          _divide_file(DataKey(lst_value_.first.ref(), lst_value_.second).size());
           builder_.append(lst_value_);
-          _divide_file();
         }
         lst_value_ = L, flag_ = true;
       }
@@ -1283,8 +1284,8 @@ class Compaction {
     }
     return true;
   }
-  void _divide_file() {
-    if (builder_.kv_size() > kSSTable - 512) {
+  void _divide_file(size_t size) {
+    if (builder_.kv_size() + size > kSSTable) {
       _end_new_file();
       _begin_new_file();
     }
@@ -1298,6 +1299,9 @@ constexpr auto kMergeRatio = 0.1;
 constexpr auto kUnmergedRatio = 0.1;
 constexpr auto kUnsortedBufferSize = kSSTable;
 constexpr auto kUnsortedBufferMaxQueue = 4;
+constexpr auto kMaxFlushBufferQueueSize = 10;
+constexpr auto kWaitCompactionSleepMilliSeconds = 100;
+
 
 template <typename KeyCompT>
 class EstimateLSM {
@@ -1548,15 +1552,12 @@ class EstimateLSM {
       return ret;
     }
 
-    SuperVersion* flush_bufs(const std::vector<UnsortedBuffer*>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc,
+    std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer*>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc,
                              const KeyCompT& comp) {
-      if (bufs.size() == 0) return nullptr;
-      auto ret = new SuperVersion(decay_limit_, del_mutex_);
-      ret->tree_ = tree_;
-      ret->largest_ = largest_;
-      ret->decay_size_overestimate_ = decay_size_overestimate_;
+      if (bufs.size() == 0) return {};
+      std::vector<std::shared_ptr<Level>> ret_vectors;
       auto flush_func = [](FileName* filename, Env* env, const KeyCompT& comp, UnsortedBuffer* buf, std::mutex& mu, BaseAllocator* file_alloc,
-                           SuperVersion* ret) {
+                           std::vector<std::shared_ptr<Level>>& ret_vectors) {
         Compaction worker(filename, env, comp);
         while (!buf->safe())
           ;
@@ -1567,21 +1568,32 @@ class EstimateLSM {
         for (auto& a : files) level->append_par(std::make_shared<Partition>(env, file_alloc, comp, a));
         delete buf;
         std::unique_lock lck(mu);
-        // decay_size_overestimate is the sum of decay_size of all SSTs.
-        ret->decay_size_overestimate_ += decay_size;
-        ret->tree_.push_back(std::move(level));
+        ret_vectors.push_back(std::move(level));
       };
       std::vector<std::thread> thread_pool;
       std::mutex thread_mutex;
       // We now expect the number of SSTs is small, e.g. 4
       for (uint32_t i = 1; i < bufs.size(); i++) {
-        thread_pool.emplace_back(flush_func, filename, env, comp, bufs[i], std::ref(thread_mutex), file_alloc, ret);
+        thread_pool.emplace_back(flush_func, filename, env, comp, bufs[i], std::ref(thread_mutex), file_alloc, std::ref(ret_vectors));
       }
       if (bufs.size() >= 1) {
-        flush_func(filename, env, comp, bufs[0], thread_mutex, file_alloc, ret);
+        flush_func(filename, env, comp, bufs[0], thread_mutex, file_alloc, std::ref(ret_vectors));
       }
       // for (int i = 0; i < bufs.size(); ++i) flush_func(filename, env, comp, bufs[i], thread_mutex, file_alloc, ret);
       for (auto& a : thread_pool) a.join();
+      return ret_vectors;
+    }
+    SuperVersion* push_new_buffers(const std::vector<std::shared_ptr<Level>>& vec) {
+      auto ret = new SuperVersion(decay_limit_, del_mutex_);
+      ret->tree_ = tree_;
+      logger(tree_.size(), ", ", ret->tree_.size());
+      ret->largest_ = largest_;
+      ret->decay_size_overestimate_ = decay_size_overestimate_;
+      ret->tree_.insert(ret->tree_.end(), vec.begin(), vec.end());
+      for (auto&& x : vec) {
+        ret->decay_size_overestimate_ += x->decay_size(); 
+      }
+      ret->_sort_levels();
       return ret;
     }
     SuperVersion* compact(FileName* filename, Env* env, BaseAllocator* file_alloc, const KeyCompT& comp, bool trigger_decay = false) const {
@@ -1601,10 +1613,10 @@ class EstimateLSM {
         auto for_iter_ptr = std::make_shared<std::vector<std::shared_ptr<Partition>>>();
         for (auto& par : level.head_) {
           if (check_func(*par)) {
-            logger("fuck<", par->size(), ">");
+            // logger("fuck<", par->size(), ">");
             for_iter_ptr->push_back(par);
           } else {
-            logger("fuck_rest<", par->size(), ">");
+            // logger("fuck_rest<", par->size(), ">");
             rest.push_back(par);
           }
         }
@@ -1645,6 +1657,7 @@ class EstimateLSM {
         ret->decay_size_overestimate_ = ret->_calc_current_decay_size();
         logger("[new decay size]: ", ret->decay_size_overestimate_);
         logger("[new largest_]: ", ret->largest_->size());
+        ret->_sort_levels();
 
         return ret;
       } else {
@@ -1657,6 +1670,12 @@ class EstimateLSM {
         // if the number of tables >= kLimitMax, then increase kMergeRatio. (this works when the number of tables is small)
 
         // logger("tree_.size() = ", tree_.size());
+
+        std::string __print_str = "[";
+        for(auto& a : tree_) {
+          __print_str += std::to_string(a->size() / (double)tree_.back()->size()) + ", ";
+        }
+        logger(__print_str + "]");
 
         if (tree_.size() >= kLimitMin) {
           auto _kRatio = kMergeRatio;
@@ -1723,6 +1742,7 @@ class EstimateLSM {
 
           // calculate new current decay size
           ret->decay_size_overestimate_ = ret->_calc_current_decay_size();
+          ret->_sort_levels();
           return ret;
         }
         return nullptr;
@@ -1755,6 +1775,11 @@ class EstimateLSM {
       for (auto& a : tree_) ret += a->decay_size();
       return ret;
     }
+    void _sort_levels() {
+      std::sort(tree_.begin(), tree_.end(), [](const std::shared_ptr<Level>& x, const std::shared_ptr<Level>& y) {
+        return x->size() > y->size();
+      });
+    }
   };
   double delta_;
   std::unique_ptr<Env> env_;
@@ -1763,13 +1788,16 @@ class EstimateLSM {
   KeyCompT comp_;
   SuperVersion* sv_;
   std::thread compact_thread_;
-  bool terminate_signal_;
+  std::thread flush_thread_;
+  std::atomic<bool> terminate_signal_;
   UnsortedBufferPtrs bufs_;
   std::mutex sv_mutex_;
   std::mutex sv_load_mutex_;
   std::mutex sv_modify_mutex_;
-  size_t sv_seq_number_;  // Every Partion has a sequential number, used in Range Delete.
   boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change_;
+  std::vector<std::shared_ptr<Level>> flush_buf_vec_;
+  std::mutex flush_buf_vec_mutex_;
+  std::condition_variable signal_flush_to_compact_;
 
  public:
   class SuperVersionIterator {
@@ -1796,11 +1824,14 @@ class EstimateLSM {
         bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue),
         notify_weight_change_(notify_weight_change) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
+    flush_thread_ = std::thread([this]() { flush_thread(); });
   }
   ~EstimateLSM() {
     terminate_signal_ = 1;
     bufs_.notify_cv();
+    signal_flush_to_compact_.notify_one();
     compact_thread_.join();
+    flush_thread_.join();
     std::unique_lock lck(sv_load_mutex_);
     sv_->unref();
   }
@@ -1845,19 +1876,48 @@ class EstimateLSM {
   double get_current_decay_size() { return get_current_sv()->get_current_decay_size(); }
 
  private:
-  void compact_thread() {
+  void flush_thread() {
     while (!terminate_signal_) {
       auto buf_q_ = terminate_signal_ ? bufs_.get() : bufs_.wait_and_get();
       if (buf_q_.empty() && terminate_signal_) return;
       if (buf_q_.empty()) continue;
-      // logger("WAIT_DELETE");
-      std::unique_lock del_range_lck(sv_modify_mutex_);
-      // logger("FLUSH");
-      auto new_sv = sv_->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
-      _update_superversion(new_sv);
-      // logger("COMPACT");
-      new_sv = sv_->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_);
-      _update_superversion(new_sv);
+      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
+      while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
+        logger("full");
+        std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
+        if (terminate_signal_) return;
+      }
+      std::unique_lock lck(flush_buf_vec_mutex_);
+      flush_buf_vec_.insert(flush_buf_vec_.end(), new_vec.begin(), new_vec.end());
+      signal_flush_to_compact_.notify_one();
+    }
+  }
+  void compact_thread() {
+    while (!terminate_signal_) {
+      SuperVersion* new_sv;
+      {
+        std::unique_lock flush_lck(flush_buf_vec_mutex_);
+        // wait buffers from flush_thread()
+        while (flush_buf_vec_.empty() && !terminate_signal_) {
+          signal_flush_to_compact_.wait(flush_lck);
+        }
+        if (terminate_signal_) return;
+        sv_modify_mutex_.lock();
+        new_sv = sv_->push_new_buffers(flush_buf_vec_);  
+        flush_buf_vec_.clear();  
+      }
+      
+      auto last_compacted_sv = new_sv;
+      while (true) {
+        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_);
+        if (new_compacted_sv == nullptr) break;
+        else {
+          last_compacted_sv->unref();
+          last_compacted_sv = new_compacted_sv;
+        }
+      }
+      _update_superversion(last_compacted_sv);
+      sv_modify_mutex_.unlock();
       _update_channel();
     }
   }
@@ -2100,7 +2160,7 @@ void test_unordered_buf() {
             continue;
           }
           for (auto& buf : buf_q_) {
-            // while(!buf->safe());
+            while(!buf->safe());
             buf->sort(comp);
             UnsortedBuffer::Iterator iter(*buf);
             while (iter.valid()) {
@@ -2272,7 +2332,7 @@ void test_random_scan_and_count() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                    std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
     int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
