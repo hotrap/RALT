@@ -2,25 +2,45 @@
 #define VISCNTS_N_
 
 #include "rocksdb/comparator.h"
+#include "rocksdb/compaction_router.h"
 
-extern void *VisCntsOpen(const rocksdb::Comparator *ucmp, const char *path,
-        bool createIfMissing);
-extern double VisCntsAccess(void *ac, const rocksdb::Slice *key, size_t vlen,
-                double weight);
-double VisCntsDecay(void *ac);
+#include <boost/fiber/buffered_channel.hpp>
 
-extern void *VisCntsNewIter(void *ac);
+class VisCnts {
+public:
+	class Iter {
+	public:
+		Iter(VisCnts* vc);
+		~Iter();
+		// The returned pointer will stay valid until the next call to one of
+		// these functions
+		const rocksdb::HotRecInfo* SeekToFirst();
+		const rocksdb::HotRecInfo* Seek(const rocksdb::Slice* key);
+		const rocksdb::HotRecInfo* Next();
+	private:
+		void* iter_;
+		rocksdb::HotRecInfo cur_;
+		friend class VisCnts;
+	};
 
-// The returned pointer will stay valid until the next call to one of these
-// functions
-extern const rocksdb::HotRecInfo *VisCntsSeekToFirst(void *iter);
-extern const rocksdb::HotRecInfo *VisCntsSeek(void *iter,
-                const rocksdb::Slice *key);
-extern const rocksdb::HotRecInfo *VisCntsNext(void *iter);
+	VisCnts(const rocksdb::Comparator *ucmp, const char *path,
+		bool createIfMissing,
+		boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change);
+	VisCnts(const VisCnts&) = delete;
+	~VisCnts();
+	void Access(const rocksdb::Slice *key, size_t vlen, double weight);
+	double WeightSum();
+	void Decay();
+	void RangeDel(const rocksdb::Slice* smallest,
+		const rocksdb::Slice* largest);
+private:
+	void add_weight(double delta);
 
-extern void VisCntsDelIter(void *iter);
-extern double VisCntsRangeDel(void *ac, const rocksdb::Slice *smallest,
-                const rocksdb::Slice *largest);
-extern int VisCntsClose(void *ac);
+	void* vc_;
+	boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change_;
 
-#endif // VISCNTS_N_
+	std::mutex lock_;
+	double weight_sum_;
+};
+
+#endif	// VISCNTS_N_

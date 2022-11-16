@@ -158,49 +158,48 @@ class MemTable : public RefCounts {
 
 class UnsortedBuffer {
   std::atomic<size_t> used_size_;
-  std::atomic<size_t> ref_;
+  std::atomic<size_t> commmited_size_;
   size_t buffer_size_;
   uint8_t *data_;
   std::vector<std::pair<SKey, const uint8_t *>> sorted_result_;
 
  public:
-  UnsortedBuffer(size_t size) : used_size_(0), ref_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
+  UnsortedBuffer(size_t size) : used_size_(0), commmited_size_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
   UnsortedBuffer(const UnsortedBuffer &buf) {
     used_size_ = buf.used_size_.load();
     buffer_size_ = buf.buffer_size_;
     data_ = new uint8_t[buffer_size_];
     sorted_result_ = buf.sorted_result_;
-    ref_ = 0;
+    commmited_size_ = buf.commmited_size_.load();
     memcpy(data_, buf.data_, buffer_size_);
   }
   UnsortedBuffer(UnsortedBuffer &&buf) {
     used_size_ = buf.used_size_.load();
+    commmited_size_ = buf.commmited_size_.load();
     buffer_size_ = buf.buffer_size_;
     data_ = buf.data_;
     sorted_result_ = std::move(buf.sorted_result_);
     buf.data_ = nullptr;
-    ref_ = 0;
   }
   ~UnsortedBuffer() {
     if (data_) delete[] data_;
   }
   bool append(const SKey &key, const SValue &value) {
-    ref_ += 1;
     auto size = key.size() + sizeof(SValue);
     auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
     if (pos + size > buffer_size_) {
-      ref_ -= 1;
+      used_size_.fetch_sub(size, std::memory_order_relaxed);
       return false;
     }
     *reinterpret_cast<SValue *>(key.write(data_ + pos)) = value;
-    ref_ -= 1;
+    commmited_size_.fetch_add(size, std::memory_order_relaxed);
     return true;
   }
 
   template <typename KeyComp>
   void sort(KeyComp comp) {
     sorted_result_.clear();
-    size_t limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+    size_t limit = std::min(commmited_size_.load(std::memory_order_relaxed), buffer_size_);
     auto comp_func = [comp](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
       return comp(x.first, y.first) < 0;
     };
@@ -217,10 +216,10 @@ class UnsortedBuffer {
     auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     memset(data_, 0, limit);
     used_size_ = 0;
-    ref_ = 0;
+    commmited_size_ = 0;
   }
-  size_t size() const { return used_size_; }
-  bool safe() const { return ref_ == 0; }
+  size_t size() const { return commmited_size_; }
+  bool safe() const { return commmited_size_ == used_size_; }
   class Iterator {
     std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_;
     std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_end_;
@@ -255,15 +254,15 @@ class UnsortedBufferPtrs {
     for (auto &a : buf_q_) delete a;
   }
   bool append(const SKey &key, const SValue &value) {
+    // Maybe we should use write/read lock? but it's not beautiful.
+    // We release the previous when the second is full instead of hazard pointers. Then it seems almost impossible that a thread is writing the
+    // previous when we release it.
+
+    // It seems unnecessary to use std::atomic<UnsortedBuffer*>
     auto bbuf = buf.load(std::memory_order_relaxed);
     if (bbuf->append(key, value)) return true;
     do {
       m_.lock();
-      if (buf.load(std::memory_order_relaxed) != bbuf) {
-        bbuf = buf.load(std::memory_order_relaxed);
-        m_.unlock();
-        continue;
-      }
       while (buf.load(std::memory_order_relaxed) == bbuf && buf_q_.size() >= max_q_size_) {
         m_.unlock();
         cv_.notify_one();
@@ -274,12 +273,12 @@ class UnsortedBufferPtrs {
         bbuf = buf.load(std::memory_order_relaxed);
         m_.unlock();
         if (bbuf->append(key, value)) return true;
-        continue;
+        continue; // This almost never happens
       }
-      // printf("[%llu]", buf.load()); fflush(stdout);
       buf_q_.push_back(buf);
       buf = bbuf = new UnsortedBuffer(buffer_size_);
       m_.unlock();
+      cv_.notify_one();
     } while (!bbuf->append(key, value));
     return false;
   }
@@ -305,7 +304,7 @@ class UnsortedBufferPtrs {
       return ret;
     }
     std::unique_lock lck_(m_);
-    cv_.wait(lck_);
+    cv_.wait(lck_, [&]() { return buf_q_.size() > 0; });
     auto ret = std::move(buf_q_);
     buf_q_.clear();
     return ret;

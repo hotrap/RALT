@@ -18,6 +18,8 @@
 #include "memtable.hpp"
 #include "splay.hpp"
 
+#include "viscnts.h"
+
 /**
  * The viscnts.
  *
@@ -1767,6 +1769,7 @@ class EstimateLSM {
   std::mutex sv_load_mutex_;
   std::mutex sv_modify_mutex_;
   size_t sv_seq_number_;  // Every Partion has a sequential number, used in Range Delete.
+  boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change_;
 
  public:
   class SuperVersionIterator {
@@ -1782,7 +1785,7 @@ class EstimateLSM {
     auto next() { return iter_.next(); }
   };
   EstimateLSM(double delta, std::unique_ptr<Env>&& env, std::unique_ptr<FileName>&& filename, std::unique_ptr<BaseAllocator>&& file_alloc,
-              const KeyCompT& comp)
+              const KeyCompT& comp, boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change)
       : delta_(delta),
         env_(std::move(env)),
         filename_(std::move(filename)),
@@ -1790,7 +1793,8 @@ class EstimateLSM {
         comp_(comp),
         sv_(new SuperVersion(delta, &sv_mutex_)),
         terminate_signal_(0),
-        bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue) {
+        bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue),
+        notify_weight_change_(notify_weight_change) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
   }
   ~EstimateLSM() {
@@ -1823,29 +1827,19 @@ class EstimateLSM {
       ;
   }
 
-  double delete_range(std::pair<SKey, SKey> range) {
-    if (comp_(range.first, range.second) > 0) return get_current_decay_size();
+  void delete_range(std::pair<SKey, SKey> range) {
+    if (comp_(range.first, range.second) > 0) return;
     std::unique_lock del_range_lck(sv_modify_mutex_);
-    auto old_sv = sv_;
-    auto new_sv = old_sv->delete_range(range, comp_);
-    sv_load_mutex_.lock();
-    sv_ = new_sv;
-    auto ret = sv_->get_current_decay_size();
-    sv_load_mutex_.unlock();
-    old_sv->unref();
-    return ret;
+    auto new_sv = sv_->delete_range(range, comp_);
+    _update_superversion(new_sv);
+    _update_channel();
   }
 
-  double trigger_decay() {
+  void trigger_decay() {
     std::unique_lock del_range_lck(sv_modify_mutex_);
-    auto old_sv = sv_;
-    auto new_sv = old_sv->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_, true);
-    sv_load_mutex_.lock();
-    sv_ = new_sv;
-    auto ret = sv_->get_current_decay_size();
-    sv_load_mutex_.unlock();
-    old_sv->unref();
-    return ret;
+    auto new_sv = sv_->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_, true);
+    _update_superversion(new_sv);
+    _update_channel();
   }
 
   double get_current_decay_size() { return get_current_sv()->get_current_decay_size(); }
@@ -1859,23 +1853,30 @@ class EstimateLSM {
       // logger("WAIT_DELETE");
       std::unique_lock del_range_lck(sv_modify_mutex_);
       // logger("FLUSH");
-      auto old_sv = sv_;
-      auto new_sv = old_sv->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
-      if (new_sv != nullptr) {
-        sv_load_mutex_.lock();
-        sv_ = new_sv;
-        sv_load_mutex_.unlock();
-        old_sv->unref();
-      }
+      auto new_sv = sv_->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
+      _update_superversion(new_sv);
       // logger("COMPACT");
-      old_sv = sv_;
-      new_sv = old_sv->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_);
-      if (new_sv != nullptr) {
-        sv_load_mutex_.lock();
-        sv_ = new_sv;
-        sv_load_mutex_.unlock();
-        old_sv->unref();
-      }
+      new_sv = sv_->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_);
+      _update_superversion(new_sv);
+      _update_channel();
+    }
+  }
+
+  void _update_superversion(SuperVersion* new_sv) {
+    if (new_sv != nullptr) {
+      sv_load_mutex_.lock();
+      auto old_sv = sv_;
+      sv_ = new_sv;
+      sv_load_mutex_.unlock();
+      old_sv->unref();
+    }
+  }
+
+  void _update_channel() {
+    if (notify_weight_change_ != nullptr) {
+      // It seems that it doesn't block for a long time because it blocks only when there is a writer.
+      // Because it returns full when the channel is full.
+      notify_weight_change_->try_push(std::tuple<>());
     }
   }
 
@@ -1895,13 +1896,14 @@ class VisCnts {
   EstimateLSM<KeyCompT> tree;
 
  public:
-  VisCnts(const KeyCompT& comp, const std::string& path, double delta, [[maybe_unused]] bool createIfMissing)
-      : tree(delta, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path), std::make_unique<DefaultAllocator>(), comp) {}
+  VisCnts(const KeyCompT& comp, const std::string& path, double delta, [[maybe_unused]] bool createIfMissing, boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change)
+      : tree(delta, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path), std::make_unique<DefaultAllocator>(), comp, notify_weight_change) {}
   void access(const std::pair<SKey, SValue>& kv) { tree.append(kv.first, kv.second); }
-  double trigger_decay() { return tree.trigger_decay(); }
-  double delete_range(const std::pair<SKey, SKey>& range) { return tree.delete_range(range); }
+  auto trigger_decay() { return tree.trigger_decay(); }
+  auto delete_range(const std::pair<SKey, SKey>& range) { return tree.delete_range(range); }
   auto seek_to_first() { return tree.seek_to_first(); }
   auto seek(const SKey& key) { return tree.seek(key); }
+  auto weight_sum() { return tree.get_current_decay_size(); }
 };
 
 }  // namespace viscnts_lsm
@@ -1929,45 +1931,52 @@ struct HotRecInfoAndIter {
   rocksdb::HotRecInfo result;
 };
 
-void* VisCntsOpen(const rocksdb::Comparator* ucmp, const char* path, bool createIfMissing) {
-  auto vc = new VisCntsType(SKeyComparatorFromRocksDB(ucmp), path, 1e100, createIfMissing);
-  return vc;
+VisCnts::VisCnts(const rocksdb::Comparator* ucmp, const char* path, bool createIfMissing,
+                 boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change)
+    : notify_weight_change_(notify_weight_change), weight_sum_(0) {
+  vc_ = new VisCntsType(SKeyComparatorFromRocksDB(ucmp), path, 1e100, createIfMissing, notify_weight_change);
 }
 
-int VisCntsAccess(void* ac, const rocksdb::Slice* key, size_t vlen, double weight) {
-  auto vc = reinterpret_cast<VisCntsType*>(ac);
+void VisCnts::Access(const rocksdb::Slice* key, size_t vlen, double weight) {
+  auto vc = reinterpret_cast<VisCntsType*>(vc_);
   vc->access({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key->data()), key->size()), viscnts_lsm::SValue(weight, vlen)});
-  return 0;
 }
 
-double VisCntsDecay(void* ac) {
-  auto vc = reinterpret_cast<VisCntsType*>(ac);
-  return vc->trigger_decay();
+double VisCnts::WeightSum() {
+  auto vc = reinterpret_cast<VisCntsType*>(vc_);
+  return vc->weight_sum();
 }
 
-double VisCntsRangeDel(void* ac, const rocksdb::Slice* L, const rocksdb::Slice* R) {
-  auto vc = reinterpret_cast<VisCntsType*>(ac);
-  return vc->delete_range({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(L->data()), L->size()),
-                           viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(R->data()), R->size())});
+void VisCnts::Decay() {
+  auto vc = reinterpret_cast<VisCntsType*>(vc_);
+  vc->trigger_decay();
 }
 
-int VisCntsClose(void* ac) {
-  auto vc = reinterpret_cast<VisCntsType*>(ac);
+void VisCnts::RangeDel(const rocksdb::Slice* L, const rocksdb::Slice* R) {
+  auto vc = reinterpret_cast<VisCntsType*>(vc_);
+  vc->delete_range({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(L->data()), L->size()),
+                    viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(R->data()), R->size())});
+}
+
+void VisCnts::add_weight(double delta) { std::abort(); }
+
+VisCnts::~VisCnts() {
+  auto vc = reinterpret_cast<VisCntsType*>(vc_);
   delete vc;
-  return 0;
 }
 
-void* VisCntsNewIter(void* ac) {
-  viscnts_lsm::logger("[new_iter]"); 
-  auto vc = reinterpret_cast<VisCntsType*>(ac);
+VisCnts::Iter::Iter(VisCnts* ac) {
+  viscnts_lsm::logger("[new_iter]");
+  auto vc = reinterpret_cast<VisCntsType*>(ac->vc_);
   auto ret = new HotRecInfoAndIter();
   ret->vc = vc;
   ret->iter = nullptr;
-  return ret;
+  iter_ = ret;
 }
 
-const rocksdb::HotRecInfo* VisCntsSeekToFirst(void* iter) {
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+const rocksdb::HotRecInfo* VisCnts::Iter::SeekToFirst() {
+  viscnts_lsm::logger("[seek to first]");
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
   if (!ac->iter) delete ac->iter;
   ac->iter = ac->vc->seek_to_first();
   if (!ac->iter->valid()) return nullptr;
@@ -1977,8 +1986,9 @@ const rocksdb::HotRecInfo* VisCntsSeekToFirst(void* iter) {
   return &ac->result;
 }
 
-const rocksdb::HotRecInfo* VisCntsSeek(void* iter, const rocksdb::Slice* key) {
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+const rocksdb::HotRecInfo* VisCnts::Iter::Seek(const rocksdb::Slice* key) {
+  viscnts_lsm::logger("[seek]");
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
   if (!ac->iter) delete ac->iter;
   ac->iter = ac->vc->seek(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key->data()), key->size()));
   if (!ac->iter->valid()) return nullptr;
@@ -1988,9 +1998,8 @@ const rocksdb::HotRecInfo* VisCntsSeek(void* iter, const rocksdb::Slice* key) {
   return &ac->result;
 }
 
-const rocksdb::HotRecInfo* VisCntsNext(void* iter) {
-  viscnts_lsm::logger("[next]"); 
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+const rocksdb::HotRecInfo* VisCnts::Iter::Next() {
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
   ac->iter->next();
   if (!ac->iter->valid()) return nullptr;
   auto [rkey, rvalue] = ac->iter->read();
@@ -1999,8 +2008,8 @@ const rocksdb::HotRecInfo* VisCntsNext(void* iter) {
   return &ac->result;
 }
 
-void VisCntsDelIter(void* iter) {
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter);
+VisCnts::Iter::~Iter() {
+  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
   if (ac->iter) delete ac->iter;
   delete ac;
 }
@@ -2155,7 +2164,7 @@ void test_lsm_store() {
   auto start = std::chrono::system_clock::now();
   {
     EstimateLSM<KeyCompType*> tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
     int L = 1e7;
     uint8_t a[12];
     memset(a, 0, sizeof(a));
@@ -2183,7 +2192,7 @@ void test_lsm_store_and_scan() {
   auto start = std::chrono::system_clock::now();
   {
     EstimateLSM tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                     std::make_unique<DefaultAllocator>(), comp);
+                     std::make_unique<DefaultAllocator>(), comp, nullptr);
     int L = 3e8;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
@@ -2264,7 +2273,7 @@ void test_random_scan_and_count() {
   auto start = std::chrono::system_clock::now();
   {
     EstimateLSM<KeyCompType*> tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
     int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -2370,7 +2379,7 @@ void test_lsm_decay() {
   auto start = std::chrono::system_clock::now();
   {
     EstimateLSM<KeyCompType*> tree(1e7, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
     int L = 3e7;
     std::vector<int> numbers(L);
     // auto comp2 = +[](int x, int y) {
@@ -2410,7 +2419,7 @@ void test_delete_range() {
   auto start = std::chrono::system_clock::now();
   {
     EstimateLSM<KeyCompType*> tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
     int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
