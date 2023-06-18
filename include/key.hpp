@@ -44,6 +44,38 @@ struct SKeyComparator {
   }
 };
 
+template <typename Value>
+class BlockKey {
+ private:
+  SKey key_;
+  Value v_;
+
+ public:
+  BlockKey() : key_(), v_() {}
+  BlockKey(SKey key, Value v) : key_(key), v_(v) {}
+  const uint8_t* read(const uint8_t* from) {
+    from = key_.read(from);
+    v_ = *reinterpret_cast<const Value*>(from);
+    return from + sizeof(Value);
+  }
+  size_t size() const { return key_.size() + sizeof(v_); }
+  uint8_t* write(uint8_t* to) const {
+    to = key_.write(to);
+    *reinterpret_cast<Value*>(to) = v_;
+    return to + sizeof(Value);
+  }
+  SKey key() const { return key_; }
+  Value value() const { return v_; }
+  static size_t read_size(uint8_t* from) {
+    size_t ret = SKey::read_size(from);
+    return ret + sizeof(Value);
+  }
+};
+
+using DataKey = BlockKey<SValue>;
+using IndexKey = BlockKey<uint32_t>;
+using RefDataKey = BlockKey<SValue*>;
+
 }  // namespace viscnts_lsm
 
 #endif

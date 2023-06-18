@@ -1,3 +1,6 @@
+#ifndef VISCNTS_MEMTABLE_H__
+#define VISCNTS_MEMTABLE_H__
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -331,3 +334,5 @@ class UnsortedBufferPtrs {
 };
 
 }  // namespace viscnts_lsm
+
+#endif

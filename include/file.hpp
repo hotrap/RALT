@@ -2,6 +2,7 @@
 #define __FILE_CACHE_H__
 #include <string>
 #include <memory>
+#include <filesystem>
 
 #include "common.hpp"
 namespace viscnts_lsm {
@@ -38,6 +39,34 @@ class Env {
 
 
 Env* createDefaultEnv();
+
+// generate global filename
+class FileName {
+  std::atomic<size_t> file_ts_;
+  std::filesystem::path path_;
+
+ public:
+  explicit FileName(size_t ts, std::string path) : file_ts_(ts), path_(path) { std::filesystem::create_directories(path); }
+  std::string gen_filename(size_t id) { return "lainlainlainlain" + std::to_string(id) + ".data"; }
+  std::string gen_path() { return (path_ / gen_filename(file_ts_)).string(); }
+  std::string next() { return (path_ / gen_filename(++file_ts_)).string(); }
+  std::pair<std::string, size_t> next_pair() {
+    auto id = ++file_ts_;
+    return {(path_ / gen_filename(id)).string(), id};
+  }
+};
+
+// information of file blocks in SST files
+struct FileBlockHandle {
+  // The structure of a file block
+  // [handles]
+  // [kv pairs...]
+  uint32_t offset;
+  uint32_t size;    // The size of SST doesn't exceed 4GB
+  uint32_t counts;  // number of keys in the fileblock
+  FileBlockHandle() { offset = size = counts = 0; }
+  explicit FileBlockHandle(uint32_t offset, uint32_t size, uint32_t counts) : offset(offset), size(size), counts(counts) {}
+};
 
 }  // namespace viscnts_lsm
 
