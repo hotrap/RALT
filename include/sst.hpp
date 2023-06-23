@@ -2,7 +2,7 @@
 #define VISCNTS_SST_H__
 
 #include <vector>
-#include "file.hpp"
+#include "fileenv.hpp"
 #include "fileblock.hpp"
 #include "alloc.hpp"
 #include "writebatch.hpp"
@@ -13,7 +13,7 @@ namespace viscnts_lsm {
 const static size_t kMagicNumber = 0x25a65facc3a23559;  // echo viscnts | sha1sum
 const static size_t kPageSize = 1 << 12;
 
-  // one SST
+// one SST
 template <typename KeyCompT>
 class ImmutableFile {
   // The structure of the file:
@@ -45,7 +45,7 @@ class ImmutableFile {
 
  public:
   ImmutableFile(uint32_t file_id, uint32_t size, std::unique_ptr<RandomAccessFile>&& file_ptr, BaseAllocator* alloc,
-                const std::pair<IndSKey, IndSKey>& range, const KeyCompT& comp)
+                const std::pair<IndSKey, IndSKey>& range, KeyCompT comp)
       : file_id_(file_id), size_(size), range_(range), file_ptr_(std::move(file_ptr)), alloc_(alloc), comp_(comp) {
     // read index block
     Slice result(nullptr, 0);
@@ -190,11 +190,14 @@ class SSTBuilder {
   }
 
   void _append_align(size_t len) {
-    if (len && (now_offset + len - 1) / kChunkSize != now_offset / kChunkSize) _align();
+    if (len && (now_offset + len - 1) / kChunkSize != now_offset / kChunkSize) {
+      _align();
+    }
   }
 
  public:
-  SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0) {}
+  SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : 
+    file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0) {}
   void append(const DataKey& kv) {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
@@ -202,7 +205,6 @@ class SSTBuilder {
       index.emplace_back(kv.key(), offsets.size());
       if (offsets.size() == 0) first_key = kv.key();
     }
-    lst_key = kv.key();
     offsets.push_back(now_offset);
     now_offset += kv.size();
     file_->append_key(kv);
@@ -224,29 +226,28 @@ class SSTBuilder {
       index.emplace_back(kv.key(), offsets.size());
       if (offsets.size() == 0) first_key = kv.key();
     }
-    lst_key = kv.key();
     offsets.push_back(now_offset);
     now_offset += kv.size();
     size_ += kv.size();
     return file_->reserve_kv(kv, sizeof(decltype(kv.value())));
   }
 
-  void make_index() {
-    // if (offsets.size() % (kChunkSize / sizeof(uint32_t)) != 1) {
-    //   index.emplace_back(lst_key, offsets.size());  // append last key into index block.
-    // }
-    // logger("SSTB: ", now_offset, " num: ", offsets.size());
+  template<typename T>
+  void set_lstkey(const T& kv) {
+    lst_key = kv.key();
+  }
+
+  void make_offsets(const std::vector<uint32_t>& offsets) {
     _align();
-    // file_->check(offsets.size() * 32);
-    // logger("SSTB(AFTER ALIGN): ", now_offset);
-    // auto data_index_offset = now_offset;
-    // append all the offsets in the data block
     for (const auto& a : offsets) {
-      if (kChunkSize % sizeof(decltype(a))) _append_align(sizeof(decltype(a)));
       file_->append_other(a);
-      now_offset += sizeof(decltype(a));
+      now_offset += sizeof(uint32_t);
     }
-    // logger("SSTB: ", now_offset, " num: ", offsets.size());
+  }
+
+  void make_index() {
+    // append all the offsets in the data block
+    make_offsets(offsets);
     auto data_bh = FileBlockHandle(0, now_offset, offsets.size());
     _align();
     lst_offset = now_offset;
@@ -259,16 +260,11 @@ class SSTBuilder {
       v.push_back(now_offset);
       now_offset += index_key.size();
     }
-    _align();
     // append all the offsets in the index block
-    for (const auto& a : v) {
-      if (kChunkSize % sizeof(decltype(a))) _append_align(sizeof(decltype(a)));
-      file_->append_other(a);
-      now_offset += sizeof(decltype(a));
-    }
+    make_offsets(v);
     // append two block handles.
-    // logger("[INDEX SIZE]: ", index.size());
-    file_->append_other(FileBlockHandle(lst_offset, now_offset - lst_offset, index.size()));  // write offset of index block
+    // write offset of index block
+    file_->append_other(FileBlockHandle(lst_offset, now_offset - lst_offset, index.size()));  
     file_->append_other(data_bh);
     now_offset += sizeof(FileBlockHandle) * 2;
   }

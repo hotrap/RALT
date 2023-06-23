@@ -49,18 +49,18 @@ void test_files() {
   }
   iters->build();
   for (int i = 0; i < L; i++) {
-    assert(iters->valid());
+    DB_ASSERT(iters->valid());
     auto kv = iters->read();
     int x = 0;
     auto a = kv.first.data();
     for (int j = 0; j < 12; j++) {
       x |= a[j] << (j % 4) * 8;
-      assert(j % 4 != 3 || x == i);
+      DB_ASSERT(j % 4 != 3 || x == i);
       if (j % 4 == 3) x = 0;
     }
     iters->next();
   }
-  assert(!iters->valid());
+  DB_ASSERT(!iters->valid());
   logger("test_file(): OK");
 }
 
@@ -123,7 +123,7 @@ void test_unordered_buf() {
   logger("OK!");
   bufs.flush();
   signal = 1;
-  bufs.notify_cv();
+  bufs.terminate();
   th.join();
 
   auto end = std::chrono::system_clock::now();
@@ -131,7 +131,7 @@ void test_unordered_buf() {
   std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
 
   logger_printf("RESULT_SIZE: %d\n", result.size());
-  assert(result.size() == (uint32_t)L);
+  DB_ASSERT(result.size() == (uint32_t)L);
   std::set<int> st;
   for (uint32_t i = 0; i < result.size(); ++i) {
     int x = 0;
@@ -139,8 +139,8 @@ void test_unordered_buf() {
     for (int j = 0; j < 12; j++) {
       x |= a[j] << (j % 4) * 8;
       if (j % 4 == 3) {
-        assert(x >= 0 && x < L);
-        assert(!st.count(x));
+        DB_ASSERT(x >= 0 && x < L);
+        DB_ASSERT(!st.count(x));
         st.insert(x);
         break;
       }
@@ -154,8 +154,8 @@ void test_lsm_store() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(1e9, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
+    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 1e7;
     uint8_t a[12];
     memset(a, 0, sizeof(a));
@@ -182,8 +182,8 @@ void test_lsm_store_and_scan() {
   };
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                     std::make_unique<DefaultAllocator>(), comp, nullptr);
+    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                                  std::make_unique<DefaultAllocator>(), comp);
     int L = 3e8;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
@@ -227,27 +227,26 @@ void test_lsm_store_and_scan() {
     auto end = std::chrono::system_clock::now();
     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(5000));
     start = std::chrono::system_clock::now();
     auto iter = std::unique_ptr<EstimateLSM<KeyCompType*>::SuperVersionIterator>(tree.seek_to_first());
     for (int i = 0; i < L; i++) {
-      assert(iter->valid());
+      DB_ASSERT(iter->valid());
       auto kv = iter->read();
       int x = 0, y = 0;
       auto a = kv.first.data();
       for (int j = 0; j < 16; j++) {
         x |= a[j] << (j % 4) * 8;
-        assert(j % 4 != 3 || x == i);
+        DB_ASSERT(j % 4 != 3 || x == i);
         if (j % 4 == 3) {
           if (j > 3) {
-            assert(y == x);
+            DB_ASSERT(y == x);
           }
           y = x;
           x = 0;
         }
       }
-      assert(kv.second.counts == i + 1);
-      assert(kv.second.vlen == 1);
+      DB_ASSERT(kv.second.counts == i + 1);
+      DB_ASSERT(kv.second.vlen == 1);
       iter->next();
     }
   }
@@ -263,9 +262,9 @@ void test_random_scan_and_count() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
-    int L = 3e8, Q = 1e4;
+    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+    int L = 3e7, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
       uint8_t a[12], b[12];
@@ -303,7 +302,7 @@ void test_random_scan_and_count() {
       int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
       ans = std::max(ans, 0);
       int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
-      assert(ans == output);
+      DB_ASSERT(ans == output);
     }
 
     int QLEN = 1000;
@@ -323,10 +322,10 @@ void test_random_scan_and_count() {
         int x = 0, y = 0;
         for (int j = 0; j < 12; j++) {
           x |= a[j] << (j % 4) * 8;
-          assert(j % 4 != 3 || x == goal);
+          DB_ASSERT(j % 4 != 3 || x == goal);
           if (j % 4 == 3) {
             if (j > 3) {
-              assert(y == x);
+              DB_ASSERT(y == x);
             }
             y = x;
             x = 0;
@@ -334,14 +333,14 @@ void test_random_scan_and_count() {
         }
       };
       if (id < L / 2) {
-        assert(iter->valid());
+        DB_ASSERT(iter->valid());
         auto kv = iter->read();
         auto a = kv.first.data();
         check_func(a, numbers[id]);
         iter->next();
       } else {
-        // assert(iter->valid() || i == mx);
-        // assert(!iter->valid() || i != mx);
+        // DB_ASSERT(iter->valid() || i == mx);
+        // DB_ASSERT(!iter->valid() || i != mx);
       }
       int x = a[0] | ((uint32_t)a[1] << 8) | ((uint32_t)a[2] << 16) | ((uint32_t)a[3] << 24);
 
@@ -349,7 +348,7 @@ void test_random_scan_and_count() {
       auto it = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2);
       while (true) {
         if (++cnt > QLEN) break;
-        assert((it != numbers2.end()) == (iter->valid()));
+        DB_ASSERT((it != numbers2.end()) == (iter->valid()));
         if (it == numbers2.end()) break;
         auto a = iter->read().first.data();
         check_func(a, *it);
@@ -369,8 +368,8 @@ void test_lsm_decay() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(1e7, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
+    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 3e7;
     std::vector<int> numbers(L);
     // auto comp2 = +[](int x, int y) {
@@ -409,8 +408,8 @@ void test_delete_range() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(1e10, std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc, nullptr);
+    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -471,7 +470,7 @@ void test_delete_range() {
       ans = std::max(ans, 0);
       int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
       // logger("[ans,output]=", ans, ",", output);
-      assert(ans == output);
+      DB_ASSERT(ans == output);
     }
 
     int QLEN = 1000;
@@ -494,10 +493,10 @@ void test_delete_range() {
           // if (j % 4 == 3) {
           //   // logger("[j,x,goal]=",j,",",x,",",goal);
           // }
-          assert(j % 4 != 3 || x == goal);
+          DB_ASSERT(j % 4 != 3 || x == goal);
           if (j % 4 == 3) {
             if (j > 3) {
-              assert(y == x);
+              DB_ASSERT(y == x);
             }
             y = x;
             x = 0;
@@ -510,7 +509,7 @@ void test_delete_range() {
       auto it = std::lower_bound(numbers2.begin(), numbers2.end(), x, comp2);
       while (true) {
         if (++cnt > QLEN) break;
-        assert((it != numbers2.end()) == (iter->valid()));
+        DB_ASSERT((it != numbers2.end()) == (iter->valid()));
         if (it == numbers2.end()) break;
         auto a = iter->read().first.data();
         // logger("[it]:", *it);
@@ -531,9 +530,9 @@ int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  // test_lsm_store_and_scan();
+  test_lsm_store_and_scan();
   // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
-  test_delete_range();
+  // test_delete_range();
 }

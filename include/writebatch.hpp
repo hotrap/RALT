@@ -1,7 +1,7 @@
 #ifndef VISCNTS_WRITEBATCH_H__
 #define VISCNTS_WRITEBATCH_H__
 
-#include "file.hpp"
+#include "fileenv.hpp"
 #include "key.hpp"
 
 namespace viscnts_lsm {
@@ -90,6 +90,7 @@ class WriteBatch {
   void flush() {
     if (used_size_) {
       auto ret = file_ptr_->write(Slice(data_, used_size_));
+      (void)ret;
       assert(ret == 0);
     }
     used_size_ = 0;

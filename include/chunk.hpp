@@ -4,7 +4,7 @@
 
 #include "key.hpp"
 #include "alloc.hpp"
-#include "file.hpp"
+#include "fileenv.hpp"
 #include "logging.hpp"
 
 namespace viscnts_lsm {

@@ -7,42 +7,30 @@
 #include "rocksdb/comparator.h"
 
 class VisCnts {
- public:
-  class Iter {
-   public:
-    Iter(VisCnts* vc);
-    ~Iter();
-    // The returned pointer will stay valid until the next call to one of
-    // these functions
-    const rocksdb::HotRecInfo* SeekToFirst();
-    const rocksdb::HotRecInfo* Seek(const rocksdb::Slice& key);
-    const rocksdb::HotRecInfo* Next();
+public:
+	VisCnts(const VisCnts&) = delete;
+	~VisCnts();
+	static VisCnts New(
+		const rocksdb::Comparator *ucmp, const char *dir,
+		size_t max_hot_set_size
+	);
+	size_t TierNum();
+	void Access(size_t tier, rocksdb::Slice key, size_t vlen);
+	bool IsHot(size_t tier, rocksdb::Slice key);
+	void TransferRange(
+		size_t target_tier, size_t source_tier, rocksdb::RangeBounds range
+	);
+	size_t RangeHotSize(
+		size_t tier, rocksdb::RangeBounds range
+	);
+	std::unique_ptr<rocksdb::CompactionRouter::Iter> Begin(size_t tier);
+	std::unique_ptr<rocksdb::CompactionRouter::Iter> LowerBound(
+		size_t tier, rocksdb::Slice key
+	);
+private:
+	VisCnts(void *vc) : vc_(vc) {}
 
-   private:
-    void* iter_;
-    rocksdb::HotRecInfo cur_;
-    friend class VisCnts;
-  };
-
-  VisCnts(const rocksdb::Comparator* ucmp, const char* path, bool createIfMissing,
-          boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change);
-  VisCnts(const VisCnts&) = delete;
-  ~VisCnts();
-  void Access(const rocksdb::Slice& key, size_t vlen, double weight);
-  double WeightSum();
-  void Decay();
-  void RangeDel(const rocksdb::Slice& smallest, const rocksdb::Slice& largest);
-	size_t RangeHotSize(const rocksdb::Slice& smallest,
-		const rocksdb::Slice& largest);
-
- private:
-  void add_weight(double delta);
-
-  void* vc_;
-  boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change_;
-
-  std::mutex lock_;
-  double weight_sum_;
+	void* vc_;
 };
 
 #endif  // VISCNTS_N_

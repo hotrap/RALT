@@ -21,107 +21,74 @@ struct SKeyComparatorFromRocksDB {
   SKeyComparatorFromRocksDB() : ucmp(nullptr) {}
   SKeyComparatorFromRocksDB(const rocksdb::Comparator* _ucmp) : ucmp(_ucmp) {}
   int operator()(const viscnts_lsm::SKey& x, const viscnts_lsm::SKey& y) const {
-    if (x.data() == nullptr || y.data() == nullptr) return x.len() - y.len();
     rocksdb::Slice rx(reinterpret_cast<const char*>(x.data()), x.len());
     rocksdb::Slice ry(reinterpret_cast<const char*>(y.data()), y.len());
     return ucmp->Compare(rx, ry);
   }
 };
 
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB>;
-
-struct HotRecInfoAndIter {
-  viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator* iter;
-  VisCntsType* vc;
-  rocksdb::HotRecInfo result;
+class VisCntsIter : public rocksdb::CompactionRouter::Iter {
+  public:
+    VisCntsIter(viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator* it) 
+      : it_(it) {}
+    ~VisCntsIter() {
+      delete it_;
+    }
+    std::unique_ptr<rocksdb::Slice> next() {
+      if (it_->valid()) {
+        auto key = it_->read().first;
+        return std::make_unique<rocksdb::Slice>(reinterpret_cast<const char*>(key.data()), key.len());
+      }
+      return nullptr;
+    }
+  private:
+    viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator* it_;
 };
 
-VisCnts::VisCnts(const rocksdb::Comparator* ucmp, const char* path, bool createIfMissing,
-                 boost::fibers::buffered_channel<std::tuple<>>* notify_weight_change)
-    : notify_weight_change_(notify_weight_change), weight_sum_(0) {
-  vc_ = new VisCntsType(SKeyComparatorFromRocksDB(ucmp), path, 1e100, createIfMissing, notify_weight_change);
-}
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB>;
 
-void VisCnts::Access(const rocksdb::Slice& key, size_t vlen, double weight) {
-  auto vc = reinterpret_cast<VisCntsType*>(vc_);
-  vc->access({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), viscnts_lsm::SValue(weight, vlen)});
+VisCnts VisCnts::New(
+		const rocksdb::Comparator *ucmp, const char *dir,
+		size_t max_hot_set_size) {
+  return VisCnts(new VisCntsType(SKeyComparatorFromRocksDB(ucmp), dir, max_hot_set_size));
 }
-
-double VisCnts::WeightSum() {
-  auto vc = reinterpret_cast<VisCntsType*>(vc_);
-  return vc->weight_sum();
-}
-
-void VisCnts::Decay() {
-  auto vc = reinterpret_cast<VisCntsType*>(vc_);
-  vc->trigger_decay();
-}
-
-void VisCnts::RangeDel(const rocksdb::Slice& L, const rocksdb::Slice& R) {
-  auto vc = reinterpret_cast<VisCntsType*>(vc_);
-  vc->delete_range({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(L.data()), L.size()),
-                    viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(R.data()), R.size())});
-}
-
-size_t VisCnts::RangeHotSize(const rocksdb::Slice& L, const rocksdb::Slice& R) {
-  auto vc = reinterpret_cast<VisCntsType*>(vc_);
-  return vc->range_data_size({viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(L.data()), L.size()),
-                              viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(R.data()), R.size())});
-}
-
-void VisCnts::add_weight(double delta) { std::abort(); }
 
 VisCnts::~VisCnts() {
-  auto vc = reinterpret_cast<VisCntsType*>(vc_);
-  delete vc;
+  delete static_cast<VisCntsType*>(vc_);
 }
 
-VisCnts::Iter::Iter(VisCnts* ac) {
-  viscnts_lsm::logger("[new_iter]");
-  auto vc = reinterpret_cast<VisCntsType*>(ac->vc_);
-  auto ret = new HotRecInfoAndIter();
-  ret->vc = vc;
-  ret->iter = nullptr;
-  iter_ = ret;
+void VisCnts::Access(size_t tier, rocksdb::Slice key, size_t vlen) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  vc->access(tier, {viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), vlen), viscnts_lsm::SValue(1, vlen)});
+}
+bool VisCnts::IsHot(size_t tier, rocksdb::Slice key) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->is_hot(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
+}
+void VisCnts::TransferRange(
+  size_t target_tier, size_t source_tier, rocksdb::RangeBounds range
+) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  auto lkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.start.user_key.data()), range.start.user_key.size());
+  auto rkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.end.user_key.data()), range.end.user_key.size());
+  vc->transfer_range(source_tier, target_tier, {lkey, rkey}, {range.start.excluded, range.end.excluded});
+}
+size_t VisCnts::RangeHotSize(
+  size_t tier, rocksdb::RangeBounds range
+) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  auto lkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.start.user_key.data()), range.start.user_key.size());
+  auto rkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.end.user_key.data()), range.end.user_key.size());
+  return vc->range_data_size(tier, {lkey, rkey});
+}
+std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::Begin(size_t tier) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return std::unique_ptr<rocksdb::CompactionRouter::Iter>(new VisCntsIter(vc->seek_to_first(tier)));
+}
+std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::LowerBound(
+  size_t tier, rocksdb::Slice key
+) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return std::unique_ptr<rocksdb::CompactionRouter::Iter>(new VisCntsIter(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
 }
 
-const rocksdb::HotRecInfo* VisCnts::Iter::SeekToFirst() {
-  viscnts_lsm::logger("[seek to first]");
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
-  if (!ac->iter) delete ac->iter;
-  ac->iter = ac->vc->seek_to_first();
-  if (!ac->iter->valid()) return nullptr;
-  auto [key, value] = ac->iter->read();
-  ac->result =
-      rocksdb::HotRecInfo{.slice = rocksdb::Slice(reinterpret_cast<const char*>(key.data()), key.len()), .count = value.counts, .vlen = value.vlen};
-  return &ac->result;
-}
-
-const rocksdb::HotRecInfo* VisCnts::Iter::Seek(const rocksdb::Slice& key) {
-  viscnts_lsm::logger("[seek]");
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
-  if (!ac->iter) delete ac->iter;
-  ac->iter = ac->vc->seek(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
-  if (!ac->iter->valid()) return nullptr;
-  auto [rkey, rvalue] = ac->iter->read();
-  ac->result = rocksdb::HotRecInfo{
-      .slice = rocksdb::Slice(reinterpret_cast<const char*>(rkey.data()), rkey.len()), .count = rvalue.counts, .vlen = rvalue.vlen};
-  return &ac->result;
-}
-
-const rocksdb::HotRecInfo* VisCnts::Iter::Next() {
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
-  ac->iter->next();
-  if (!ac->iter->valid()) return nullptr;
-  auto [rkey, rvalue] = ac->iter->read();
-  ac->result = rocksdb::HotRecInfo{
-      .slice = rocksdb::Slice(reinterpret_cast<const char*>(rkey.data()), rkey.len()), .count = rvalue.counts, .vlen = rvalue.vlen};
-  return &ac->result;
-}
-
-VisCnts::Iter::~Iter() {
-  viscnts_lsm::logger("[delete iter]");
-  auto ac = reinterpret_cast<HotRecInfoAndIter*>(iter_);
-  if (ac->iter) delete ac->iter;
-  delete ac;
-}

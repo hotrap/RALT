@@ -58,7 +58,7 @@ class IndSlice {
     if(!a) {
       len_ = 0;
     } else if (a_ == nullptr || a_len_ < len) {
-      if(a_) delete a_;
+      if(a_) delete[] a_;
       a_ = new uint8_t[a_len_ = len_ = len];
     } else {
       len_ = len;
@@ -89,7 +89,7 @@ class IndSlice {
   IndSlice& operator=(IndSlice&& s) noexcept {
     // printf("IndSlice&&=(%lld)!", a_);
     // fflush(stdout);
-    if (a_) delete a_;
+    if (a_) delete[] a_;
     a_ = s.a_;
     len_ = s.len_;
     a_len_ = s.a_len_;
@@ -116,7 +116,7 @@ class IndSlice {
   ~IndSlice() {
     // printf("~IndSlice(%lld)!", a_);
     // fflush(stdout);
-    if (a_) delete a_;
+    if (a_) delete[] a_;
   }
   size_t size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }

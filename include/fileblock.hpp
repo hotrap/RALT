@@ -2,7 +2,7 @@
 #define VISCNTS_FILEBLOCK_H__
 
 #include "alloc.hpp"
-#include "file.hpp"
+#include "fileenv.hpp"
 #include "chunk.hpp"
 
 namespace viscnts_lsm {
@@ -276,6 +276,28 @@ class FileBlock {     // process blocks in a file
         l = mid + 1;
     }
     return ret;
+  }
+
+  bool search_key(const SKey& key) const {
+    int l = 0, r = handle_.counts - 1;
+    int ret = -1;
+    SeekIterator it = SeekIterator(*this);
+    KV _key;
+    while (l <= r) {
+      auto mid = (l + r) >> 1;
+      it.seek_and_read(mid, _key);
+      auto result = comp_(_key.key(), key);
+      // compare two keys
+      if (result <= 0) {
+        if (result == 0) {
+          return true;
+        }
+        l = mid + 1;
+      } else
+        r = mid - 1;
+    }
+    return false;
+
   }
 
   // seek with the offset storing the offset of the key.

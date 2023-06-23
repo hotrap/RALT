@@ -247,6 +247,7 @@ class UnsortedBufferPtrs {
   std::vector<UnsortedBuffer *> buf_q_;
   size_t buffer_size_;
   size_t max_q_size_;
+  bool terminal_signal_{false};
 
  public:
   UnsortedBufferPtrs(size_t buffer_size, size_t max_q_size) : buffer_size_(buffer_size), max_q_size_(max_q_size) {
@@ -297,23 +298,18 @@ class UnsortedBufferPtrs {
 
   UnsortedBuffer *this_buf() { return buf.load(std::memory_order_relaxed); }
 
-  void notify_cv() { cv_.notify_all(); }
+  void terminate() { terminal_signal_ = 1; cv_.notify_all(); }
 
   std::vector<UnsortedBuffer *> wait_and_get() {
-    if (buf_q_.size()) {
-      std::unique_lock lck_(m_);
-      auto ret = std::move(buf_q_);
-      buf_q_.clear();
-      return ret;
-    }
     std::unique_lock lck_(m_);
-    cv_.wait(lck_);
+    cv_.wait(lck_, [&](){ return buf_q_.size() || terminal_signal_; });
     // It may return empty queue.
     // Because I must let it return to terminate the compact thread.
     auto ret = std::move(buf_q_);
     buf_q_.clear();
     return ret;
   }
+
   void append_and_notify(const SKey &key, const SValue &value) {
     if (!append(key, value)) {
       cv_.notify_one();
@@ -328,9 +324,13 @@ class UnsortedBufferPtrs {
   }
 
   int size() {
-    std::unique_lock lck_(m_);
     return buf_q_.size();
   }
+
+  std::mutex& get_mutex() {
+    return m_;
+  }
+
 };
 
 }  // namespace viscnts_lsm

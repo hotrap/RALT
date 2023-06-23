@@ -42,7 +42,7 @@ class MemtableAllocator : public BaseAllocator {
 class DefaultAllocator : public BaseAllocator {
  public:
   uint8_t* allocate(size_t size) override { return new uint8_t[size]; }
-  void release(uint8_t* ptr) override { delete ptr; }
+  void release(uint8_t* ptr) override { delete[] ptr; }
 };
 
 
