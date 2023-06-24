@@ -8,8 +8,6 @@
 
 #include <cassert>
 
-namespace viscnts_lsm {
-
 template <typename... Args>
 void logger(Args&&... a) {
   static std::mutex logger_m_;
@@ -88,6 +86,18 @@ void __LOG(int level, const char *file, const char *func, int line,
   pthread_mutex_unlock(&lock);
 }
 
-}
+class StopWatch {
+ public:
+  StopWatch() { start_ = std::chrono::system_clock::now(); }
+  double GetTimeInSeconds() {
+    auto end = std::chrono::system_clock::now();
+    std::chrono::duration<double> diff = end - start_;
+    return diff.count();
+  }
+  void Reset() { start_ = std::chrono::system_clock::now(); }
+
+ private:
+  std::chrono::time_point<std::chrono::system_clock> start_;
+};
 
 #endif

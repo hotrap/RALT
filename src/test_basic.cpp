@@ -90,8 +90,6 @@ void test_unordered_buf() {
             continue;
           }
           for (auto& buf : buf_q_) {
-            while (!buf->safe())
-              ;
             buf->sort(comp);
             UnsortedBuffer::Iterator iter(*buf);
             while (iter.valid()) {
@@ -184,13 +182,13 @@ void test_lsm_store_and_scan() {
   {
     EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                   std::make_unique<DefaultAllocator>(), comp);
-    int L = 3e8;
+    int L = 1e8;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
-    // std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
     start = std::chrono::system_clock::now();
     std::vector<std::thread> threads;
-    int TH = 1;
+    int TH = 4;
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
           [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*>& tree) {
@@ -205,10 +203,10 @@ void test_lsm_store_and_scan() {
     }
     for (auto& a : threads) a.join();
     threads.clear();
-    // std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
 
     auto _numbers = numbers;
-    // std::shuffle(_numbers.begin(), _numbers.end(), std::mt19937(std::random_device()()));
+    std::shuffle(_numbers.begin(), _numbers.end(), std::mt19937(std::random_device()()));
 
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
@@ -530,8 +528,8 @@ int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  test_lsm_store_and_scan();
-  // test_random_scan_and_count();
+  // test_lsm_store_and_scan();
+  test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
   // test_delete_range();

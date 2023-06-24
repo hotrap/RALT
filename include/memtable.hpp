@@ -161,24 +161,21 @@ class MemTable : public RefCounts {
 
 class UnsortedBuffer {
   std::atomic<size_t> used_size_;
-  std::atomic<size_t> commmited_size_;
   size_t buffer_size_;
   uint8_t *data_;
   std::vector<std::pair<SKey, const uint8_t *>> sorted_result_;
 
  public:
-  UnsortedBuffer(size_t size) : used_size_(0), commmited_size_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
+  UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
   UnsortedBuffer(const UnsortedBuffer &buf) {
     used_size_ = buf.used_size_.load();
     buffer_size_ = buf.buffer_size_;
     data_ = new uint8_t[buffer_size_];
     sorted_result_ = buf.sorted_result_;
-    commmited_size_ = buf.commmited_size_.load();
     memcpy(data_, buf.data_, buffer_size_);
   }
   UnsortedBuffer(UnsortedBuffer &&buf) {
     used_size_ = buf.used_size_.load();
-    commmited_size_ = buf.commmited_size_.load();
     buffer_size_ = buf.buffer_size_;
     data_ = buf.data_;
     sorted_result_ = std::move(buf.sorted_result_);
@@ -195,14 +192,13 @@ class UnsortedBuffer {
       return false;
     }
     *reinterpret_cast<SValue *>(key.write(data_ + pos)) = value;
-    commmited_size_.fetch_add(size, std::memory_order_relaxed);
     return true;
   }
 
   template <typename KeyComp>
   void sort(KeyComp comp) {
     sorted_result_.clear();
-    size_t limit = std::min(commmited_size_.load(std::memory_order_relaxed), buffer_size_);
+    size_t limit = used_size_;
     auto comp_func = [comp](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
       return comp(x.first, y.first) < 0;
     };
@@ -219,10 +215,8 @@ class UnsortedBuffer {
     auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
     memset(data_, 0, limit);
     used_size_ = 0;
-    commmited_size_ = 0;
   }
-  size_t size() const { return commmited_size_; }
-  bool safe() const { return commmited_size_ == used_size_; }
+  size_t size() const { return used_size_; }
   class Iterator {
     std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_;
     std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_end_;
@@ -318,8 +312,10 @@ class UnsortedBufferPtrs {
 
   void flush() {
     std::unique_lock lck_(m_);
-    buf_q_.push_back(buf);
-    buf = new UnsortedBuffer(buffer_size_);
+    if (buf.load()->size() > 0) {
+      buf_q_.push_back(buf);
+      buf = new UnsortedBuffer(buffer_size_);  
+    }
     cv_.notify_one();
   }
 

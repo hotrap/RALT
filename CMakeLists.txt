@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.2)
 project(viscnts)
+set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_CXX_FLAGS_MYREL "-march=native -g")
 
@@ -7,17 +8,15 @@ IF (NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE "Relwithdebinfo" CACHE STRING
         "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
 ENDIF()
-add_executable(test src/test.cpp src/test_splay.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
+add_executable(test_basic src/test_basic.cpp src/test_splay.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
+add_executable(test_viscnts src/viscnts.cpp src/test_viscnts.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
 add_library(${PROJECT_NAME} SHARED src/viscnts.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
 
 add_subdirectory(third_party/fmt)
 
-target_link_libraries(test PRIVATE pthread boost_fiber fmt)
-target_link_libraries(${PROJECT_NAME} PRIVATE pthread boost_fiber fmt)
+target_link_libraries(test_basic PRIVATE pthread boost_fiber fmt)
+target_link_libraries(test_viscnts PRIVATE pthread boost_fiber fmt ${ROCKSDB_LIB})
+target_link_libraries(${PROJECT_NAME} PRIVATE pthread boost_fiber)
 
 
-include_directories(${PROJECT_SOURCE_DIR}/include)
-include_directories(${ROCKSDB_INCLUDE})
-
-target_compile_features(test PRIVATE cxx_std_17)
-target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
+include_directories(${PROJECT_SOURCE_DIR}/include ${ROCKSDB_INCLUDE} third_party/fmt/include)

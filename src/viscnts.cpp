@@ -35,6 +35,11 @@ class VisCntsIter : public rocksdb::CompactionRouter::Iter {
       delete it_;
     }
     std::unique_ptr<rocksdb::Slice> next() {
+      if (is_first_) {
+        is_first_ = false;
+      } else {
+        it_->next();
+      }
       if (it_->valid()) {
         auto key = it_->read().first;
         return std::make_unique<rocksdb::Slice>(reinterpret_cast<const char*>(key.data()), key.len());
@@ -42,6 +47,7 @@ class VisCntsIter : public rocksdb::CompactionRouter::Iter {
       return nullptr;
     }
   private:
+    bool is_first_{true};
     viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator* it_;
 };
 
@@ -59,7 +65,7 @@ VisCnts::~VisCnts() {
 
 void VisCnts::Access(size_t tier, rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  vc->access(tier, {viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), vlen), viscnts_lsm::SValue(1, vlen)});
+  vc->access(tier, {viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), viscnts_lsm::SValue(1, vlen)});
 }
 bool VisCnts::IsHot(size_t tier, rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
@@ -92,3 +98,11 @@ std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::LowerBound(
   return std::unique_ptr<rocksdb::CompactionRouter::Iter>(new VisCntsIter(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
 }
 
+size_t VisCnts::TierNum() {
+  return 2;
+}
+
+void VisCnts::Flush() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  vc->flush();
+}

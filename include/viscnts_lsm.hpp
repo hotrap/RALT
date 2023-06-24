@@ -564,7 +564,6 @@ class EstimateLSM {
       auto flush_func = [](FileName* filename, Env* env, KeyCompT comp, UnsortedBuffer* buf, std::mutex& mu, BaseAllocator* file_alloc,
                            std::vector<std::shared_ptr<Level>>& ret_vectors) {
         Compaction worker(filename, env, comp);
-        assert(buf->safe());
         buf->sort(comp);
         auto iter = std::make_unique<UnsortedBuffer::Iterator>(*buf);
         auto [files, decay_size] = worker.flush(*iter);
@@ -928,8 +927,8 @@ class EstimateLSM {
   void flush_thread() {
     while (!terminate_signal_) {
       flush_thread_state_ = 0;
-      auto buf_q_ = terminate_signal_ ? bufs_.get() : bufs_.wait_and_get();
-      if (buf_q_.empty() && terminate_signal_) return;
+      auto buf_q_ = bufs_.wait_and_get();
+      if (terminate_signal_) return;
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
       auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
@@ -1005,9 +1004,10 @@ class VisCnts {
   double decay_limit_;
 
  public:
+  // Use different file path for two trees.
   VisCnts(KeyCompT comp, const std::string& path, double delta)
     : tree{std::make_unique<EstimateLSM<KeyCompT>>(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path), std::make_unique<DefaultAllocator>(), comp), 
-          std::make_unique<EstimateLSM<KeyCompT>>(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path), std::make_unique<DefaultAllocator>(), comp)},
+          std::make_unique<EstimateLSM<KeyCompT>>(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path + "a"), std::make_unique<DefaultAllocator>(), comp)},
       comp_(comp), decay_limit_(delta) {}
   void access(int tier, const std::pair<SKey, SValue>& kv) { tree[tier]->append(kv.first, kv.second); check_decay(); }
   auto delete_range(int tier, const std::pair<SKey, SKey>& range) { return tree[tier]->delete_range(range); }
@@ -1040,6 +1040,9 @@ class VisCnts {
       tree[0]->trigger_decay();
       tree[1]->trigger_decay();
     }
+  }
+  void flush() {
+    for(auto& a : tree) a->all_flush();
   }
 };
 

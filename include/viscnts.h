@@ -27,6 +27,7 @@ public:
 	std::unique_ptr<rocksdb::CompactionRouter::Iter> LowerBound(
 		size_t tier, rocksdb::Slice key
 	);
+	void Flush();
 private:
 	VisCnts(void *vc) : vc_(vc) {}
 
