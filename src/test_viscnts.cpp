@@ -86,7 +86,7 @@ void parallel_run(int TH, F&& func) {
 
 void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
-  size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
@@ -134,6 +134,84 @@ void test_store_and_scan() {
   DB_INFO("random scan end. Used: {} s", sw.GetTimeInSeconds());
 }
 
+void test_decay_simple() {
+  // all keys are distinct.
+  size_t max_hot_set_size = 1e7;
+  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  std::mt19937_64 gen(0x202306241834);
+  auto data = gen_testdata(N, gen);
+  StopWatch sw;
+  input_all(vc, 0, data, TH, vlen);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  
+  auto iter = vc.Begin(0);
+  size_t sum = 0;
+  while (true) {
+    auto result = iter->next();
+    if (result) {
+      sum += vlen + result->size();
+    } else {
+      break;
+    }
+  }
+  DB_INFO("{}, {}", sum, max_hot_set_size);
+  DB_ASSERT(sum <= max_hot_set_size);
+}
+
+void test_transfer_range() {
+  size_t max_hot_set_size = 1e18;
+  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  std::mt19937_64 gen(0x202306242118);
+  auto data0 = gen_testdata(N, gen);
+  auto data1 = gen_testdata(N, gen);
+  StopWatch sw;
+  input_all(vc, 0, data0, TH, vlen);
+  input_all(vc, 1, data1, TH, vlen);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();
+  rocksdb::RangeBounds range;
+  char ax[30], ay[30];
+  range.start.user_key = convert_to_slice(ax, 0, 10);
+  range.start.excluded = false;
+  range.end.user_key = convert_to_slice(ay, 1e18, 10);
+  range.end.excluded = false;
+  vc.TransferRange(0, 1, range);
+  vc.Flush();
+  DB_INFO("transfer end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();
+
+  char a[30];
+  auto data_ans = data0;
+  for (auto [a0, a0len] : data1) {
+    if (default_comp.Compare(range.start.user_key, convert_to_slice(a, a0, a0len)) <= 0
+        && default_comp.Compare(convert_to_slice(a, a0, a0len), range.end.user_key) <= 0) {
+      data_ans.push_back({a0, a0len});
+    }
+  }
+  sort_data(data_ans);
+  DB_INFO("sort end. Used: {} s. Result set size: {}", sw.GetTimeInSeconds(), data_ans.size());
+  sw.Reset();
+
+  auto iter = vc.Begin(0);
+  auto ans_iter = data_ans.begin();
+  while (true) {
+    auto result = iter->next();
+    if (result) {
+      DB_ASSERT(ans_iter != data_ans.end());
+      DB_ASSERT(ans_iter->first == convert_to_int(*result));
+      ans_iter++;
+    } else {
+      DB_ASSERT(ans_iter == data_ans.end());
+      break;
+    }
+  }
+
+}
+
 int main() {
-  test_store_and_scan();
+  // test_store_and_scan();
+  // test_decay_simple();
+  test_transfer_range();
 }

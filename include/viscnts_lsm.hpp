@@ -116,7 +116,7 @@ class Compaction {
   // files_ is used to get global file name
   // env_ is used to get global environment
   // flag_ means whether lst_value_ is valid
-  // lst_value_ is the last value appended to builder_
+  // lst_value_ is the last key value pair appended to builder_
   // vec_newfiles_ stores the information of new files.
   // - the ranges of files
   // - the size of files
@@ -176,34 +176,34 @@ class Compaction {
     real_size_ = 0;
     lst_real_size_ = 0;
     int CNT = 0;
-    RefDataKey lst_kv;
     // read first kv.
     {
       auto L = left.read();
-      lst_kv = builder_.reserve_kv(DataKey(L.first, L.second));
+      lst_value_ = {L.first, L.second};
       left.next();
     }
     while (left.valid()) {
       CNT++;
       auto L = left.read();
-      if (comp_(lst_kv.key(), L.first) == 0) {
-        *lst_kv.value() += L.second;
+      if (comp_(lst_value_.first.ref(), L.first) == 0) {
+        lst_value_.second += L.second;
       } else {
         // only store those filter returning true.
-        if (filter_func(lst_kv)) {
-          real_size_ += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value()));
-          builder_.set_lstkey(lst_kv);
+        if (filter_func(lst_value_)) {
+          real_size_ += _calc_decay_value(lst_value_);
+          builder_.append(lst_value_);
           _divide_file(DataKey(L.first, L.second).size());
         }
-        lst_kv = builder_.reserve_kv(DataKey(L.first, L.second));
+        lst_value_ = {L.first, L.second};
       }
       left.next();
     }
     // store the last kv.
     {
-      builder_.set_lstkey(lst_kv);
-      if (filter_func(lst_kv)) {
-        real_size_ += _calc_decay_value(std::make_pair(lst_kv.key(), *lst_kv.value())); 
+      builder_.set_lstkey(lst_value_.first);
+      if (filter_func(lst_value_)) {
+        builder_.append(lst_value_);
+        real_size_ += _calc_decay_value(lst_value_); 
       } 
     }
     _end_new_file();
@@ -212,14 +212,14 @@ class Compaction {
 
   template <typename TIter>
   auto decay1(TIter& iters) {
-    return flush(iters, [this](const auto& kv){
-      kv.value()->counts *= decay_prob_;
-      if (kv.value()->counts < 1) {
+    return flush(iters, [this](auto& kv){
+      kv.second.counts *= decay_prob_;
+      if (kv.second.counts < 1) {
         std::uniform_real_distribution<> dis(0, 1.);
-        if (dis(rndgen_) < kv.value()->counts) {
+        if (dis(rndgen_) < kv.second.counts) {
           return false;
         }
-        kv.value()->counts = 1;
+        kv.second.counts = 1;
       }
       return true;
     });
@@ -227,16 +227,17 @@ class Compaction {
 
   template<typename TIter>
   auto flush(TIter& left) {
-    return flush(left, [](const auto&) { return true; });
+    return flush(left, [](auto&) { return true; });
   }
 
  private:
   template <typename T>
   double _calc_decay_value(const std::pair<T, SValue>& kv) {
-    return (kv.first.len() + kv.second.vlen) * std::min(kv.second.counts * .5, 1.);
+    return kv.first.len() + kv.second.vlen;
   }
   void _divide_file(size_t size) {
     if (builder_.kv_size() + size > kSSTable) {
+      builder_.set_lstkey(lst_value_.first);
       _end_new_file();
       _begin_new_file();
     }
@@ -1002,6 +1003,7 @@ class VisCnts {
   std::unique_ptr<EstimateLSM<KeyCompT>> tree[2];
   KeyCompT comp_;
   double decay_limit_;
+  std::mutex decay_m_;
 
  public:
   // Use different file path for two trees.
@@ -1023,22 +1025,31 @@ class VisCnts {
     if (comp_(range.first, range.second) > 0) return;
     auto iter = tree[src_tier]->seek(range.first);
     if (excluded.first) {
-      iter->next();
+      auto L = iter->read();
+      if (comp_(L.first, range.first) == 0) {
+        iter->next();
+      }
     }
+    int cnt = 0;
     while(iter->valid()) {
       auto L = iter->read();
       if ((excluded.second && (comp_(L.first, range.second) >= 0)) || (!excluded.second && comp_(L.first, range.second) > 0)) {
         break;
       }
+      cnt++;
       tree[dst_tier]->append(L.first, L.second);
       iter->next();
     }
+    printf("[%d]",cnt);
     delete iter;
   }
   void check_decay() {
     if (weight_sum(0) + weight_sum(1) > decay_limit_) {
-      tree[0]->trigger_decay();
-      tree[1]->trigger_decay();
+      std::unique_lock lck(decay_m_);
+      if (weight_sum(0) + weight_sum(1) > decay_limit_) {
+        tree[0]->trigger_decay();
+        tree[1]->trigger_decay();  
+      }
     }
   }
   void flush() {

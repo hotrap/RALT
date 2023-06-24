@@ -233,8 +233,8 @@ class SSTBuilder {
   }
 
   template<typename T>
-  void set_lstkey(const T& kv) {
-    lst_key = kv.key();
+  void set_lstkey(const T& key) {
+    lst_key = key;
   }
 
   void make_offsets(const std::vector<uint32_t>& offsets) {
