@@ -106,3 +106,8 @@ void VisCnts::Flush() {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->flush();
 }
+
+size_t VisCnts::GetHotSize(size_t tier) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->get_hot_size(tier);
+}

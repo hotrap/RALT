@@ -8,17 +8,17 @@ namespace viscnts_lsm {
 using SKey = Slice;
 using IndSKey = IndSlice;
 
-// inline int operator<=(const SKey& A, const SKey& B) {
+// inline int operator<=(SKey A, SKey B) {
 //   if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
 //   return memcmp(A.data(), B.data(), A.len()) <= 0;
 // }
 
-// inline int operator<=(const IndSKey& A, const SKey& B) { return A.ref() <= B; }
-// inline int operator<=(const SKey& A, const IndSKey& B) { return A <= B.ref(); }
+// inline int operator<=(const IndSKey& A, SKey B) { return A.ref() <= B; }
+// inline int operator<=(SKey A, const IndSKey& B) { return A <= B.ref(); }
 // inline int operator<=(const IndSKey& A, const IndSKey& B) { return A.ref() <= B.ref(); }
 
-// inline int operator==(const IndSKey& A, const SKey& B) { return A.ref() == B; }
-// inline int operator==(const SKey& A, const IndSKey& B) { return A == B.ref(); }
+// inline int operator==(const IndSKey& A, SKey B) { return A.ref() == B; }
+// inline int operator==(SKey A, const IndSKey& B) { return A == B.ref(); }
 // inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
 struct SValue {
@@ -34,11 +34,11 @@ inline SValue& operator+=(SValue& a, const SValue& v) {
 }
 
 struct SKeyComparator {
-  int operator()(const SKey& A, const SKey& B) const {
+  int operator()(SKey A, SKey B) const {
     if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
     return memcmp(A.data(), B.data(), A.len());
   }
-  int is_equal(const SKey& A, const SKey& B) const {
+  int is_equal(SKey A, SKey B) const {
     if (A.len() != B.len()) return -1;
     return memcmp(A.data(), B.data(), A.len());
   }

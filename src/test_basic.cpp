@@ -30,7 +30,7 @@ void test_files() {
     builders[i].finish();
   }
 
-  auto comp = +[](const SKey& a, const SKey& b) {
+  auto comp = +[](SKey a, SKey b) {
     auto ap = a.data(), bp = b.data();
     uint32_t x = ap[0] | ((uint32_t)ap[1] << 8) | ((uint32_t)ap[2] << 16) | ((uint32_t)ap[3] << 24);
     uint32_t y = bp[0] | ((uint32_t)bp[1] << 8) | ((uint32_t)bp[2] << 16) | ((uint32_t)bp[3] << 24);
@@ -72,7 +72,7 @@ void test_unordered_buf() {
   std::vector<std::thread> v;
   std::vector<std::pair<IndSKey, SValue>> result;
 
-  auto comp = +[](const SKey& a, const SKey& b) {
+  auto comp = +[](SKey a, SKey b) {
     auto ap = a.data(), bp = b.data();
     uint32_t x = ap[0] | ((uint32_t)ap[1] << 8) | ((uint32_t)ap[2] << 16) | ((uint32_t)ap[3] << 24);
     uint32_t y = bp[0] | ((uint32_t)bp[1] << 8) | ((uint32_t)bp[2] << 16) | ((uint32_t)bp[3] << 24);
@@ -172,7 +172,7 @@ void test_lsm_store() {
 void test_lsm_store_and_scan() {
   using namespace viscnts_lsm;
 
-  auto comp = +[](const SKey& a, const SKey& b) {
+  auto comp = +[](SKey a, SKey b) {
     auto ap = a.data(), bp = b.data();
     uint32_t x = ap[0] | ((uint32_t)ap[1] << 8) | ((uint32_t)ap[2] << 16) | ((uint32_t)ap[3] << 24);
     uint32_t y = bp[0] | ((uint32_t)bp[1] << 8) | ((uint32_t)bp[2] << 16) | ((uint32_t)bp[3] << 24);
@@ -451,7 +451,7 @@ void test_delete_range() {
         }
         numbers2.erase(L, R);
         logger("[x,y]=", x, ",", y);
-        tree.delete_range({SKey(a, 12), SKey(b, 12)});
+        tree.delete_range({SKey(a, 12), SKey(b, 12)}, {1, 1});
       }
     }
 

@@ -7,7 +7,7 @@
 
 namespace viscnts_lsm {
 
-static uint32_t BloomHash(const SKey& key) { return Hash(reinterpret_cast<const char*>(key.data()), key.size(), 0xbc9f1d34); }
+static uint32_t BloomHash(SKey key) { return Hash(reinterpret_cast<const char*>(key.data()), key.size(), 0xbc9f1d34); }
 
 // class BloomFilter {
 //  private:
@@ -39,7 +39,7 @@ static uint32_t BloomHash(const SKey& key) { return Hash(reinterpret_cast<const 
 //       }
 //     }
 //   }
-//   bool find(const SKey& key, const Slice& bloom_bits) {
+//   bool find(SKey key, const Slice& bloom_bits) {
 //     if (bloom_bits.size() < 4) return false;
 //     const size_t k = *(reinterpret_cast<size_t*>(bloom_bits.data()));
 //     if (k > 30) return true;

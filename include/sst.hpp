@@ -63,7 +63,7 @@ class ImmutableFile {
   }
 
   // seek the first key that >= key, but only seek index block.
-  typename FileBlock<DataKey, KeyCompT>::EnumIterator estimate_seek(const SKey& key) {
+  typename FileBlock<DataKey, KeyCompT>::EnumIterator estimate_seek(SKey key) {
     if (comp_(range_.second.ref(), key) < 0) return {};
     auto id = index_block_.upper_offset(key);
     if (id == -1) return {};
@@ -71,15 +71,15 @@ class ImmutableFile {
   }
 
   // seek the first key that >= key
-  typename FileBlock<DataKey, KeyCompT>::EnumIterator seek(const SKey& key) const {
+  typename FileBlock<DataKey, KeyCompT>::EnumIterator seek(SKey key) const {
     if (comp_(range_.second.ref(), key) < 0) return {};
-    auto id = index_block_.lower_offset(key);
+    auto id = index_block_.get_block_id_from_index(key);
     if (id == -1) return data_block_.seek_with_id(0);
-    id = data_block_.upper_key(key, id, id + kIndexChunkSize - 1);
+    id = data_block_.lower_key(key, id, id + kIndexChunkSize - 1);
     return data_block_.seek_with_id(id);
   }
 
-  std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range) const {
+  std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) const {
     int retl = 0, retr = 0;
     auto& [L, R] = range;
     if (comp_(range_.second.ref(), L) < 0)
@@ -87,22 +87,28 @@ class ImmutableFile {
     else if (comp_(L, range_.first.ref()) < 0)
       retl = 0;
     else {
-      auto id = index_block_.lower_offset(L);
-      if (id == -1)
+      auto id = index_block_.get_block_id_from_index(L);
+      if (id == -1) {
         retl = 0;
-      else
-        retl = data_block_.upper_key(L, id, id + kIndexChunkSize - 1);
+      } else {
+        retl = !exclude_info.first 
+              ? data_block_.lower_key(L, id, id + kIndexChunkSize - 1)
+              : data_block_.upper_key(L, id, id + kIndexChunkSize - 1);
+      }
     }
     if (comp_(range_.second.ref(), R) <= 0)
       retr = data_block_.counts();
     else if (comp_(R, range_.first.ref()) < 0)
       retr = 0;
     else {
-      auto id = index_block_.lower_offset(R);
-      if (id == -1)
+      auto id = index_block_.get_block_id_from_index(R);
+      if (id == -1) {
         retr = 0;
-      else
-        retr = data_block_.upper_key_not_eq(R, id, id + kIndexChunkSize - 1);
+      } else {
+        retr = !exclude_info.second
+              ? data_block_.upper_key(R, id, id + kIndexChunkSize - 1)
+              : data_block_.lower_key(R, id, id + kIndexChunkSize - 1);
+      }
     }
 
     return {retl, retr};
@@ -110,11 +116,11 @@ class ImmutableFile {
 
   // calculate number of elements in [L, R]
   int range_count(const std::pair<SKey, SKey>& range) {
-    auto [retl, retr] = rank_pair(range);
+    auto [retl, retr] = rank_pair(range, {1, 1});
     return retr - retl;
   }
 
-  bool in_range(const SKey& key) {
+  bool in_range(SKey key) {
     auto& [l, r] = range_;
     return comp_(l.ref(), key) <= 0 && comp_(key, r.ref()) <= 0;
   }
@@ -146,7 +152,7 @@ class SSTIterator {
  public:
   SSTIterator() : file_(nullptr) {}
   SSTIterator(const ImmutableFile<KeyCompT>* file) : file_(file), file_block_iter_(file->data_block(), 0, 0) {}
-  SSTIterator(const ImmutableFile<KeyCompT>* file, const SKey& key) : file_(file), file_block_iter_(file->seek(key)) {}
+  SSTIterator(const ImmutableFile<KeyCompT>* file, SKey key) : file_(file), file_block_iter_(file->seek(key)) {}
   SSTIterator(SSTIterator&& it) noexcept {
     file_ = it.file_;
     file_block_iter_ = std::move(it.file_block_iter_);

@@ -28,6 +28,7 @@ public:
 		size_t tier, rocksdb::Slice key
 	);
 	void Flush();
+	size_t GetHotSize(size_t tier);
 private:
 	VisCnts(void *vc) : vc_(vc) {}
 

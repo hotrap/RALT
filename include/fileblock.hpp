@@ -206,7 +206,7 @@ class FileBlock {     // process blocks in a file
   bool is_empty_key(uint32_t offset, const Chunk& c) const { return *reinterpret_cast<uint32_t*>(c.data(offset)) == 0; }
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
-  uint32_t upper_offset(const SKey& key) const {
+  uint32_t upper_offset(SKey key) const {
     int l = 0, r = handle_.counts - 1;
     uint32_t ret = -1;
     SeekIterator it = SeekIterator(*this);
@@ -225,7 +225,7 @@ class FileBlock {     // process blocks in a file
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
   // Find the biggest _key that _key <= key.
-  int lower_offset(const SKey& key) const {
+  int get_block_id_from_index(SKey key) const {
     int l = 0, r = handle_.counts - 1;
     int ret = -1;
     SeekIterator it = SeekIterator(*this);
@@ -243,7 +243,7 @@ class FileBlock {     // process blocks in a file
   }
 
   // it calculates the smallest No. of the key that >= input key.
-  uint32_t upper_key(const SKey& key, uint32_t L, uint32_t R) const {
+  uint32_t lower_key(SKey key, uint32_t L, uint32_t R) const {
     int l = L, r = std::min(R, handle_.counts - 1);
     uint32_t ret = r + 1;
     SeekIterator it = SeekIterator(*this);
@@ -261,7 +261,7 @@ class FileBlock {     // process blocks in a file
   }
 
   // it calculates the smallest No. of the key that > input key.
-  uint32_t upper_key_not_eq(const SKey& key, uint32_t L, uint32_t R) const {
+  uint32_t upper_key(SKey key, uint32_t L, uint32_t R) const {
     int l = L, r = std::min(R, handle_.counts - 1);
     uint32_t ret = r + 1;
     SeekIterator it = SeekIterator(*this);
@@ -278,7 +278,7 @@ class FileBlock {     // process blocks in a file
     return ret;
   }
 
-  bool search_key(const SKey& key) const {
+  bool search_key(SKey key) const {
     int l = 0, r = handle_.counts - 1;
     int ret = -1;
     SeekIterator it = SeekIterator(*this);
