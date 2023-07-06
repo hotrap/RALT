@@ -277,7 +277,7 @@ long long write4(int keylen, string key) {
     l.append(keylen, std::move(s));
     sv.tree.push_back(l);
     // printf("[%.6lf]", sv.decay_size() );
-    if (sv.tree.size() < 4 && sv.lastl.size() < sv.size() * (1 - kratio) && sv.decay_size() >= kdecay) {
+    if (sv.lastl.size() < sv.size() * (1 - kratio) && sv.decay_size() >= kdecay) {
       puts("major compaction");
       vector<int> v;
       printf("<%d>", sv.tree.size());

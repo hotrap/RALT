@@ -9,11 +9,13 @@
 #include <cassert>
 
 template <typename... Args>
-void logger(Args&&... a) {
+void __logger(Args&&... a) {
   static std::mutex logger_m_;
   std::unique_lock lck_(logger_m_);
   (std::cerr << ... << a) << std::endl;
 }
+
+#define logger(...) __logger(__FILE__, "@",  __LINE__, ":", __VA_ARGS__)
 
 template <typename... Args>
 void logger_printf(const char* str, Args&&... a) {
@@ -23,6 +25,7 @@ void logger_printf(const char* str, Args&&... a) {
   logger(dest_str);
   delete[] dest_str;
 }
+
 
 
 #define __LOG_ERR 3

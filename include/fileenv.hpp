@@ -9,15 +9,19 @@ namespace viscnts_lsm {
 
 class SeqFile {
  public:
-  virtual ssize_t read(size_t n, uint8_t* data, Slice& result) = 0;
+  virtual ssize_t read(size_t n, uint8_t* data) = 0;
   virtual ssize_t seek(size_t offset) = 0;
+  virtual int get_fd() const = 0;
   virtual ~SeqFile() = default;
 };
 
 class RandomAccessFile {
  public:
-  virtual ssize_t read(size_t offset, size_t n, uint8_t* data, Slice& result) = 0;
-  virtual ssize_t remove() = 0;
+  virtual ssize_t read(int fd, size_t offset, size_t n, uint8_t* data) const = 0;
+  virtual ssize_t remove() const = 0;
+  virtual int get_fd() const = 0;
+  virtual void release_fd(int fd) const = 0;
+  virtual SeqFile* get_seqfile() const = 0;
   virtual ~RandomAccessFile() = default;
 };
 
@@ -26,6 +30,7 @@ class AppendFile {
  public:
   virtual ssize_t write(const Slice& data) = 0;
   virtual ssize_t sync() = 0;
+  virtual int get_fd() = 0;
   virtual ~AppendFile() = default;
 };
 

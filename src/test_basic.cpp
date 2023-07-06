@@ -12,7 +12,7 @@ void test_files() {
   uint8_t a[12];
   memset(a, 0, sizeof(a));
 
-  std::unique_ptr<Env> env_(createDefaultEnv());
+  Env* env_ = createDefaultEnv();
   std::vector<SSTBuilder> builders(FS);
   for (int i = 0; i < FS; i++)
     builders[i].new_file(
@@ -152,7 +152,7 @@ void test_lsm_store() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                    std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 1e7;
     uint8_t a[12];
@@ -180,7 +180,7 @@ void test_lsm_store_and_scan() {
   };
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                   std::make_unique<DefaultAllocator>(), comp);
     int L = 1e8;
     std::vector<int> numbers(L);
@@ -260,7 +260,7 @@ void test_random_scan_and_count() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                    std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 3e7, Q = 1e4;
     std::vector<int> numbers(L);
@@ -366,7 +366,7 @@ void test_lsm_decay() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                    std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 3e7;
     std::vector<int> numbers(L);
@@ -406,7 +406,7 @@ void test_delete_range() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*> tree(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, "/tmp/viscnts/"),
+    EstimateLSM<KeyCompType*> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
                                    std::make_unique<DefaultAllocator>(), SKeyCompFunc);
     int L = 3e8, Q = 1e4;
     std::vector<int> numbers(L);
@@ -523,14 +523,46 @@ void test_delete_range() {
   logger("test_random_scan(): OK");
 }
 
+void test_kthest() {
+  using namespace viscnts_lsm;
+  {
+    KthEst<double> est(1000, 100);
+    est.pre_scan1(4950);
+    for (int i = 0; i < 100; i++) est.scan1(i, i);
+    est.pre_scan2();
+    for (int i = 0; i < 100; i++) est.scan2(i, i);
+    DB_INFO("{}", est.get_kth());
+    // DB_ASSERT(est.GetKth() == 14);  
+  }
+  {
+    KthEst<size_t> est(1e4, 1e7);
+    std::mt19937_64 rgen(0x202307051554);
+    std::vector<std::pair<size_t, size_t>> vec;
+    for (int i = 0; i < 400000; i++) {
+      std::pair<size_t, size_t> par(rgen(), rgen() % 100 + 1);
+      vec.push_back(par);
+    }
+    est.pre_scan1(std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } ));
+    for (auto& a : vec) est.scan1(a.first, a.second);
+    est.pre_scan2();
+    for (auto& a : vec) est.scan2(a.first, a.second);
+    
+    auto the = est.get_interplot_kth();
+    size_t sum = 0;
+    for (auto& a : vec) if (a.first < the) sum += a.second;
+    DB_INFO("{}, {}", sum, the);
+  }
+}
+
 
 int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
   // test_lsm_store_and_scan();
-  test_random_scan_and_count();
+  // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
   // test_delete_range();
+  test_kthest();
 }

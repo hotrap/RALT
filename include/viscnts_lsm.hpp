@@ -2,6 +2,7 @@
 #define VISCNTS_LSM_H__
 
 #include <boost/fiber/buffered_channel.hpp>
+#include <queue>
 
 #include "alloc.hpp"
 #include "cache.hpp"
@@ -16,6 +17,7 @@
 #include "iterators.hpp"
 #include "sst.hpp"
 #include "deletedrange.hpp"
+#include "kthest.hpp"
 
 /**
  * The viscnts.
@@ -167,11 +169,11 @@ class Compaction {
   template <typename TIter, typename FilterFunc>
   auto flush(TIter& left, FilterFunc&& filter_func) {
     vec_newfiles_.clear();
-    _begin_new_file();
     // null iterator
     if (!left.valid()) {
       return std::make_pair(vec_newfiles_, 0.0);
     }
+    _begin_new_file();
     flag_ = false;
     real_size_ = 0;
     lst_real_size_ = 0;
@@ -186,7 +188,7 @@ class Compaction {
       CNT++;
       auto L = left.read();
       if (comp_(lst_value_.first.ref(), L.first) == 0) {
-        lst_value_.second += L.second;
+        lst_value_.second.merge(L.second);
       } else {
         // only store those filter returning true.
         if (filter_func(lst_value_)) {
@@ -233,7 +235,7 @@ class Compaction {
  private:
   template <typename T>
   double _calc_size(const std::pair<T, SValue>& kv) {
-    return kv.first.len() + kv.second.vlen;
+    return kv.first.len() + kv.second.get_hot_size();
   }
   void _divide_file(size_t size) {
     if (builder_.kv_size() + size > kSSTable) {
@@ -311,15 +313,17 @@ class EstimateLSM {
       global_range_counts_ = file_.counts() - deleted_ranges_.sum();
       global_decay_size_ = global_range_counts_ * avg_decay_size_;
     }
-    double decay_size() { return global_decay_size_; }
-    const DeletedRange& deleted_ranges() { return deleted_ranges_; }
-    const ImmutableFile<KeyCompT>& file() { return file_; }
+    double decay_size() const { return global_decay_size_; }
+    const DeletedRange& deleted_ranges() const { return deleted_ranges_; }
+    const ImmutableFile<KeyCompT>& file() const { return file_; }
   };
   struct Level {
     std::vector<std::shared_ptr<Partition>> head_;
     size_t size_;
     size_t data_size_;
     double decay_size_;
+    
+    // iterator for level
     class LevelIterator {
       typename std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_;
       typename std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
@@ -400,10 +404,37 @@ class EstimateLSM {
         }
       }
     };
+
+    // Used in batch_seek
+    class LevelAsyncSeekHandle {
+      public:
+        LevelAsyncSeekHandle(SKey key, const Partition& part, const Level& level, int where, async_io::AsyncIOQueue& aio)
+          : part_(part), level_(level), where_(where), sst_handle_(key, part.file(), aio) {}
+        void init() {
+          sst_handle_.init();
+        }
+        /* the chunk has been read. it returns the iterator when it has found result. */
+        template<typename T>
+        std::optional<LevelIterator> next(T&& aio_info) {
+          auto result = sst_handle_.next(std::forward<T>(aio_info));
+          if(!result) {
+            return {};
+          }
+          auto del_range_iter = DeletedRange::Iterator(result.value().rank(), part_.deleted_ranges());
+          return LevelIterator(level_.head_, where_, std::move(result.value()), std::move(del_range_iter));
+        }
+      private:
+        const Partition& part_;
+        const Level& level_;
+        int where_;
+        typename ImmutableFile<KeyCompT>::ImmutableFileAsyncSeekHandle sst_handle_;
+    };
+
     Level() : size_(0), data_size_(0), decay_size_(0) {}
     Level(size_t size, double decay_size) : size_(size), decay_size_(decay_size) {}
     size_t size() const { return size_; }
     double decay_size() const { return decay_size_; }
+    /* seek the first key >= key. */
     LevelIterator seek(SKey key, KeyCompT comp) const {
       int l = 0, r = head_.size() - 1, where = -1;
       while (l <= r) {
@@ -417,6 +448,19 @@ class EstimateLSM {
       auto sst_iter = head_[where]->seek(key);
       return LevelIterator(head_, where, std::move(sst_iter), DeletedRange::Iterator(sst_iter.rank(), head_[where]->deleted_ranges()));
     }
+    std::optional<LevelAsyncSeekHandle> get_async_seek_handle(SKey key, KeyCompT comp, async_io::AsyncIOQueue& aio) const {
+      int l = 0, r = head_.size() - 1, where = -1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(key, head_[mid]->range().second) <= 0)
+          where = mid, r = mid - 1;
+        else
+          l = mid + 1;
+      }
+      if (where == -1) return {};
+      return LevelAsyncSeekHandle(key, *head_[where], *this, where, aio);
+    }
+    /* return the begin. */
     LevelIterator seek_to_first() const { return LevelIterator(head_, 0); }
     bool overlap(SKey lkey, SKey rkey, KeyCompT comp) const {
       if (!head_.size()) return false;
@@ -546,6 +590,67 @@ class EstimateLSM {
       for (auto& a : tree_) ret.push(a->seek(key, comp_));
       return ret;
     }
+    
+    // return lowerbound.
+    // seek concurrently, using std::async.
+    // Too slow... (why?)
+    LevelIteratorSetT concurrent_seek(SKey key) const {
+      LevelIteratorSetT ret(comp_);
+      std::vector<std::future<typename Level::LevelIterator>> futures;
+      auto add_iter = [&](auto a) {
+        return std::async([a, this, &key]() -> typename Level::LevelIterator {
+          return a->seek(key, comp_);
+        });
+      };
+      if (largest_.get() != nullptr) futures.push_back(add_iter(largest_.get()));
+      for (auto& a : tree_) futures.push_back(add_iter(a.get()));
+      for (auto& a : futures) ret.push(a.get());
+      return ret;
+    }
+
+    /* seek use async seek handles. Not so slow but slower. (why?)*/
+    LevelIteratorSetT batch_seek(SKey key) const {
+      LevelIteratorSetT ret(comp_);
+      std::vector<typename Level::LevelAsyncSeekHandle> handles;
+      async_io::AsyncIOQueue aio(tree_.size() + 10);
+      auto process_handle = [&](auto&& handle) {
+        if (handle) {
+          handle.value().init();
+          handles.push_back(std::move(handle.value()));
+          auto result = handles.back().next(handles.size() - 1);
+          if (result) {
+            ret.push(std::move(result.value()));
+            return;
+          }
+        }
+      };
+      if (largest_.get() != nullptr) {
+        process_handle(largest_->get_async_seek_handle(key, comp_, aio));
+      }
+      for (auto& a : tree_) {
+        process_handle(a->get_async_seek_handle(key, comp_, aio));
+      }
+      size_t now_in_q = aio.size();
+      size_t next = 0;
+      if(aio.size()) {
+        aio.submit();
+      }
+      while(aio.size()) {
+        auto cur = aio.get_one().value();
+        auto result = handles[cur].next(cur);
+        if (result) {
+          now_in_q--;
+          ret.push(std::move(result.value()));
+        } else {
+          next++;
+        }
+        if (next == now_in_q) {
+          aio.submit();
+          next = 0;
+        }
+      }
+      return ret;
+    }
 
     LevelIteratorSetT seek_to_first() const {
       LevelIteratorSetT ret(comp_);
@@ -556,16 +661,15 @@ class EstimateLSM {
     
     // Now I use iterators to check key existence... can be optimized.
     bool search_key(SKey key) const {
-      auto check = [&](auto iter) -> bool {
+      auto iter = seek(key);
+      // logger("fuck");
+      // key.print();
+      for(auto& a : iter.get_iterators()) {
         DataKey kv;
-        if (!iter.valid()) return false;
-        iter.read(kv);
-        return comp_(kv.key(), key) == 0;
-      };
-      if (largest_.get() != nullptr) {
-        if (check(largest_->seek(key, comp_))) return true;
+        a.read(kv);
+        // kv.key().print();
+        if (comp_(kv.key(), key) == 0) return true;
       }
-      for (auto& a : tree_) if (check(a->seek(key, comp_))) return true;
       return false;
     }
 
@@ -801,7 +905,7 @@ class EstimateLSM {
       std::sort(tree_.begin(), tree_.end(), [](const std::shared_ptr<Level>& x, const std::shared_ptr<Level>& y) { return x->size() > y->size(); });
     }
   };
-  std::unique_ptr<Env> env_;
+  Env* env_;
   std::unique_ptr<FileName> filename_;
   std::unique_ptr<BaseAllocator> file_alloc_;
   KeyCompT comp_;
@@ -842,9 +946,9 @@ class EstimateLSM {
     auto valid() { return iter_.valid(); }
     auto next() { return iter_.next(); }
   };
-  EstimateLSM(std::unique_ptr<Env>&& env, std::unique_ptr<FileName>&& filename, std::unique_ptr<BaseAllocator>&& file_alloc,
+  EstimateLSM(Env* env, std::unique_ptr<FileName>&& filename, std::unique_ptr<BaseAllocator>&& file_alloc,
               KeyCompT comp)
-      : env_(std::move(env)),
+      : env_(env),
         filename_(std::move(filename)),
         file_alloc_(std::move(file_alloc)),
         comp_(comp),
@@ -876,6 +980,11 @@ class EstimateLSM {
   auto seek_to_first() {
     auto sv = get_current_sv();
     return new SuperVersionIterator(sv->seek_to_first(), sv);
+  }
+
+  auto batch_seek(SKey key) {
+    auto sv = get_current_sv();
+    return new SuperVersionIterator(sv->batch_seek(key), sv);
   }
 
   size_t range_count(const std::pair<SKey, SKey>& range) {
@@ -923,7 +1032,7 @@ class EstimateLSM {
 
   void trigger_decay() {
     std::unique_lock del_range_lck(sv_modify_mutex_);
-    auto new_sv = sv_->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_, true);
+    auto new_sv = sv_->compact(filename_.get(), env_, file_alloc_.get(), comp_, true);
     _update_superversion(new_sv);
   }
 
@@ -944,7 +1053,7 @@ class EstimateLSM {
       if (terminate_signal_) return;
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
-      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_.get(), file_alloc_.get(), comp_);
+      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_, file_alloc_.get(), comp_);
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
@@ -974,7 +1083,7 @@ class EstimateLSM {
 
       auto last_compacted_sv = new_sv;
       while (true) {
-        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_.get(), file_alloc_.get(), comp_);
+        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_, file_alloc_.get(), comp_);
         if (new_compacted_sv == nullptr) {
           break;
         } else {
@@ -1020,15 +1129,21 @@ class VisCnts {
  public:
   // Use different file path for two trees.
   VisCnts(KeyCompT comp, const std::string& path, double delta)
-    : tree{std::make_unique<EstimateLSM<KeyCompT>>(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path + "a0"), std::make_unique<DefaultAllocator>(), comp), 
-          std::make_unique<EstimateLSM<KeyCompT>>(std::unique_ptr<Env>(createDefaultEnv()), std::make_unique<FileName>(0, path + "a1"), std::make_unique<DefaultAllocator>(), comp)},
+    : tree{std::make_unique<EstimateLSM<KeyCompT>>(createDefaultEnv(), std::make_unique<FileName>(0, path + "a0"), std::make_unique<DefaultAllocator>(), comp), 
+          std::make_unique<EstimateLSM<KeyCompT>>(createDefaultEnv(), std::make_unique<FileName>(0, path + "a1"), std::make_unique<DefaultAllocator>(), comp)},
       comp_(comp), decay_limit_(delta) {}
   void access(int tier, const std::pair<SKey, SValue>& kv) { tree[tier]->append(kv.first, kv.second); check_decay(); }
   auto delete_range(int tier, const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) { return tree[tier]->delete_range(range, exclude_info); }
   auto seek_to_first(int tier) { return tree[tier]->seek_to_first(); }
   auto seek(int tier, SKey key) { return tree[tier]->seek(key); }
   auto weight_sum(int tier) { return tree[tier]->get_current_decay_size(); }
-  auto range_data_size(int tier, const std::pair<SKey, SKey>& range) { return tree[tier]->range_data_size(range); }
+  auto range_data_size(int tier, const std::pair<SKey, SKey>& range) { 
+    static int x = 0;
+    x++;
+    if (x%10000==0){
+      logger(x);
+    }
+    return tree[tier]->range_data_size(range); }
   bool is_hot(int tier, SKey key) {
     return tree[tier]->search_key(key);
   }

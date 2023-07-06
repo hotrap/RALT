@@ -15,7 +15,7 @@ add_library(${PROJECT_NAME} SHARED src/viscnts.cpp src/bloom.cpp src/file.cpp sr
 add_subdirectory(third_party/fmt)
 
 target_link_libraries(test_basic PRIVATE pthread boost_fiber fmt)
-target_link_libraries(test_viscnts PRIVATE pthread boost_fiber fmt ${ROCKSDB_LIB})
+target_link_libraries(test_viscnts PRIVATE pthread boost_fiber fmt ${ROCKSDB_LIB} uring)
 target_link_libraries(${PROJECT_NAME} PRIVATE pthread boost_fiber)
 
 

@@ -100,6 +100,10 @@ class SeqIteratorSet {
 
   KVComp comp_func() { return comp_; }
 
+  std::vector<Iterator>& get_iterators() {
+    return iters_;
+  }
+
  private:
   uint32_t _min(uint32_t x, uint32_t y) {
     uint32_t idx = seg_tree_[x] - iters_.data();
@@ -134,7 +138,7 @@ class SeqIteratorSetForScan {
     while (iter_.valid()) {
       result = iter_.read();
       if (iter_.comp_func()(result.first, current_key_.ref()) == 0) {
-        current_value_ += result.second;
+        current_value_.merge(result.second);
       } else
         break;
       iter_.next();

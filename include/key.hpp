@@ -22,16 +22,30 @@ using IndSKey = IndSlice;
 // inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
 struct SValue {
-  double counts;
-  size_t vlen;
-  SValue() : counts(0), vlen(0) {}
+  double counts{0};
+  size_t vlen{0};
+  SValue() {}
   SValue(double _counts, size_t _vlen) : counts(_counts), vlen(_vlen) {}
+  void merge(const SValue& v) {
+    counts += v.counts;
+  }
+  size_t get_hot_size() const {
+    return vlen;
+  }
 };
 
-inline SValue& operator+=(SValue& a, const SValue& v) {
-  a.counts += v.counts;
-  return a;
-}
+struct TickValue {
+  double tick{0};
+  size_t vlen{0};
+  TickValue() {}
+  TickValue(double _tick, size_t _vlen) : tick(_tick), vlen(_vlen) {}
+  void merge(double cur_tick, const TickValue& v) {
+    tick = cur_tick - 1 / (1 / (cur_tick - tick) + 1 / (cur_tick - v.tick));
+  }
+  size_t get_hot_size() const {
+    return vlen;
+  }
+};
 
 struct SKeyComparator {
   int operator()(SKey A, SKey B) const {
