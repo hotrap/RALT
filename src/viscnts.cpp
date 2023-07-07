@@ -29,11 +29,9 @@ struct SKeyComparatorFromRocksDB {
 
 class VisCntsIter : public rocksdb::CompactionRouter::Iter {
   public:
-    VisCntsIter(viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator* it) 
-      : it_(it) {}
-    ~VisCntsIter() {
-      delete it_;
-    }
+    VisCntsIter(std::unique_ptr<viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue>::SuperVersionIterator> it) 
+      : it_(std::move(it)) {}
+    ~VisCntsIter() {}
     std::unique_ptr<rocksdb::Slice> next() {
       if (is_first_) {
         is_first_ = false;
@@ -48,10 +46,10 @@ class VisCntsIter : public rocksdb::CompactionRouter::Iter {
     }
   private:
     bool is_first_{true};
-    viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB>::SuperVersionIterator* it_;
+    std::unique_ptr<viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue>::SuperVersionIterator> it_;
 };
 
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB>;
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue, viscnts_lsm::CachePolicyT::kUseTick>;
 
 VisCnts VisCnts::New(
 		const rocksdb::Comparator *ucmp, const char *dir,
@@ -65,7 +63,7 @@ VisCnts::~VisCnts() {
 
 void VisCnts::Access(size_t tier, rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  vc->access(tier, {viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), viscnts_lsm::SValue(1, vlen)});
+  vc->access(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
 }
 bool VisCnts::IsHot(size_t tier, rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);

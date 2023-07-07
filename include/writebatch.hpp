@@ -59,24 +59,6 @@ class WriteBatch {
     }
   }
 
-  // reserve one slice so that we don't need use IndSKey to store temporary key, when merging the same key
-  // RefDataKey is BlockKey<SValue*>, which means we can modify the value, and the address of value can be nullptr
-  RefDataKey reserve_kv(const DataKey& kv, size_t vlen) {
-    assert(kv.size() <= buffer_size_ && vlen < kv.size());
-    auto size = kv.size();
-    if (__builtin_expect(used_size_ + size > buffer_size_, 0)) {
-      flush();
-      kv.write(data_);
-      used_size_ = size;
-    } else {
-      kv.write(data_ + used_size_);
-      used_size_ += size;
-    }
-    SKey ret_key;
-    ret_key.read(data_ + used_size_ - size);
-    return RefDataKey(ret_key, reinterpret_cast<SValue*>(data_ + used_size_ - vlen));
-  }
-
   void fill(uint8_t what, size_t len) {
     size_t fill_size = std::min(len, buffer_size_ - used_size_);
     memset(data_ + used_size_, what, fill_size);

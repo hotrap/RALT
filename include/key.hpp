@@ -2,6 +2,7 @@
 #ifndef __KEY_H__
 #define __KEY_H__
 #include "common.hpp"
+#include <random>
 
 namespace viscnts_lsm {
 
@@ -26,11 +27,25 @@ struct SValue {
   size_t vlen{0};
   SValue() {}
   SValue(double _counts, size_t _vlen) : counts(_counts), vlen(_vlen) {}
-  void merge(const SValue& v) {
+  void merge(const SValue& v, double) {
     counts += v.counts;
   }
   size_t get_hot_size() const {
     return vlen;
+  }
+  double get_tick() const {
+    return counts;
+  }
+  bool decay(double prob, std::mt19937_64& rgen) {
+    counts *= prob; 
+    if (counts < 1) {
+      std::uniform_real_distribution<> dis(0, 1.);
+      if (dis(rgen) < counts) {
+        return false;
+      }
+      counts = 1;
+    }
+    return true;
   }
 };
 
@@ -39,11 +54,17 @@ struct TickValue {
   size_t vlen{0};
   TickValue() {}
   TickValue(double _tick, size_t _vlen) : tick(_tick), vlen(_vlen) {}
-  void merge(double cur_tick, const TickValue& v) {
+  void merge(const TickValue& v, double cur_tick) {
     tick = cur_tick - 1 / (1 / (cur_tick - tick) + 1 / (cur_tick - v.tick));
   }
   size_t get_hot_size() const {
     return vlen;
+  }
+  double get_tick() const {
+    return tick;
+  }
+  bool decay(double, std::mt19937_64&) {
+    return true;
   }
 };
 
@@ -58,37 +79,37 @@ struct SKeyComparator {
   }
 };
 
-template <typename Value>
+template <typename KeyT, typename ValueT>
 class BlockKey {
  private:
-  SKey key_;
-  Value v_;
+  KeyT key_;
+  ValueT v_;
 
  public:
   BlockKey() : key_(), v_() {}
-  BlockKey(SKey key, Value v) : key_(key), v_(v) {}
+  BlockKey(KeyT key, ValueT v) : key_(key), v_(v) {}
   const uint8_t* read(const uint8_t* from) {
     from = key_.read(from);
-    v_ = *reinterpret_cast<const Value*>(from);
-    return from + sizeof(Value);
+    v_ = *reinterpret_cast<const ValueT*>(from);
+    return from + sizeof(ValueT);
   }
   size_t size() const { return key_.size() + sizeof(v_); }
   uint8_t* write(uint8_t* to) const {
     to = key_.write(to);
-    *reinterpret_cast<Value*>(to) = v_;
-    return to + sizeof(Value);
+    *reinterpret_cast<ValueT*>(to) = v_;
+    return to + sizeof(ValueT);
   }
-  SKey key() const { return key_; }
-  Value value() const { return v_; }
+  KeyT key() const { return key_; }
+  ValueT value() const { return v_; }
   static size_t read_size(uint8_t* from) {
-    size_t ret = SKey::read_size(from);
-    return ret + sizeof(Value);
+    size_t ret = KeyT::read_size(from);
+    return ret + sizeof(ValueT);
   }
 };
 
-using DataKey = BlockKey<SValue>;
-using IndexKey = BlockKey<uint32_t>;
-using RefDataKey = BlockKey<SValue*>;
+// using DataKey = BlockKey<SKey, SValue>;
+// using IndexKey = BlockKey<SKey, uint32_t>;
+// using RefDataKey = BlockKey<SKey, SValue*>;
 
 }  // namespace viscnts_lsm
 

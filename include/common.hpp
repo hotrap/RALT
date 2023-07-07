@@ -41,7 +41,7 @@ class Slice {
     auto ret = *reinterpret_cast<decltype(len_)*>(from);
     return ret + sizeof(len_);
   }
-  void print() {
+  void print() const {
     printf("[len = %d]", len_);
     for (uint32_t i = 0; i < len_; i++) printf("[%x]", a_[i]);
     puts("");

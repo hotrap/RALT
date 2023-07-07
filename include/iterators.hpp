@@ -2,32 +2,24 @@
 #define VISCNTS_ITERATORS_H__
 
 #include "key.hpp"
+#include "tickfilter.hpp"
 
 namespace viscnts_lsm {
 
-// this iterator is used in compaction
-// or decay
-class SeqIterator {
- public:
-  virtual ~SeqIterator() = default;
-  virtual bool valid() = 0;
-  virtual void next() = 0;
-  virtual std::pair<SKey, SValue> read() = 0;
-  virtual SeqIterator* copy() = 0;
-};
-
 // A set of iterators, use heap to manage but not segment tree because it can avoid comparisions opportunistically
-template <typename Iterator, typename KVComp>
+template <typename Iterator, typename KVCompT, typename ValueT>
 class SeqIteratorSet {
   std::vector<Iterator> iters_;
   std::vector<Iterator*> seg_tree_;
   std::vector<SKey> keys_;
-  std::vector<SValue> values_;
+  std::vector<ValueT> values_;
   uint32_t size_;
-  KVComp comp_;
+  KVCompT comp_;
+
+  using SeqIteratorSetT = SeqIteratorSet<Iterator, KVCompT, ValueT>;
 
  public:
-  SeqIteratorSet(const KVComp& comp) : size_(0), comp_(comp) {}
+  SeqIteratorSet(const KVCompT& comp) : size_(0), comp_(comp) {}
   SeqIteratorSet(const SeqIteratorSet& ss) { (*this) = ss; }
   SeqIteratorSet(SeqIteratorSet&& ss) { (*this) = std::move(ss); }
   SeqIteratorSet& operator=(const SeqIteratorSet& ss) {
@@ -47,7 +39,7 @@ class SeqIteratorSet {
   }
   void build() {
     size_ = iters_.size();
-    DataKey kv;
+    BlockKey<SKey, ValueT> kv;
     seg_tree_.resize(size_ + 1, nullptr);
     keys_.resize(size_);
     values_.resize(size_);
@@ -72,7 +64,7 @@ class SeqIteratorSet {
       size_--;
     }
 
-    DataKey kv;
+    BlockKey<SKey, ValueT> kv;
     seg_tree_[1]->read(kv);
     uint32_t id = seg_tree_[1] - iters_.data();
     keys_[id] = std::move(kv.key());
@@ -89,7 +81,7 @@ class SeqIteratorSet {
       if (_min(x, x << 1) == (x << 1)) std::swap(seg_tree_[x], seg_tree_[x << 1]);
     }
   }
-  std::pair<SKey, SValue> read() {
+  std::pair<SKey, ValueT> read() {
     int x = seg_tree_[1] - iters_.data();
     return {keys_[x], values_[x]};
   }
@@ -98,7 +90,7 @@ class SeqIteratorSet {
     iters_.push_back(std::move(new_iter));
   }
 
-  KVComp comp_func() { return comp_; }
+  KVCompT comp_func() { return comp_; }
 
   std::vector<Iterator>& get_iterators() {
     return iters_;
@@ -112,20 +104,25 @@ class SeqIteratorSet {
   }
 };
 
-template <typename Iterator, typename KVComp>
+template <typename Iterator, typename KeyCompT, typename ValueT>
 class SeqIteratorSetForScan {
   IndSKey current_key_;
-  SValue current_value_;
-  SeqIteratorSet<Iterator, KVComp> iter_;
+  ValueT current_value_;
+  SeqIteratorSet<Iterator, KeyCompT, ValueT> iter_;
   bool valid_;
+  double current_tick_;
+  TickFilter<ValueT> tick_filter_;
 
  public:
-  SeqIteratorSetForScan(SeqIteratorSet<Iterator, KVComp>&& iter) : iter_(std::move(iter)), valid_(true) {}
+  SeqIteratorSetForScan(SeqIteratorSet<Iterator, KeyCompT, ValueT>&& iter, double current_tick, TickFilter<ValueT> tick_filter) 
+    : iter_(std::move(iter)), valid_(true), current_tick_(current_tick), tick_filter_(tick_filter) {
+      // logger(tick_filter_.get_tick_threshold());
+    }
   void build() {
     iter_.build();
     next();
   }
-  std::pair<SKey, SValue> read() { return {current_key_.ref(), current_value_}; }
+  std::pair<SKey, ValueT> read() { return {current_key_.ref(), current_value_}; }
   void next() {
     if (!iter_.valid()) {
       valid_ = false;
@@ -138,10 +135,19 @@ class SeqIteratorSetForScan {
     while (iter_.valid()) {
       result = iter_.read();
       if (iter_.comp_func()(result.first, current_key_.ref()) == 0) {
-        current_value_.merge(result.second);
-      } else
-        break;
+        current_value_.merge(result.second, current_tick_);
+      } else {
+        if (tick_filter_.check(current_value_)) {
+          return;
+        } else {
+          current_key_ = result.first;
+          current_value_ = result.second;
+        }
+      }  
       iter_.next();
+    }
+    if (!tick_filter_.check(current_value_)) {
+      valid_ = false;
     }
   }
 

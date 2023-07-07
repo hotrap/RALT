@@ -18,6 +18,7 @@ class KthEst {
 
     void pre_scan1(size_t total_size) {
       std::mt19937_64 rgen((std::random_device())());
+      logger(total_size);
       std::uniform_int_distribution<> dis(0, total_size - 1);
       point_size_.resize(point_num_);
       for(int i = 0; i < point_num_; i++) {
@@ -40,10 +41,11 @@ class KthEst {
     }
     
     void pre_scan2() {
-      std::sort(point_data_.begin(), point_data_.end(), [](auto x, auto y) {
+      logger(scan1_point_num_);
+      std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first < y.first;
       });
-      point_data_.erase(std::unique(point_data_.begin(), point_data_.end(), [](auto x, auto y) {
+      point_data_.erase(std::unique(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first == y.first;
       }), point_data_.end());
     }
@@ -74,7 +76,6 @@ class KthEst {
       for(auto& a : point_data_) {
         sum += a.second;
         ret = a.first;
-        // logger(a.first, ", ", a.second, ", ", sum);
         if (sum > size_limit_) {
           break;
         }
@@ -87,12 +88,15 @@ class KthEst {
       if (sum > size_limit_) {
         Key L = min_key_;
         Key R = point_data_[0].first;
+        logger(min_key_, ", ", first_interval_key_size_, ", ", sum);
         return L + (R - L) / double(first_interval_key_size_) * double(size_limit_ - sum);
       }
       for(int i = 0; i < point_data_.size(); i++) {
         if (sum + point_data_[i].second > size_limit_) {
           Key L = point_data_[i].first;
           Key R = i == point_data_.size() - 1 ? max_key_ : point_data_[i + 1].first;
+          logger(point_data_[i].first, ", ", point_data_[i].second, ", ", sum);
+          logger(max_key_, "<-maxkey", L, ", ", R, ", ", double(size_limit_ - sum), ", ", double(point_data_[i].second));
           return L + (R - L) / double(point_data_[i].second) * double(size_limit_ - sum);
         }
         sum += point_data_[i].second;
@@ -108,7 +112,6 @@ class KthEst {
     size_t scan1_size_sum_{0}, scan1_point_num_{0}, first_interval_key_size_{0};
     Key min_key_, max_key_;
     bool scan2_flag_{false};
-
 };
 
 }
