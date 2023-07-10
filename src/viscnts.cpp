@@ -27,9 +27,11 @@ struct SKeyComparatorFromRocksDB {
   }
 };
 
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue, viscnts_lsm::CachePolicyT::kUseTick>;
+
 class VisCntsIter : public rocksdb::CompactionRouter::Iter {
   public:
-    VisCntsIter(std::unique_ptr<viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue>::SuperVersionIterator> it) 
+    VisCntsIter(std::unique_ptr<VisCntsType::IteratorT> it) 
       : it_(std::move(it)) {}
     ~VisCntsIter() {}
     std::unique_ptr<rocksdb::Slice> next() {
@@ -46,10 +48,8 @@ class VisCntsIter : public rocksdb::CompactionRouter::Iter {
     }
   private:
     bool is_first_{true};
-    std::unique_ptr<viscnts_lsm::EstimateLSM<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue>::SuperVersionIterator> it_;
+    std::unique_ptr<VisCntsType::IteratorT> it_;
 };
-
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue, viscnts_lsm::CachePolicyT::kUseTick>;
 
 VisCnts VisCnts::New(
 		const rocksdb::Comparator *ucmp, const char *dir,

@@ -30,6 +30,18 @@ class TickFilter<TickValue> {
     double tick_threshold_;
 };
 
+
+template<>
+class TickFilter<LRUTickValue> {
+  public:
+    TickFilter(double tick_threshold) : tick_threshold_(tick_threshold) {}
+    bool check(LRUTickValue v) const { return v.tick > tick_threshold_; }
+    double get_tick_threshold() const { return tick_threshold_; }
+
+  private:
+    double tick_threshold_;
+};
+
 }
 
 

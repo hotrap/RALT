@@ -28,7 +28,7 @@ class PosixSeqFile : public SeqFile {
     return read_size;
   }
   ssize_t seek(size_t offset) override {
-    if (auto ret = ::lseek(fd_, offset, SEEK_CUR); ret < 0) return errno;
+    if (auto ret = ::lseek(fd_, offset, SEEK_SET); ret < 0) return errno;
     return 0;
   }
 

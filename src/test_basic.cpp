@@ -2,6 +2,7 @@
 
 #include "memtable.hpp"
 #include "viscnts_lsm.hpp"
+#include "cache.hpp"
 
 using namespace std;
 /// testing function.
@@ -41,7 +42,7 @@ void test_files() {
   for (int i = 0; i < FS; ++i)
     files.push_back(ImmutableFile<KeyCompType*, SValue>(0, builders[i].size(),
                                                 std::unique_ptr<RandomAccessFile>(env_->openRAFile("/tmp/viscnts/test" + std::to_string(i))),
-                                                new DefaultAllocator(), {}, comp));
+                                                {}, {}, {}, comp));
   auto iters = std::make_unique<SeqIteratorSet<SSTIterator<KeyCompType*, SValue>, KeyCompType*, SValue>>(comp);
   for (int i = 0; i < FS; ++i) {
     SSTIterator iter(&files[i]);
@@ -152,8 +153,7 @@ void test_lsm_store() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc);
     int L = 1e7;
     uint8_t a[12];
     memset(a, 0, sizeof(a));
@@ -180,8 +180,7 @@ void test_lsm_store_and_scan() {
   };
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                  std::make_unique<DefaultAllocator>(), comp);
+    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp);
     int L = 3e7;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
@@ -260,8 +259,7 @@ void test_random_scan_and_count() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc);
     int L = 3e7, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -366,8 +364,7 @@ void test_lsm_decay() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
+    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc);
     int L = 3e7;
     std::vector<int> numbers(L);
     // auto comp2 = +[](int x, int y) {
@@ -406,9 +403,8 @@ void test_delete_range() {
 
   auto start = std::chrono::system_clock::now();
   {
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), std::make_unique<FileName>(0, "/tmp/viscnts/"),
-                                   std::make_unique<DefaultAllocator>(), SKeyCompFunc);
-    int L = 3e8, Q = 1e4;
+    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc);
+    int L = 1e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
       uint8_t a[12], b[12];
@@ -580,15 +576,68 @@ void test_kthest() {
   }
 }
 
+void test_lru_cache() {
+  using namespace viscnts_lsm;
+  int N = 200, CacheSize = 100;
+  FileChunkCache cache(CacheSize);
+  std::mt19937_64 rgen(0x202307091349);
+  auto random_fill = [&](Chunk& c) {
+    c.allocate();
+    for (int i = 0; i < kChunkSize; i++) {
+      *c.data(i) = rgen() & 255;
+    }
+  };
+  auto equal = [&](const RefChunk& a, const Chunk& b) -> bool {
+    for (int i = 0; i < kChunkSize; i++) {
+      if (*a.data(i) != *b.data(i)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  {
+    std::vector<Chunk> vec(N);
+    for (auto& a : vec) random_fill(a);
+    for (int i = 0; i < vec.size(); i++) {
+      cache.insert(i, vec[i]);
+      DB_ASSERT(equal(cache.try_get_cache(i).value(), vec[i]));
+    }
+    DB_INFO("first OK");
+    std::atomic<int> hit = 0;
+    std::vector<std::future<void>> h;
+    for(int i = 0; i < 16; i++) {
+      h.push_back(std::async([&]() {
+        for (int t = 0; t < 100000; t++) {
+          int i = t / 10 % 200;
+          auto result = cache.try_get_cache(i);
+          if (result.has_value()) {
+            hit++;
+            if (!equal(result.value(), vec[i])) {
+              DB_INFO("{}, {}", t, i);
+              DB_ASSERT(false);
+            }
+          } else {
+            cache.insert(i, vec[i]);
+          }
+        }
+      }));
+    }
+    for (auto& hh : h) hh.get();
+    
+    DB_INFO("{}", hit.load());
+
+  }
+}
 
 int main() {
   // test_files();
   // test_unordered_buf();
-  // test_lsm_store();
+  test_lsm_store();
   test_lsm_store_and_scan();
-  // test_random_scan_and_count();
+  test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
-  // test_delete_range();
+  test_delete_range();
   // test_kthest();
+  // test_lru_cache();
 }

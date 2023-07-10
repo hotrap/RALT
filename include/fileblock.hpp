@@ -5,6 +5,7 @@
 #include "fileenv.hpp"
 #include "chunk.hpp"
 #include "asyncio.hpp"
+#include "cache.hpp"
 
 namespace viscnts_lsm {
 
@@ -13,8 +14,8 @@ template <typename KV, typename KVComp>
 class FileBlock {     // process blocks in a file
   uint32_t file_id_;  // file id
   FileBlockHandle handle_;
-  BaseAllocator* alloc_;
   RandomAccessFile* file_ptr_;
+  FileChunkCache* file_cache_{nullptr};
 
   // [keys] [offsets]
   // serveral (now 2) kinds of file blocks
@@ -52,24 +53,25 @@ class FileBlock {     // process blocks in a file
       uint32_t _offset;
       // find offset
       auto [chunk_id, offset] = block_._pos_offset(id);
-      if (current_value_id_ != chunk_id) block_.ra_acquire(current_value_id_ = chunk_id, currenct_value_chunk_, ra_fd);
-      _offset = block_.read_value(offset, currenct_value_chunk_);
+      if (current_value_id_ != chunk_id) block_.ra_acquire_with_cache(current_value_id_ = chunk_id, currenct_value_chunk_, current_value_chunk_ref_, ra_fd);
+      _offset = block_.read_value(offset, current_value_chunk_ref_);
       // read key
       auto [chunk_key_id, key_offset] = block_._kv_offset(_offset);
-      if (current_key_id_ != chunk_key_id) block_.ra_acquire(current_key_id_ = chunk_key_id, current_key_chunk_, ra_fd);
-      block_.read_key(key_offset, current_key_chunk_, key);
+      if (current_key_id_ != chunk_key_id) block_.ra_acquire_with_cache(current_key_id_ = chunk_key_id, current_key_chunk_, current_key_chunk_ref_, ra_fd);
+      block_.read_key(key_offset, current_key_chunk_ref_, key);
     }
 
     auto seek_offset(uint32_t id, int ra_fd) {
       // find offset
       auto [chunk_id, offset] = block_._pos_offset(id);
-      if (current_value_id_ != chunk_id) block_.ra_acquire(current_value_id_ = chunk_id, currenct_value_chunk_, ra_fd);
-      auto ret = block_.read_value(offset, currenct_value_chunk_);
+      if (current_value_id_ != chunk_id) block_.ra_acquire_with_cache(current_value_id_ = chunk_id, currenct_value_chunk_, current_value_chunk_ref_, ra_fd);
+      auto ret = block_.read_value(offset, current_value_chunk_ref_);
       return ret;
     }
 
    private:
     FileBlock<KV, KVComp> block_;
+    RefChunk current_value_chunk_ref_, current_key_chunk_ref_;
     Chunk currenct_value_chunk_, current_key_chunk_;
     uint32_t current_value_id_, current_key_id_;
   };
@@ -294,36 +296,53 @@ class FileBlock {     // process blocks in a file
 
   FileBlock() {
     file_id_ = 0;
-    alloc_ = nullptr;
     file_ptr_ = nullptr;
     offset_index_ = 0;
   }
-  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, const KVComp& comp)
-      : file_id_(file_id), handle_(handle), alloc_(alloc), file_ptr_(file_ptr), comp_(comp) {
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, RandomAccessFile* file_ptr, FileChunkCache* file_cache, const KVComp& comp)
+      : file_id_(file_id), handle_(handle), file_ptr_(file_ptr), file_cache_(file_cache), comp_(comp) {
     offset_index_ = handle_.offset + handle_.size - handle_.counts * sizeof(uint32_t);
     assert(offset_index_ % kChunkSize == 0);
   }
 
-  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, BaseAllocator* alloc, RandomAccessFile* file_ptr, uint32_t offset_index,
+  explicit FileBlock(uint32_t file_id, FileBlockHandle handle, RandomAccessFile* file_ptr, uint32_t offset_index,
                      const KVComp& comp)
-      : file_id_(file_id), handle_(handle), alloc_(alloc), file_ptr_(file_ptr), comp_(comp) {
+      : file_id_(file_id), handle_(handle), file_ptr_(file_ptr), comp_(comp) {
     offset_index_ = offset_index;
   }
 
   void ra_acquire(size_t id, Chunk& c, int ra_fd) {
     assert(id * kChunkSize < handle_.offset + handle_.size);
-    c.acquire(id * kChunkSize, alloc_, file_ptr_, ra_fd);
+    c.acquire(id * kChunkSize, file_ptr_, ra_fd);
+  }
+
+  void ra_acquire_with_cache(size_t id, Chunk& c, RefChunk& ref, int ra_fd) {
+    assert(id * kChunkSize < handle_.offset + handle_.size);
+    size_t key = id << 32 | file_id_;
+    if (file_cache_) {
+      auto result = file_cache_->try_get_cache(key);
+      if (result.has_value()) {
+        ref = std::move(result.value());
+      } else {
+        c.acquire(id * kChunkSize, file_ptr_, ra_fd);
+        file_cache_->insert(key, c);
+        ref = RefChunk(c, nullptr);
+      }  
+    } else {
+      c.acquire(id * kChunkSize, file_ptr_, ra_fd);
+    }
+    
   }
 
   
   void seq_acquire(Chunk& c, SeqFile* seqfile) {
-    c.acquire(alloc_, seqfile);
+    c.acquire(seqfile);
   }
 
   template<typename T>
   void async_acquire(int ra_fd, size_t id, Chunk& c, async_io::AsyncIOQueue& aio, T&& aio_info) {
     assert(id * kChunkSize < handle_.offset + handle_.size);
-    c.allocate(alloc_);
+    c.allocate();
     aio.read(ra_fd, c.data(), id * kChunkSize, kChunkSize, std::forward<T>(aio_info));
   }
 
@@ -333,17 +352,18 @@ class FileBlock {     // process blocks in a file
   }
 
   // assume that input is valid, read_key_offset and read_value_offset
-  template <typename T>
-  void read_key(uint32_t offset, const Chunk& c, T& result) const {
+  template <typename ChunkT, typename T>
+  void read_key(uint32_t offset, const ChunkT& c, T& result) const {
     assert(offset < kChunkSize);
     result.read(c.data(offset));
   }
 
   uint32_t read_key_size(uint32_t offset, const Chunk& c) const { return KV::read_size(c.data(offset)); }
 
-  uint32_t read_value(uint32_t offset, const Chunk& c) const {
+  template<typename T>
+  uint32_t read_value(uint32_t offset, const T& c) const {
     assert(offset < kChunkSize);
-    return *reinterpret_cast<uint32_t*>(c.data(offset));
+    return *reinterpret_cast<const uint32_t*>(c.data(offset));
   }
 
   bool is_empty_key(uint32_t offset, const Chunk& c) const { return *reinterpret_cast<uint32_t*>(c.data(offset)) == 0; }

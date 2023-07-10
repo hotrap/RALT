@@ -1,5 +1,6 @@
 #include "viscnts.h"
 #include "logging.hpp"
+#include "cache.hpp"
 
 class DefaultComparator : public rocksdb::Comparator {
   public:
@@ -159,13 +160,16 @@ void test_store_and_scan() {
 void test_decay_simple() {
   // all keys are distinct.
   size_t max_hot_set_size = 1e7;
-  size_t N = 1e7, TH = 1, vlen = 100, Q = 1e4, QLEN = 100;
+  size_t N = 3e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
   input_all(vc, 0, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  std::thread th([&]() {
+    input_all(vc, 0, data, TH, vlen);
+  });
   
   auto iter = vc.Begin(0);
   size_t sum = 0;
@@ -181,6 +185,7 @@ void test_decay_simple() {
   }
   DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size);
   DB_ASSERT(sum <= max_hot_set_size * 1.1);
+  th.join();
 }
 
 void test_transfer_range() {
@@ -285,6 +290,9 @@ void test_ishot_simple() {
     DB_ASSERT(!vc.IsHot(0, convert_to_slice(a, data2[i].first, data2[i].second)));
   }
   DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
+  auto cache = viscnts_lsm::GetDefaultIndexCache();
+  auto stat = cache->get_stats();
+  DB_INFO("hit: {}, access: {}", stat.hit_count, stat.access_count);
 }
 
 void test_cache_efficiency() {
@@ -296,5 +304,5 @@ int main() {
   // test_decay_simple();
   // test_transfer_range();
   // test_parallel();
-  // test_ishot_simple();
+  test_ishot_simple();
 }

@@ -45,9 +45,9 @@ class KthEst {
       std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first < y.first;
       });
-      point_data_.erase(std::unique(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
+      scan1_point_num_ = std::unique(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first == y.first;
-      }), point_data_.end());
+      }) - point_data_.begin();
     }
 
     void scan2(Key key, size_t key_size) {
@@ -59,7 +59,7 @@ class KthEst {
         min_key_ = std::min(min_key_, key);
         max_key_ = std::max(max_key_, key);
       }
-      auto t = std::upper_bound(point_data_.begin(), point_data_.end(), std::make_pair(key, 0), [](auto x, auto y) {
+      auto t = std::upper_bound(point_data_.begin(), point_data_.begin() + scan1_point_num_, std::make_pair(key, 0), [](auto x, auto y) {
         return x.first < y.first;
       });
       if(t != point_data_.begin()) {
@@ -73,9 +73,9 @@ class KthEst {
     Key get_kth() {
       Key ret = max_key_;
       size_t sum = first_interval_key_size_;
-      for(auto& a : point_data_) {
-        sum += a.second;
-        ret = a.first;
+      for(int i = 0; i < scan1_point_num_; i++) {
+        sum += point_data_[i].second;
+        ret = point_data_[i].first;
         if (sum > size_limit_) {
           break;
         }
@@ -91,10 +91,10 @@ class KthEst {
         logger(min_key_, ", ", first_interval_key_size_, ", ", sum);
         return L + (R - L) / double(first_interval_key_size_) * double(size_limit_ - sum);
       }
-      for(int i = 0; i < point_data_.size(); i++) {
+      for(int i = 0; i < scan1_point_num_; i++) {
         if (sum + point_data_[i].second > size_limit_) {
           Key L = point_data_[i].first;
-          Key R = i == point_data_.size() - 1 ? max_key_ : point_data_[i + 1].first;
+          Key R = i == scan1_point_num_ - 1 ? max_key_ : point_data_[i + 1].first;
           logger(point_data_[i].first, ", ", point_data_[i].second, ", ", sum);
           logger(max_key_, "<-maxkey", L, ", ", R, ", ", double(size_limit_ - sum), ", ", double(point_data_[i].second));
           return L + (R - L) / double(point_data_[i].second) * double(size_limit_ - sum);

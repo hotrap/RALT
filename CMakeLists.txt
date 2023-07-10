@@ -8,9 +8,9 @@ IF (NOT CMAKE_BUILD_TYPE)
 	set(CMAKE_BUILD_TYPE "Relwithdebinfo" CACHE STRING
         "Choose the type of build, options are: Debug Release RelWithDebInfo MinSizeRel." FORCE)
 ENDIF()
-add_executable(test_basic src/test_basic.cpp src/test_splay.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
-add_executable(test_viscnts src/viscnts.cpp src/test_viscnts.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
-add_library(${PROJECT_NAME} SHARED src/viscnts.cpp src/bloom.cpp src/file.cpp src/hash.cpp src/memtable.cpp)
+add_executable(test_basic src/test_basic.cpp src/test_splay.cpp src/file.cpp src/hash.cpp src/cache.cpp)
+add_executable(test_viscnts src/viscnts.cpp src/test_viscnts.cpp src/file.cpp src/hash.cpp src/cache.cpp)
+add_library(${PROJECT_NAME} SHARED src/viscnts.cpp src/file.cpp src/hash.cpp src/cache.cpp)
 
 add_subdirectory(third_party/fmt)
 

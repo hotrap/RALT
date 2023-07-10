@@ -76,7 +76,6 @@ class ImmutableFile {
   FileBlock<BlockKey<SKey, uint32_t>, KeyCompT> index_block_;
   FileBlock<BlockKey<SKey, ValueT>, KeyCompT> data_block_;
   // LRUCache pointer reference to the one in VisCnts (is deleted)
-  BaseAllocator* alloc_;
   KeyCompT comp_;
 
   using DataKey = BlockKey<SKey, ValueT>;
@@ -212,9 +211,10 @@ class ImmutableFile {
   };
 
 
-  ImmutableFile(uint32_t file_id, uint32_t size, std::unique_ptr<RandomAccessFile>&& file_ptr, BaseAllocator* alloc,
-                const std::pair<IndSKey, IndSKey>& range, KeyCompT comp)
-      : file_id_(file_id), size_(size), range_(range), file_ptr_(std::move(file_ptr)), alloc_(alloc), comp_(comp) {
+  ImmutableFile(uint32_t file_id, uint32_t size, std::unique_ptr<RandomAccessFile>&& file_ptr, 
+                const std::pair<IndSKey, IndSKey>& range, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, 
+                KeyCompT comp)
+      : file_id_(file_id), size_(size), range_(range), file_ptr_(std::move(file_ptr)), comp_(comp) {
     // read index block
     int ra_fd = file_ptr_->get_fd();
     FileBlockHandle index_bh, data_bh;
@@ -226,8 +226,8 @@ class ImmutableFile {
     assert(ret >= 0);
     ret = file_ptr_->read(ra_fd, size_ - sizeof(size_t) - sizeof(FileBlockHandle), sizeof(FileBlockHandle), (uint8_t*)(&data_bh));
     assert(ret >= 0);
-    index_block_ = FileBlock<IndexKey, KeyCompT>(file_id, index_bh, alloc, file_ptr_.get(), comp_);
-    data_block_ = FileBlock<DataKey, KeyCompT>(file_id, data_bh, alloc, file_ptr_.get(), comp_);
+    index_block_ = FileBlock<IndexKey, KeyCompT>(file_id, index_bh, file_ptr_.get(), file_index_cache, comp_);
+    data_block_ = FileBlock<DataKey, KeyCompT>(file_id, data_bh, file_ptr_.get(), file_key_cache, comp_);
     file_ptr_->release_fd(ra_fd);
   }
 
@@ -292,7 +292,7 @@ class ImmutableFile {
 
   // calculate number of elements in [L, R]
   int range_count(const std::pair<SKey, SKey>& range) {
-    auto [retl, retr] = rank_pair(range, {1, 1});
+    auto [retl, retr] = rank_pair(range, {0, 0});
     return retr - retl;
   }
 

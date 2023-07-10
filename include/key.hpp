@@ -68,6 +68,25 @@ struct TickValue {
   }
 };
 
+struct LRUTickValue {
+  double tick{0};
+  size_t vlen{0};
+  LRUTickValue() {}
+  LRUTickValue(double _tick, size_t _vlen) : tick(_tick), vlen(_vlen) {}
+  void merge(const LRUTickValue& v, double cur_tick) {
+    tick = std::max(tick, v.tick);
+  }
+  size_t get_hot_size() const {
+    return vlen;
+  }
+  double get_tick() const {
+    return tick;
+  }
+  bool decay(double, std::mt19937_64&) {
+    return true;
+  }
+};
+
 struct SKeyComparator {
   int operator()(SKey A, SKey B) const {
     if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;

@@ -43,8 +43,14 @@ class SeqIteratorSet {
     seg_tree_.resize(size_ + 1, nullptr);
     keys_.resize(size_);
     values_.resize(size_);
-    for (uint32_t i = 1; i <= iters_.size(); ++i) {
+    for (uint32_t i = 1; i <= size_; ++i) {
       seg_tree_[i] = &iters_[i - 1];
+    }
+    for (uint32_t i = 1; i <= size_; i++) {
+      while (i < size_ && !seg_tree_[i]->valid()) {
+        seg_tree_[i] = seg_tree_[size_];
+        size_--;
+      }
       seg_tree_[i]->read(kv);
       keys_[i - 1] = std::move(kv.key());
       values_[i - 1] = kv.value();
@@ -55,7 +61,7 @@ class SeqIteratorSet {
   void next() {
     // logger_printf("[S.Set, next, %d]", size_);
     seg_tree_[1]->next();
-    if (!seg_tree_[1]->valid()) {
+    while (!seg_tree_[1]->valid()) {
       if (size_ == 1) {
         size_ = 0;
         return;

@@ -267,8 +267,8 @@ class EstimateLSM {
     std::string filename_;
 
    public:
-    Partition(Env* env, BaseAllocator* file_alloc, KeyCompT comp, const typename Compaction<KeyCompT, ValueT>::NewFileData& data)
-        : file_(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), file_alloc, data.range, comp),
+    Partition(Env* env, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, KeyCompT comp, const typename Compaction<KeyCompT, ValueT>::NewFileData& data)
+        : file_(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), data.range, file_index_cache, file_key_cache, comp),
           deleted_ranges_(),
           global_hot_size_(data.hot_size),
           filename_(data.filename) {
@@ -288,12 +288,12 @@ class EstimateLSM {
     size_t data_size() const { return file_.data_size(); }
     size_t counts() const { return global_range_counts_; }
     size_t range_count(const std::pair<SKey, SKey>& range) {
-      auto rank_pair = file_.rank_pair(range, {1, 1});
+      auto rank_pair = file_.rank_pair(range, {0, 0});
       // logger("q[rank_pair]=", rank_pair.first, ",", rank_pair.second);
       return deleted_ranges_.deleted_counts(rank_pair);
     }
     size_t range_data_size(const std::pair<SKey, SKey>& range) {
-      auto rank_pair = file_.rank_pair(range, {1, 1});
+      auto rank_pair = file_.rank_pair(range, {0, 0});
       // return deleted_ranges_.deleted_data_size(rank_pair);
       // Estimate
       return deleted_ranges_.deleted_counts(rank_pair) * avg_hot_size_;
@@ -685,18 +685,19 @@ class EstimateLSM {
       return false;
     }
 
-    std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<ValueT>*>& bufs, FileName* filename, Env* env, BaseAllocator* file_alloc,
+    std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<ValueT>*>& bufs, FileName* filename, Env* env, 
+                                                   FileChunkCache* file_index_cache, FileChunkCache* file_key_cache,
                                                    KeyCompT comp, double current_tick) {
       if (bufs.size() == 0) return {};
       std::vector<std::shared_ptr<Level>> ret_vectors;
-      auto flush_func = [current_tick](FileName* filename, Env* env, KeyCompT comp, UnsortedBuffer<ValueT>* buf, std::mutex& mu, BaseAllocator* file_alloc,
+      auto flush_func = [current_tick, file_index_cache, file_key_cache](FileName* filename, Env* env, KeyCompT comp, UnsortedBuffer<ValueT>* buf, std::mutex& mu,
                            std::vector<std::shared_ptr<Level>>& ret_vectors) {
         Compaction<KeyCompT, ValueT> worker(current_tick, filename, env, comp);
         buf->sort(comp);
         auto iter = std::make_unique<typename UnsortedBuffer<ValueT>::Iterator>(*buf);
         auto [files, hot_size] = worker.flush(*iter);
         auto level = std::make_shared<Level>(0, hot_size);
-        for (auto& a : files) level->append_par(std::make_shared<Partition>(env, file_alloc, comp, a));
+        for (auto& a : files) level->append_par(std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a));
         delete buf;
         std::unique_lock lck(mu);
         ret_vectors.push_back(std::move(level));
@@ -705,12 +706,12 @@ class EstimateLSM {
       std::mutex thread_mutex;
       // We now expect the number of SSTs is small, e.g. 4
       for (uint32_t i = 1; i < bufs.size(); i++) {
-        thread_pool.emplace_back(flush_func, filename, env, comp, bufs[i], std::ref(thread_mutex), file_alloc, std::ref(ret_vectors));
+        thread_pool.emplace_back(flush_func, filename, env, comp, bufs[i], std::ref(thread_mutex), std::ref(ret_vectors));
       }
       if (bufs.size() >= 1) {
-        flush_func(filename, env, comp, bufs[0], thread_mutex, file_alloc, std::ref(ret_vectors));
+        flush_func(filename, env, comp, bufs[0], thread_mutex, std::ref(ret_vectors));
       }
-      // for (int i = 0; i < bufs.size(); ++i) flush_func(filename, env, comp, bufs[i], thread_mutex, file_alloc, ret);
+      // for (int i = 0; i < bufs.size(); ++i) flush_func(filename, env, comp, bufs[i], thread_mutex, ret);
       for (auto& a : thread_pool) a.join();
       return ret_vectors;
     }
@@ -731,7 +732,7 @@ class EstimateLSM {
       kMajorCompaction = 1,
       kCompaction = 2,
     };
-    SuperVersion* compact(FileName* filename, Env* env, BaseAllocator* file_alloc, KeyCompT comp, double current_tick, TickFilter<ValueT> tick_filter, JobType job_type) const {
+    SuperVersion* compact(FileName* filename, Env* env, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, KeyCompT comp, double current_tick, TickFilter<ValueT> tick_filter, JobType job_type) const {
       auto Lsize = 0;
       for (auto& a : tree_) Lsize += a->size();
       // check if overlap with any partition
@@ -786,7 +787,7 @@ class EstimateLSM {
           std::unique_lock lck(*del_mutex_);
           auto level = std::make_shared<Level>(0, hot_size);
           for (auto& a : files) {
-            auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
+            auto par = std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
             level->append_par(std::move(par));
           }   
           ret->tree_.push_back(std::move(level));
@@ -818,7 +819,7 @@ class EstimateLSM {
           std::unique_lock lck(*del_mutex_);
           auto level = std::make_shared<Level>(0, 0);
           for (auto& a : files) {
-            auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
+            auto par = std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
             level->append_par(std::move(par));
           }   
           ret->tree_.push_back(std::move(level));
@@ -887,7 +888,7 @@ class EstimateLSM {
             auto rest_iter = rest.begin();
             auto level = std::make_shared<Level>();
             for (auto& a : files) {
-              auto par = std::make_shared<Partition>(env, file_alloc, comp, a);
+              auto par = std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
               while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
                 level->append_par(std::move(*rest_iter));
                 rest_iter++;
@@ -943,7 +944,6 @@ class EstimateLSM {
   };
   Env* env_;
   std::unique_ptr<FileName> filename_;
-  std::unique_ptr<BaseAllocator> file_alloc_;
   KeyCompT comp_;
   SuperVersion* sv_;
   std::thread compact_thread_;
@@ -967,6 +967,9 @@ class EstimateLSM {
   std::atomic<size_t> current_tick_{0};
   std::atomic<double> tick_threshold_{-114514};
 
+  // default cache
+  std::unique_ptr<FileChunkCache> file_cache_;
+
 
   using LevelIteratorSetTForScan = SeqIteratorSetForScan<typename Level::LevelIterator, KeyCompT, ValueT>;
  public:
@@ -983,15 +986,15 @@ class EstimateLSM {
     auto valid() { return iter_.valid(); }
     auto next() { return iter_.next(); }
   };
-  EstimateLSM(Env* env, std::unique_ptr<FileName>&& filename, std::unique_ptr<BaseAllocator>&& file_alloc,
+  EstimateLSM(Env* env, size_t file_cache_size, std::unique_ptr<FileName>&& filename,
               KeyCompT comp)
       : env_(env),
         filename_(std::move(filename)),
-        file_alloc_(std::move(file_alloc)),
         comp_(comp),
         sv_(new SuperVersion(&sv_mutex_, comp)),
         terminate_signal_(0),
-        bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue) {
+        bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue),
+        file_cache_(std::make_unique<FileChunkCache>(file_cache_size)) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
     flush_thread_ = std::thread([this]() { flush_thread(); });
   }
@@ -1071,7 +1074,7 @@ class EstimateLSM {
 
   void trigger_decay() {
     std::unique_lock del_range_lck(sv_modify_mutex_);
-    auto new_sv = sv_->compact(filename_.get(), env_, file_alloc_.get(), comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kDecay);
+    auto new_sv = sv_->compact(filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kDecay);
     _update_superversion(new_sv);
   }
 
@@ -1101,13 +1104,16 @@ class EstimateLSM {
     tick_threshold_ = new_threshold;
     std::unique_lock del_range_lck(sv_modify_mutex_);
     logger(get_tick_filter().get_tick_threshold(), ", ", new_threshold);
-    auto new_sv = sv_->compact(filename_.get(), env_, file_alloc_.get(), comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kMajorCompaction);
+    auto new_sv = sv_->compact(filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kMajorCompaction);
     _update_superversion(new_sv);
   }
 
   double get_tick_threshold() const {
     return tick_threshold_.load(std::memory_order_relaxed);
   }
+
+  /* used for flush thread outside */
+
 
  private:
   void flush_thread() {
@@ -1117,7 +1123,7 @@ class EstimateLSM {
       if (terminate_signal_) return;
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
-      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_, file_alloc_.get(), comp_, current_tick_);
+      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, current_tick_);
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
@@ -1147,7 +1153,7 @@ class EstimateLSM {
 
       auto last_compacted_sv = new_sv;
       while (true) {
-        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_, file_alloc_.get(), comp_, get_current_tick(), TickFilter<ValueT>(-114514), SuperVersion::JobType::kCompaction);
+        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, get_current_tick(), TickFilter<ValueT>(-114514), SuperVersion::JobType::kCompaction);
         if (new_compacted_sv == nullptr) {
           break;
         } else {
@@ -1198,21 +1204,34 @@ class VisCnts {
   size_t hot_set_limit_;
   std::mutex decay_m_;
   std::atomic<bool> is_updating_tick_threshold_{false};
+  bool terminate_signal_{false};
+  std::mutex decay_thread_m_;
+  std::condition_variable decay_cv_;
+  std::thread decay_thread_;
 
  public:
+  using IteratorT = typename EstimateLSM<KeyCompT, ValueT>::SuperVersionIterator;
   // Use different file path for two trees.
   VisCnts(KeyCompT comp, const std::string& path, size_t delta)
-    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT>>(createDefaultEnv(), std::make_unique<FileName>(0, path + "a0"), std::make_unique<DefaultAllocator>(), comp), 
-          std::make_unique<EstimateLSM<KeyCompT, ValueT>>(createDefaultEnv(), std::make_unique<FileName>(0, path + "a1"), std::make_unique<DefaultAllocator>(), comp)},
-      comp_(comp), hot_set_limit_(delta) {}
+    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a0"), comp), 
+          std::make_unique<EstimateLSM<KeyCompT, ValueT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a1"), comp)},
+      comp_(comp), hot_set_limit_(delta) {
+        decay_thread_ = std::thread([&](){ decay_thread(); });
+      }
+  ~VisCnts() {
+    {
+      std::unique_lock lck(decay_thread_m_);
+      terminate_signal_ = true;
+      decay_cv_.notify_all();  
+    }
+    decay_thread_.join();
+  }
   void access(int tier, SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
       tree[tier]->append(key, ValueT(1, vlen));
     } else if (cache_policy == CachePolicyT::kUseTick) {
       tree[tier]->append(key, ValueT(tree[tier]->get_current_tick(), vlen));
-      if (!is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
-        tree[tier]->one_tick();
-      }
+      tree[tier]->one_tick();
     }
     check_decay(); 
   }
@@ -1272,49 +1291,68 @@ class VisCnts {
         }
       }  
     } else if (cache_policy == CachePolicyT::kUseTick) {
-      if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit) && !is_updating_tick_threshold_.exchange(true)) {
+      if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit) && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
         auto hot_size = weight_sum(0) + weight_sum(1);
-
-        if (hot_size > hot_set_limit_ * (1 + kHotSetExceedLimit)) {
-          KthEst<double> est(kEstPointNum, hot_set_limit_);
-          est.pre_scan1(hot_size);
-          auto append_all_to = [&](auto&& iter, auto&& scan_f) {
-            for(; iter->valid(); iter->next()) {
-              auto L = iter->read();
-              // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
-              // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
-              scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
-            }
-          };
-          StopWatch sw;
-          logger("first scan");
-          append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-          append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-          // logger("first scan end");
-          est.pre_scan2();
-          // logger("second scan");
-          append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-          append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-          // logger("second scan end");
-          double new_tick_threshold = est.get_interplot_kth();
-          logger(new_tick_threshold);
-          tree[0]->update_tick_threshold(-new_tick_threshold);
-          tree[1]->update_tick_threshold(-new_tick_threshold);
-          
-          logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
-        }
-        is_updating_tick_threshold_.store(false);
+        decay_cv_.notify_one(); 
       }
     }
   }
   void flush() {
     std::unique_lock lck(decay_m_);
     for(auto& a : tree) a->all_flush();
-    check_decay();
+    if (cache_policy == CachePolicyT::kUseTick) {
+      if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit)) {
+        update_tick_threshold();
+      }
+    }
   }
   size_t get_hot_size(size_t tier) {
     return tree[tier]->get_current_hot_size();
   }
+
+  void update_tick_threshold() {
+    auto hot_size = weight_sum(0) + weight_sum(1);
+    KthEst<double> est(kEstPointNum, hot_set_limit_);
+    est.pre_scan1(hot_size);
+    auto append_all_to = [&](auto&& iter, auto&& scan_f) {
+      for(; iter->valid(); iter->next()) {
+        auto L = iter->read();
+        // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
+        // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
+        scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+      }
+    };
+    StopWatch sw;
+    logger("first scan");
+    append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+    append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+    // logger("first scan end");
+    est.pre_scan2();
+    // logger("second scan");
+    append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
+    append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
+    // logger("second scan end");
+    double new_tick_threshold = est.get_interplot_kth();
+    tree[0]->update_tick_threshold(-new_tick_threshold);
+    tree[1]->update_tick_threshold(-new_tick_threshold);
+    logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+  }
+
+  private:
+    void decay_thread() {
+      while(!terminate_signal_) {
+        std::unique_lock lck(decay_m_);
+        decay_cv_.wait(lck, [&](){ return terminate_signal_ || weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit); });
+        is_updating_tick_threshold_ = true;
+        if (terminate_signal_) {
+          return;
+        }
+        if (cache_policy == CachePolicyT::kUseTick) {
+          update_tick_threshold();
+        }
+        is_updating_tick_threshold_ = false;
+      }
+    }
 };
 
 }  // namespace viscnts_lsm
