@@ -1074,7 +1074,7 @@ class EstimateLSM {
 
   void trigger_decay() {
     std::unique_lock del_range_lck(sv_modify_mutex_);
-    auto new_sv = sv_->compact(filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kDecay);
+    auto new_sv = sv_->compact(filename_.get(), env_, file_cache_.get(), nullptr, comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kDecay);
     _update_superversion(new_sv);
   }
 
@@ -1104,7 +1104,7 @@ class EstimateLSM {
     tick_threshold_ = new_threshold;
     std::unique_lock del_range_lck(sv_modify_mutex_);
     logger(get_tick_filter().get_tick_threshold(), ", ", new_threshold);
-    auto new_sv = sv_->compact(filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kMajorCompaction);
+    auto new_sv = sv_->compact(filename_.get(), env_, file_cache_.get(), nullptr, comp_, get_current_tick(), get_tick_filter(), SuperVersion::JobType::kMajorCompaction);
     _update_superversion(new_sv);
   }
 
@@ -1125,7 +1125,7 @@ class EstimateLSM {
       if (terminate_signal_) return;
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
-      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, current_tick_);
+      auto new_vec = sv_->flush_bufs(buf_q_, filename_.get(), env_, file_cache_.get(), nullptr, comp_, current_tick_);
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
@@ -1155,7 +1155,7 @@ class EstimateLSM {
 
       auto last_compacted_sv = new_sv;
       while (true) {
-        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_, file_cache_.get(), file_cache_.get(), comp_, get_current_tick(), TickFilter<ValueT>(-114514), SuperVersion::JobType::kCompaction);
+        auto new_compacted_sv = last_compacted_sv->compact(filename_.get(), env_, file_cache_.get(), nullptr, comp_, get_current_tick(), TickFilter<ValueT>(-114514), SuperVersion::JobType::kCompaction);
         if (new_compacted_sv == nullptr) {
           break;
         } else {

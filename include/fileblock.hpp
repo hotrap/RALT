@@ -330,6 +330,7 @@ class FileBlock {     // process blocks in a file
       }  
     } else {
       c.acquire(id * kChunkSize, file_ptr_, ra_fd);
+      ref = RefChunk(c, nullptr);
     }
     
   }

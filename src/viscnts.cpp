@@ -29,7 +29,7 @@ struct SKeyComparatorFromRocksDB {
 
 using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue, viscnts_lsm::CachePolicyT::kUseTick>;
 
-class VisCntsIter : public rocksdb::CompactionRouter::Iter {
+class VisCntsIter : public rocksdb::TraitIterator<rocksdb::Slice> {
   public:
     VisCntsIter(std::unique_ptr<VisCntsType::IteratorT> it) 
       : it_(std::move(it)) {}
@@ -87,13 +87,13 @@ size_t VisCnts::RangeHotSize(
 }
 std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::Begin(size_t tier) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  return std::unique_ptr<rocksdb::CompactionRouter::Iter>(new VisCntsIter(vc->seek_to_first(tier)));
+  return std::make_unique<rocksdb::CompactionRouter::Iter>(std::make_unique<VisCntsIter>(vc->seek_to_first(tier)));
 }
 std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::LowerBound(
   size_t tier, rocksdb::Slice key
 ) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  return std::unique_ptr<rocksdb::CompactionRouter::Iter>(new VisCntsIter(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
+  return std::make_unique<rocksdb::CompactionRouter::Iter>(std::make_unique<VisCntsIter>(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
 }
 
 size_t VisCnts::TierNum() {

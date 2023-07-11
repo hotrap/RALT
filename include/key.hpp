@@ -127,7 +127,7 @@ class BlockKey {
 };
 
 // using DataKey = BlockKey<SKey, SValue>;
-// using IndexKey = BlockKey<SKey, uint32_t>;
+using IndexKey = BlockKey<SKey, uint32_t>;
 // using RefDataKey = BlockKey<SKey, SValue*>;
 
 }  // namespace viscnts_lsm

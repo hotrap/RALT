@@ -647,7 +647,7 @@ void test_lru_cache() {
       cache.insert(i, vec[i]);
       DB_ASSERT(equal(cache.try_get_cache(i).value(), vec[i]));
     }
-    DB_INFO("first OK");
+    DB_INFO("first OK. ");
     std::atomic<int> hit = 0;
     std::vector<std::future<void>> h;
     for(int i = 0; i < 16; i++) {
@@ -668,8 +668,32 @@ void test_lru_cache() {
       }));
     }
     for (auto& hh : h) hh.get();
+    h.clear();
     
-    DB_INFO("{}", hit.load());
+    DB_INFO("second OK. {}", hit.load());
+    
+    hit = 0;
+    for(int i = 0; i < 16; i++) {
+      h.push_back(std::async([i, equal, &cache, &vec, &hit]() {
+        std::mt19937_64 rgen(0x202307111335 + i);
+        for (int t = 0; t < 100000; t++) {
+          int i = rgen() % (t % 10 ? 100 : 200);
+          auto result = cache.try_get_cache(i);
+          if (result.has_value()) {
+            hit++;
+            if (!equal(result.value(), vec[i])) {
+              DB_INFO("{}, {}", t, i);
+              DB_ASSERT(false);
+            }
+          } else {
+            cache.insert(i, vec[i]);
+          }
+        }
+      }));
+    }
+    for (auto& hh : h) hh.get();
+
+    DB_INFO("third OK. {}", hit.load());
 
   }
 }
@@ -683,6 +707,6 @@ int main() {
   // test_lsm_decay();
   // test_splay();
   // test_delete_range();
-  test_kthest();
-  // test_lru_cache();
+  // test_kthest();
+  test_lru_cache();
 }

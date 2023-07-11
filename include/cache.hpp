@@ -163,15 +163,16 @@ class LRUChunkCache {
       }
       if (lru_list_.size() >= size_limit_) {
         // size_limit must > maximum numbers of RefChunk. So that we can find a pointer to erase.
-        auto a = hand_->nxt;
-        while (a != hand_ && (a->ref_counts || a->second_chance_)) {
+        auto a = hand_;
+        do {
           a->second_chance_ = false;
           a = a->nxt; 
-        }
+        } while (a != hand_ && (a->ref_counts || a->second_chance_));
         if (a == hand_) {
-          while (a != hand_ && (a->ref_counts || a->second_chance_)) {
+          do {
+            a->second_chance_ = false;
             a = a->nxt; 
-          }
+          } while (a != hand_ && (a->ref_counts || a->second_chance_));
           if (a == hand_) {
             logger("Cache exceeds limit.");
             exit(-1);
@@ -208,7 +209,7 @@ class LRUChunkCache {
 
 using FileChunkCache = LRUChunkCache<size_t>;
 
-constexpr auto kIndexCacheSize = 4 * 1024 * 1024;
+constexpr auto kIndexCacheSize = 4 * 1024;
 
 FileChunkCache* GetDefaultIndexCache();
 
