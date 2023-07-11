@@ -5,11 +5,18 @@
 #include <iostream>
 #include <fmt/core.h>
 #include <fmt/format.h>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
 
 #include <cassert>
 
 template <typename... Args>
 void __logger(Args&&... a) {
+  auto now = std::chrono::system_clock::now();
+  std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+  std::tm *parts = std::localtime(&now_c);
+  std::cerr << std::put_time(parts, "[%Y-%m-%d %H:%M:%S.") << std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000 << "]";
   static std::mutex logger_m_;
   std::unique_lock lck_(logger_m_);
   (std::cerr << ... << a) << std::endl;

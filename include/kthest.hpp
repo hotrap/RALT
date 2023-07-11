@@ -104,6 +104,15 @@ class KthEst {
       return max_key_;
     }
 
+    Key get_from_points() {
+      logger(scan1_point_num_);
+      std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
+        return x.first < y.first;
+      });
+      logger(size_limit_ / (double) scan1_size_sum_);
+      return point_data_[(scan1_point_num_ * size_limit_) / scan1_size_sum_].first;
+    }
+
   private:
     std::vector<size_t> point_size_;
     std::vector<std::pair<Key, size_t>> point_data_;

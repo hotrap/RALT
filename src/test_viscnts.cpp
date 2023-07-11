@@ -279,10 +279,17 @@ void test_ishot_simple() {
   input_all(vc, 0, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
-  for (int i = 0; i < N / 100; i++) {
-    char a[30];
-    DB_ASSERT(vc.IsHot(0, convert_to_slice(a, data[i].first, data[i].second)));
+  {
+    std::vector<std::future<void>> h;
+    for (int i = 0; i < TH; i++) {
+      h.push_back(std::async([L = N / 100 * i, R = N / 100 * (i + 1), &data, &vc]() {
+      for (int j = L; j < R; j++) {
+        char a[30];
+        DB_ASSERT(vc.IsHot(0, convert_to_slice(a, data[j].first, data[j].second)));
+      }}));    
+    }
   }
+  
   DB_INFO("true query end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
   for (int i = 0; i < N / 100; i++) {
@@ -290,9 +297,6 @@ void test_ishot_simple() {
     DB_ASSERT(!vc.IsHot(0, convert_to_slice(a, data2[i].first, data2[i].second)));
   }
   DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
-  auto cache = viscnts_lsm::GetDefaultIndexCache();
-  auto stat = cache->get_stats();
-  DB_INFO("hit: {}, access: {}", stat.hit_count, stat.access_count);
 }
 
 void test_cache_efficiency() {

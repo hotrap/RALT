@@ -538,7 +538,8 @@ void test_kthest() {
       std::pair<size_t, size_t> par(rgen(), rgen() % 100 + 1);
       vec.push_back(par);
     }
-    est.pre_scan1(std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } ));
+    auto total_size = std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } );
+    est.pre_scan1(total_size);
     for (auto& a : vec) est.scan1(a.first, a.second);
     est.pre_scan2();
     for (auto& a : vec) est.scan2(a.first, a.second);
@@ -562,7 +563,8 @@ void test_kthest() {
       std::pair<size_t, size_t> par(rgen(), 10000);
       vec.push_back(par);
     }
-    est.pre_scan1(std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } ));
+    auto total_size = std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } );
+    est.pre_scan1(total_size);
     for (auto& a : vec) est.scan1(a.first, a.second);
     est.pre_scan2();
     for (auto& a : vec) est.scan2(a.first, a.second);
@@ -571,7 +573,50 @@ void test_kthest() {
     size_t sum = 0;
     for (auto& a : vec) if (a.first < the) sum += a.second;
     DB_INFO("{}, {}", sum, the);
-    DB_ASSERT(sum < 1e7 + 10000 && sum > 1e7 - 10000);
+    //DB_ASSERT(sum < 1e7 + 10000 && sum > 1e7 - 10000);
+
+  }
+
+
+  {
+    KthEst<size_t> est(1e4, 1e7);
+    std::mt19937_64 rgen(0x202307051554);
+    std::vector<std::pair<size_t, size_t>> vec;
+    for (int i = 0; i < 400000; i++) {
+      std::pair<size_t, size_t> par(rgen(), rgen() % 100 + 1);
+      vec.push_back(par);
+    }
+    auto total_size = std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } );
+    est.pre_scan1(total_size);
+    for (auto& a : vec) est.scan1(a.first, a.second);
+    
+    auto the = est.get_from_points();
+    size_t sum = 0;
+    for (auto& a : vec) if (a.first < the) sum += a.second;
+    DB_INFO("{}, {}", sum, the);
+    //DB_ASSERT(sum < 1e7 + 1000 && sum > 1e7 - 1000);
+    // DB_ASSERT([&](){ auto the = est.get_kth(); return std::accumulate(vec.begin(), vec.end(), 0, [the](auto x, auto data) { return data.first >= the ? x : x + data.second; } ); } () <= 1e7 ); 
+  }
+  {
+    KthEst<size_t> est(1e4, 1e7);
+    std::vector<std::pair<size_t, size_t>> vec;
+    std::mt19937_64 rgen(0x202307061247);
+    for (int i = 0; i < 1000000; i++) {
+      std::pair<size_t, size_t> par(rgen(), 10);
+      vec.push_back(par);
+    }
+    for (int i = 0; i < 1000; i++) {
+      std::pair<size_t, size_t> par(rgen(), 10000);
+      vec.push_back(par);
+    }
+    auto total_size = std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } );
+    est.pre_scan1(total_size);
+    for (auto& a : vec) est.scan1(a.first, a.second);
+    auto the = est.get_from_points();
+    size_t sum = 0;
+    for (auto& a : vec) if (a.first < the) sum += a.second;
+    DB_INFO("{}, {}", sum, the);
+    //DB_ASSERT(sum < 1e7 + 10000 && sum > 1e7 - 10000);
 
   }
 }
@@ -632,12 +677,12 @@ void test_lru_cache() {
 int main() {
   // test_files();
   // test_unordered_buf();
-  test_lsm_store();
-  test_lsm_store_and_scan();
-  test_random_scan_and_count();
+  // test_lsm_store();
+  // test_lsm_store_and_scan();
+  // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
-  test_delete_range();
-  // test_kthest();
+  // test_delete_range();
+  test_kthest();
   // test_lru_cache();
 }

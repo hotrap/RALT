@@ -1112,8 +1112,10 @@ class EstimateLSM {
     return tick_threshold_.load(std::memory_order_relaxed);
   }
 
-  /* used for flush thread outside */
-
+  /* Used for stats */
+  const FileChunkCache* get_cache() const {
+    return file_cache_.get();
+  }
 
  private:
   void flush_thread() {
@@ -1225,6 +1227,11 @@ class VisCnts {
       decay_cv_.notify_all();  
     }
     decay_thread_.join();
+    
+    auto stat0 = tree[0]->get_cache()->get_stats();
+    logger_printf("tier 0. hit: %d, access: %d", stat0.hit_count, stat0.access_count);
+    auto stat1 = tree[1]->get_cache()->get_stats();
+    logger_printf("tier 1. hit: %d, access: %d", stat1.hit_count, stat1.access_count);
   }
   void access(int tier, SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {

@@ -20,15 +20,19 @@ class List {
       Handle* prv{nullptr};
       Handle* nxt{nullptr};
       T data;
+      bool second_chance_{true};
 
       Handle(const T& data) : data(data) {}
     };
 
     ~List() {
-      for (auto p = head_; p; ) {
+      for (auto p = head_; ; ) {
         auto nxt = p->nxt;
         delete p;
         p = nxt;
+        if (p == head_) {
+          break;
+        }
       }
     }
 
@@ -37,6 +41,10 @@ class List {
       tail_ = new Handle(T());
       head_->nxt = tail_;
       tail_->prv = head_;
+      head_->prv = tail_;
+      tail_->nxt = head_;
+      head_->ref_counts = 114514;
+      tail_->ref_counts = 114514;
     }
 
     Handle* insert(T data, Handle* nxt) {
@@ -134,14 +142,16 @@ class RefChunk {
 template<typename KeyT>
 class LRUChunkCache {
   public:
-    LRUChunkCache(size_t size_limit) : size_limit_(size_limit) {}
+    LRUChunkCache(size_t size_limit) : size_limit_(size_limit), hand_(lru_list_.tail()) {}
     std::optional<RefChunk> try_get_cache(KeyT key) {
-      std::unique_lock lck(m_);
+      std::shared_lock lck(m_);
       auto hash_it = chunks_.find(key);
       access_count_++;
       if(hash_it == chunks_.end()) return {};
       hit_count_++;
-      lru_list_.move_to_head(hash_it->second.first);
+      // Use clock algorithm
+      hash_it->second.first->second_chance_ = true;
+      // lru_list_.move_to_head(hash_it->second.first);
       return RefChunk(hash_it->second.second, &hash_it->second.first->ref_counts);
     }
     
@@ -153,18 +163,25 @@ class LRUChunkCache {
       }
       if (lru_list_.size() >= size_limit_) {
         // size_limit must > maximum numbers of RefChunk. So that we can find a pointer to erase.
-        auto a = lru_list_.tail()->prv;
-        while (a != lru_list_.head() && a->ref_counts) {
-          a = a->prv; 
+        auto a = hand_->nxt;
+        while (a != hand_ && (a->ref_counts || a->second_chance_)) {
+          a->second_chance_ = false;
+          a = a->nxt; 
         }
-        if (a == lru_list_.head()) {
-          logger("Cache exceeds limit.");
-          exit(-1);
+        if (a == hand_) {
+          while (a != hand_ && (a->ref_counts || a->second_chance_)) {
+            a = a->nxt; 
+          }
+          if (a == hand_) {
+            logger("Cache exceeds limit.");
+            exit(-1);
+          }
         }
+        hand_ = a->nxt;
         chunks_.erase(a->data);
         lru_list_.remove(a);
       }
-      chunks_[key] = {lru_list_.insert(key, lru_list_.head()->nxt), std::move(copy_c)};
+      chunks_[key] = {lru_list_.insert(key, hand_), std::move(copy_c)};
     }
 
     // Get statistics.
@@ -183,9 +200,10 @@ class LRUChunkCache {
   private:
     std::unordered_map<KeyT, std::pair<typename List<KeyT>::Handle*, Chunk>> chunks_;
     List<KeyT> lru_list_;
+    typename List<KeyT>::Handle* hand_;
     std::shared_mutex m_;
     size_t size_limit_{0};
-    size_t hit_count_{0}, access_count_{0};
+    std::atomic<size_t> hit_count_{0}, access_count_{0};
 };
 
 using FileChunkCache = LRUChunkCache<size_t>;

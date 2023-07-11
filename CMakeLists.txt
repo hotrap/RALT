@@ -19,4 +19,4 @@ target_link_libraries(test_viscnts PRIVATE pthread boost_fiber fmt ${ROCKSDB_LIB
 target_link_libraries(${PROJECT_NAME} PRIVATE pthread boost_fiber)
 
 
-include_directories(${PROJECT_SOURCE_DIR}/include ${ROCKSDB_INCLUDE} third_party/fmt/include)
+include_directories(${PROJECT_SOURCE_DIR}/include ${ROCKSDB_INCLUDE} third_party/fmt/include third_party/spdlog/include)
