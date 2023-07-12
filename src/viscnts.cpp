@@ -85,15 +85,15 @@ size_t VisCnts::RangeHotSize(
   auto rkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.end.user_key.data()), range.end.user_key.size());
   return vc->range_data_size(tier, {lkey, rkey});
 }
-std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::Begin(size_t tier) {
+rocksdb::CompactionRouter::Iter VisCnts::Begin(size_t tier) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  return std::make_unique<rocksdb::CompactionRouter::Iter>(std::make_unique<VisCntsIter>(vc->seek_to_first(tier)));
+  return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek_to_first(tier)));
 }
-std::unique_ptr<rocksdb::CompactionRouter::Iter> VisCnts::LowerBound(
+rocksdb::CompactionRouter::Iter VisCnts::LowerBound(
   size_t tier, rocksdb::Slice key
 ) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  return std::make_unique<rocksdb::CompactionRouter::Iter>(std::make_unique<VisCntsIter>(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
+  return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
 }
 
 size_t VisCnts::TierNum() {

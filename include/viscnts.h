@@ -23,8 +23,8 @@ public:
 	size_t RangeHotSize(
 		size_t tier, rocksdb::RangeBounds range
 	);
-	std::unique_ptr<rocksdb::CompactionRouter::Iter> Begin(size_t tier);
-	std::unique_ptr<rocksdb::CompactionRouter::Iter> LowerBound(
+	rocksdb::CompactionRouter::Iter Begin(size_t tier);
+	rocksdb::CompactionRouter::Iter LowerBound(
 		size_t tier, rocksdb::Slice key
 	);
 	void Flush();
