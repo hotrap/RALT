@@ -105,7 +105,6 @@ namespace viscnts_lsm {
 constexpr auto kLimitMin = 10;
 constexpr auto kLimitMax = 20;
 constexpr auto kMergeRatio = 0.1;
-constexpr auto kUnmergedRatio = 0.1;
 constexpr auto kUnsortedBufferSize = kSSTable;
 constexpr auto kUnsortedBufferMaxQueue = 4;
 constexpr auto kMaxFlushBufferQueueSize = 10;
@@ -545,16 +544,16 @@ class EstimateLSM {
       return false;
     }
 
-    std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<ValueT>*>& bufs, FileName* filename, Env* env, 
+    std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<KeyCompT, ValueT>*>& bufs, FileName* filename, Env* env, 
                                                    FileChunkCache* file_index_cache, FileChunkCache* file_key_cache,
                                                    KeyCompT comp, double current_tick) {
       if (bufs.size() == 0) return {};
       std::vector<std::shared_ptr<Level>> ret_vectors;
-      auto flush_func = [current_tick, file_index_cache, file_key_cache](FileName* filename, Env* env, KeyCompT comp, UnsortedBuffer<ValueT>* buf, std::mutex& mu,
+      auto flush_func = [current_tick, file_index_cache, file_key_cache](FileName* filename, Env* env, KeyCompT comp, UnsortedBuffer<KeyCompT, ValueT>* buf, std::mutex& mu,
                            std::vector<std::shared_ptr<Level>>& ret_vectors) {
         Compaction<KeyCompT, ValueT> worker(current_tick, filename, env, comp);
-        buf->sort(comp);
-        auto iter = std::make_unique<typename UnsortedBuffer<ValueT>::Iterator>(*buf);
+        buf->sort_with_mp();
+        auto iter = std::make_unique<typename UnsortedBuffer<KeyCompT, ValueT>::Iterator>(*buf);
         auto [files, hot_size] = worker.flush(*iter);
         auto level = std::make_shared<Level>(0, hot_size);
         for (auto& a : files) level->append_par(std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a));
@@ -809,7 +808,7 @@ class EstimateLSM {
   std::thread compact_thread_;
   std::thread flush_thread_;
   std::atomic<bool> terminate_signal_;
-  UnsortedBufferPtrs<ValueT> bufs_;
+  UnsortedBufferPtrs<KeyCompT, ValueT> bufs_;
   std::mutex sv_mutex_;
   std::mutex sv_load_mutex_;
   // Only one thread can modify sv.
@@ -853,7 +852,7 @@ class EstimateLSM {
         comp_(comp),
         sv_(new SuperVersion(&sv_mutex_, comp)),
         terminate_signal_(0),
-        bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue),
+        bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue, comp),
         file_cache_(std::make_unique<FileChunkCache>(file_cache_size)),
         current_tick_(current_tick) {
     compact_thread_ = std::thread([this]() { compact_thread(); });

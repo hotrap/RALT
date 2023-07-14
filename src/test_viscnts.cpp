@@ -106,7 +106,7 @@ void parallel_run(int TH, F&& func) {
 
 void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
-  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  size_t N = 3e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
@@ -117,23 +117,46 @@ void test_store_and_scan() {
   sort_data(data);
   DB_INFO("sort end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
-  auto iter = vc.Begin(0);
-  auto ans_iter = data.begin();
-  while (true) {
-    auto result = iter.next();
-    if (result) {
-      DB_ASSERT(ans_iter != data.end());
-      if(!(ans_iter->first == convert_to_int(*result))) {
-        DB_INFO("{}, {}, {}", ans_iter - data.begin(), ans_iter->first, convert_to_int(*result));
+  {
+    auto iter = vc.Begin(0);
+    auto ans_iter = data.begin();
+    while (true) {
+      auto result = iter.next();
+      if (result) {
+        DB_ASSERT(ans_iter != data.end());
+        if(!(ans_iter->first == convert_to_int(*result))) {
+          DB_INFO("{}, {}, {}", ans_iter - data.begin(), ans_iter->first, convert_to_int(*result));
+        }
+        DB_ASSERT(ans_iter->first == convert_to_int(*result));
+        ans_iter++;
+      } else {
+        DB_ASSERT(ans_iter == data.end());
+        break;
       }
-      DB_ASSERT(ans_iter->first == convert_to_int(*result));
-      ans_iter++;
-    } else {
-      DB_ASSERT(ans_iter == data.end());
-      break;
     }
+    DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
+    sw.Reset();  
   }
-  DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
+  
+  {
+    auto iter = vc.FastBegin(0);
+    auto ans_iter = data.begin();
+    while (true) {
+      auto result = iter->next();
+      if (result.has_value()) {
+        DB_ASSERT(ans_iter != data.end());
+        if(!(ans_iter->first == convert_to_int(result.value()))) {
+          DB_INFO("{}, {}, {}", ans_iter - data.begin(), ans_iter->first, convert_to_int(result.value()));
+        }
+        DB_ASSERT(ans_iter->first == convert_to_int(result.value()));
+        ans_iter++;
+      } else {
+        DB_ASSERT(ans_iter == data.end());
+        break;
+      }
+    }
+    DB_INFO("fast scan end. Used: {} s", sw.GetTimeInSeconds());
+  }
   sw.Reset();
   parallel_run(TH, [&](){
     for (int i = 0; i < Q; i++) {
@@ -305,8 +328,8 @@ void test_cache_efficiency() {
 
 int main() {
   test_store_and_scan();
-  test_decay_simple();
-  test_transfer_range();
+  // test_decay_simple();
+  // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
 }

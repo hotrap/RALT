@@ -10,6 +10,10 @@
 #include "alloc.hpp"
 #include "common.hpp"
 #include "key.hpp"
+#include "iterators.hpp"
+#include <set>
+#include <vector>
+#include <unordered_map>
 
 namespace viscnts_lsm {
 
@@ -128,25 +132,60 @@ class SkipList {
   Node *head_;
 };
 
-template<typename ValueT>
+template<typename KeyCompT, typename ValueT>
 class UnsortedBuffer {
   std::atomic<size_t> used_size_;
+  std::atomic<uint32_t> working_count_;
   size_t buffer_size_;
+  KeyCompT comp_;
   uint8_t *data_;
   std::vector<std::pair<SKey, const uint8_t *>> sorted_result_;
 
+  class Comparator {
+    KeyCompT comp_;
+    public:
+      Comparator(KeyCompT comp) : comp_(comp) {}
+      bool operator()(const std::pair<SKey, const uint8_t*>& x, const std::pair<SKey, const uint8_t*>& y) const {
+        auto result = comp_(x.first, y.first);
+        if (result == 0) {
+          return x.second < y.second;
+        } 
+        return result < 0;
+      }
+  };
+
+  std::vector<std::set<std::pair<SKey, const uint8_t*>, Comparator>> mp_;
+  constexpr static auto kHashTableSize = 1024576;
+
+  class MpIterator {
+    typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it_;
+    typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it_end_;
+    
+    public:
+      MpIterator(typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it, typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it_end)
+        : it_(it), it_end_(it_end) {}
+      std::pair<SKey, const uint8_t*> read() { return *it_; }
+      void read(BlockKey<SKey, const uint8_t*>& kv) {
+        kv = BlockKey<SKey, const uint8_t*>(it_->first, it_->second);
+      }
+      void next() { it_++; }
+      bool valid() { return it_end_ != it_; }
+  };
+
  public:
-  UnsortedBuffer(size_t size) : used_size_(0), buffer_size_(size), data_(new uint8_t[size]) { memset(data_, 0, size); }
-  UnsortedBuffer(const UnsortedBuffer &buf) {
-    used_size_ = buf.used_size_.load();
-    buffer_size_ = buf.buffer_size_;
-    data_ = new uint8_t[buffer_size_];
-    sorted_result_ = buf.sorted_result_;
-    memcpy(data_, buf.data_, buffer_size_);
+  UnsortedBuffer(size_t size, KeyCompT comp) : used_size_(0), working_count_(0), buffer_size_(size), comp_(comp), data_(new uint8_t[size]) { 
+    memset(data_, 0, size);
+    for(uint i = 0; i < kHashTableSize; i++) {
+      mp_.emplace_back(Comparator(comp_));
+    } 
   }
+  UnsortedBuffer(const UnsortedBuffer &buf) = delete;
   UnsortedBuffer(UnsortedBuffer &&buf) {
     used_size_ = buf.used_size_.load();
+    working_count_ = buf.working_count_.load();
     buffer_size_ = buf.buffer_size_;
+    comp_ = std::move(buf.comp_);
+    mp_ = std::move(mp_);
     data_ = buf.data_;
     sorted_result_ = std::move(buf.sorted_result_);
     buf.data_ = nullptr;
@@ -161,16 +200,23 @@ class UnsortedBuffer {
       used_size_.fetch_sub(size, std::memory_order_relaxed);
       return false;
     }
+    working_count_ += 1;
     *reinterpret_cast<ValueT *>(key.write(data_ + pos)) = value;
+    {
+      SKey k;
+      auto v = k.read(data_ + pos);
+      mp_[std::hash<std::thread::id>{}(std::this_thread::get_id()) % (kHashTableSize)].insert(std::make_pair(k, v));
+    }
+    working_count_ -= 1;
     return true;
   }
 
-  template <typename KeyComp>
-  void sort(KeyComp comp) {
+  void sort() {
+    while(working_count_.load(std::memory_order_relaxed) != 0);
     sorted_result_.clear();
     size_t limit = used_size_;
-    auto comp_func = [comp](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
-      return comp(x.first, y.first) < 0;
+    auto comp_func = [this](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
+      return comp_(x.first, y.first) < 0;
     };
     for (uint8_t *d = data_; d - data_ + sizeof(uint32_t) < limit && *reinterpret_cast<uint32_t *>(d) != 0;) {
       SKey key;
@@ -181,8 +227,24 @@ class UnsortedBuffer {
     // tim::timsort(sorted_result_.begin(), sorted_result_.end(), comp_func);
     std::sort(sorted_result_.begin(), sorted_result_.end(), comp_func);
   }
+
+  void sort_with_mp() {
+    while(working_count_.load(std::memory_order_relaxed) != 0);
+    sorted_result_.clear();
+    SeqIteratorSet<MpIterator, KeyCompT, const uint8_t*> iters(comp_);
+    for (auto& a : mp_) if (a.size()) {
+      iters.push(MpIterator(a.begin(), a.end()));
+    }
+    iters.build();
+    while(iters.valid()) {
+      sorted_result_.push_back(iters.read());
+      iters.next();
+    }
+  }
+
   void clear() {
     auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
+    for (auto& a : mp_) a.clear();
     memset(data_, 0, limit);
     used_size_ = 0;
   }
@@ -203,20 +265,21 @@ class UnsortedBuffer {
   };
 };
 
-template<typename ValueT>
+template<typename KeyCompT, typename ValueT>
 class UnsortedBufferPtrs {
   constexpr static size_t kWaitSleepMilliSeconds = 10;
   std::mutex m_;
   std::condition_variable cv_;
-  std::atomic<UnsortedBuffer<ValueT> *> buf;
-  std::vector<UnsortedBuffer<ValueT> *> buf_q_;
+  std::atomic<UnsortedBuffer<KeyCompT, ValueT> *> buf;
+  std::vector<UnsortedBuffer<KeyCompT, ValueT> *> buf_q_;
   size_t buffer_size_;
   size_t max_q_size_;
+  KeyCompT comp_;
   bool terminal_signal_{false};
 
  public:
-  UnsortedBufferPtrs(size_t buffer_size, size_t max_q_size) : buffer_size_(buffer_size), max_q_size_(max_q_size) {
-    buf = new UnsortedBuffer<ValueT>(buffer_size_);
+  UnsortedBufferPtrs(size_t buffer_size, size_t max_q_size, KeyCompT comp) : buffer_size_(buffer_size), max_q_size_(max_q_size), comp_(comp) {
+    buf = new UnsortedBuffer<KeyCompT, ValueT>(buffer_size_, comp_);
   }
   ~UnsortedBufferPtrs() {
     delete buf.load();
@@ -245,13 +308,13 @@ class UnsortedBufferPtrs {
         continue; // This almost never happens
       }
       buf_q_.push_back(buf);
-      buf = bbuf = new UnsortedBuffer<ValueT>(buffer_size_);
+      buf = bbuf = new UnsortedBuffer<KeyCompT, ValueT>(buffer_size_, comp_);
       m_.unlock();
       cv_.notify_one();
     } while (!bbuf->append(key, value));
     return true;
   }
-  std::vector<UnsortedBuffer<ValueT> *> get() {
+  std::vector<UnsortedBuffer<KeyCompT, ValueT> *> get() {
     if (buf_q_.size()) {
       std::unique_lock lck_(m_);
       auto ret = std::move(buf_q_);
@@ -261,11 +324,11 @@ class UnsortedBufferPtrs {
     return {};
   }
 
-  UnsortedBuffer<ValueT> *this_buf() { return buf.load(std::memory_order_relaxed); }
+  UnsortedBuffer<KeyCompT, ValueT> *this_buf() { return buf.load(std::memory_order_relaxed); }
 
   void terminate() { terminal_signal_ = 1; cv_.notify_all(); }
 
-  std::vector<UnsortedBuffer<ValueT> *> wait_and_get() {
+  std::vector<UnsortedBuffer<KeyCompT, ValueT> *> wait_and_get() {
     std::unique_lock lck_(m_);
     cv_.wait(lck_, [&](){ return buf_q_.size() || terminal_signal_; });
     // It may return empty queue.
@@ -285,7 +348,7 @@ class UnsortedBufferPtrs {
     std::unique_lock lck_(m_);
     if (buf.load()->size() > 0) {
       buf_q_.push_back(buf);
-      buf = new UnsortedBuffer<ValueT>(buffer_size_);  
+      buf = new UnsortedBuffer<KeyCompT, ValueT>(buffer_size_, comp_);  
     }
     cv_.notify_one();
   }

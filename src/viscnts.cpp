@@ -51,6 +51,29 @@ class VisCntsIter : public rocksdb::TraitIterator<rocksdb::Slice> {
     std::unique_ptr<VisCntsType::IteratorT> it_;
 };
 
+
+class FastVisCntsIter : public FastIter<rocksdb::Slice> {
+  public:
+    FastVisCntsIter(std::unique_ptr<VisCntsType::IteratorT> it) 
+      : it_(std::move(it)) {}
+    ~FastVisCntsIter() {}
+    std::optional<rocksdb::Slice> next() override {
+      if (is_first_) {
+        is_first_ = false;
+      } else {
+        it_->next();
+      }
+      if (it_->valid()) {
+        auto key = it_->read().first;
+        return rocksdb::Slice(reinterpret_cast<const char*>(key.data()), key.len());
+      }
+      return {};
+    }
+  private:
+    bool is_first_{true};
+    std::unique_ptr<VisCntsType::IteratorT> it_;
+};
+
 VisCnts VisCnts::New(
 		const rocksdb::Comparator *ucmp, const char *dir,
 		size_t max_hot_set_size) {
@@ -88,6 +111,10 @@ size_t VisCnts::RangeHotSize(
 rocksdb::CompactionRouter::Iter VisCnts::Begin(size_t tier) {
   auto vc = static_cast<VisCntsType*>(vc_);
   return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek_to_first(tier)));
+}
+std::unique_ptr<FastIter<rocksdb::Slice>> VisCnts::FastBegin(size_t tier) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return std::make_unique<FastVisCntsIter>(vc->seek_to_first(tier));
 }
 rocksdb::CompactionRouter::Iter VisCnts::LowerBound(
   size_t tier, rocksdb::Slice key

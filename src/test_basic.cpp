@@ -7,6 +7,13 @@
 using namespace std;
 /// testing function.
 
+int SKeyCompFunc(viscnts_lsm::SKey A, viscnts_lsm::SKey B) {
+  if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
+  return memcmp(A.data(), B.data(), A.len());
+}
+
+using KeyCompType = int(viscnts_lsm::SKey, viscnts_lsm::SKey);
+
 void test_files() {
   using namespace viscnts_lsm;
   int L = 1e6, FS = 20;
@@ -67,7 +74,6 @@ void test_files() {
 
 void test_unordered_buf() {
   using namespace viscnts_lsm;
-  UnsortedBufferPtrs<SValue> bufs(kUnsortedBufferSize, 100);
   int L = 1e7, TH = 10;
   std::atomic<int> signal = 0;
   std::vector<std::thread> v;
@@ -79,9 +85,10 @@ void test_unordered_buf() {
     uint32_t y = bp[0] | ((uint32_t)bp[1] << 8) | ((uint32_t)bp[2] << 16) | ((uint32_t)bp[3] << 24);
     return (int)x - (int)y;
   };
+  UnsortedBufferPtrs<decltype(comp), SValue> bufs(kUnsortedBufferSize, 100, comp);
   auto start = std::chrono::system_clock::now();
   auto th = std::thread(
-      [comp](std::atomic<int>& signal, UnsortedBufferPtrs<SValue>& bufs, std::vector<std::pair<IndSKey, SValue>>& result) {
+      [comp](std::atomic<int>& signal, UnsortedBufferPtrs<decltype(comp), SValue>& bufs, std::vector<std::pair<IndSKey, SValue>>& result) {
         while (true) {
           auto buf_q_ = signal.load() ? bufs.get() : bufs.wait_and_get();
           using namespace std::chrono;
@@ -91,8 +98,8 @@ void test_unordered_buf() {
             continue;
           }
           for (auto& buf : buf_q_) {
-            buf->sort(comp);
-            UnsortedBuffer<SValue>::Iterator iter(*buf);
+            buf->sort();
+            UnsortedBuffer<decltype(comp), SValue>::Iterator iter(*buf);
             while (iter.valid()) {
               result.emplace_back(iter.read());
               iter.next();
@@ -104,7 +111,7 @@ void test_unordered_buf() {
       std::ref(signal), std::ref(bufs), std::ref(result));
   for (int i = 0; i < TH; i++) {
     v.emplace_back(
-        [i, L, TH](UnsortedBufferPtrs<SValue>& bufs) {
+        [i, L, TH](UnsortedBufferPtrs<decltype(comp), SValue>& bufs) {
           int l = L / TH * i, r = L / TH * (i + 1);
           std::vector<int> v(r - l);
           for (int i = l; i < r; i++) v[i - l] = i;
@@ -707,11 +714,11 @@ int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  // test_lsm_store_and_scan();
+  test_lsm_store_and_scan();
   // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
   // test_delete_range();
   // test_kthest();
-  test_lru_cache();
+  // test_lru_cache();
 }

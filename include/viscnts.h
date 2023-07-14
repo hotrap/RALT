@@ -6,6 +6,12 @@
 #include "rocksdb/compaction_router.h"
 #include "rocksdb/comparator.h"
 
+template<typename T>
+class FastIter {
+	public:
+	  virtual std::optional<T> next() = 0;
+};
+
 class VisCnts {
 public:
 	VisCnts(const VisCnts&) = delete;
@@ -27,6 +33,7 @@ public:
 	rocksdb::CompactionRouter::Iter LowerBound(
 		size_t tier, rocksdb::Slice key
 	);
+	std::unique_ptr<FastIter<rocksdb::Slice>> FastBegin(size_t tier);
 	void Flush();
 	size_t GetHotSize(size_t tier);
 private:
