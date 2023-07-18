@@ -65,8 +65,8 @@ class Compaction {
     decay_prob_ = 0.5;
   }
 
-  template <typename TIter, typename FilterFunc>
-  auto flush(TIter& left, FilterFunc&& filter_func) {
+  template <typename TIter, typename FilterFunc, typename OtherFunc>
+  auto flush(TIter& left, FilterFunc&& filter_func, OtherFunc other_func) {
     vec_newfiles_.clear();
     // null iterator
     if (!left.valid()) {
@@ -91,6 +91,7 @@ class Compaction {
       } else {
         // only store those filter returning true.
         if (filter_func(lst_value_)) {
+          // other_func(lst_value_.first, lst_value_.second);
           real_size_ += _calc_hot_size(lst_value_);
           builder_.append(lst_value_);
           _divide_file(L.first.size() + L.second.get_hot_size());
@@ -111,21 +112,26 @@ class Compaction {
     return std::make_pair(vec_newfiles_, real_size_);
   }
 
-  template <typename TIter>
-  auto decay1(TIter& iters) {
+  template <typename TIter, typename FuncT>
+  auto decay1(TIter& iters, FuncT&& func) {
     return flush(iters, [this](auto& kv){
       return kv.second.decay(decay_prob_, rndgen_);
-    });
+    }, std::forward<FuncT>(func));
+  }
+
+  template<typename TIter, typename FuncT>
+  auto flush(TIter& left, FuncT&& func) {
+    return flush(left, [](auto&) { return true; }, std::forward<FuncT>(func));
   }
 
   template<typename TIter>
   auto flush(TIter& left) {
-    return flush(left, [](auto&) { return true; });
+    return flush(left, [](auto&) { return true; }, [](auto&&...){});
   }
 
-  template<typename TIter>
-  auto flush_with_filter(TIter& left, TickFilter<ValueT> tick_filter) {
-    return flush(left, [tick_filter](auto& kv) { return tick_filter.check(kv.second); });
+  template<typename TIter, typename FuncT>
+  auto flush_with_filter(TIter& left, TickFilter<ValueT> tick_filter, FuncT&& func) {
+    return flush(left, [tick_filter](auto& kv) { return tick_filter.check(kv.second); }, std::forward<FuncT>(func));
   }
 
   size_t get_write_bytes() const {

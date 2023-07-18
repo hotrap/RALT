@@ -591,7 +591,13 @@ class EstimateLSM {
       kMajorCompaction = 1,
       kCompaction = 2,
     };
+
     SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type) const {
+      return compact(lsm, job_type, [](auto, auto){});
+    }
+
+    template<typename FuncT>
+    SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type, FuncT&& do_something) const {
       auto Lsize = 0;
       for (auto& a : tree_) Lsize += a->size();
       auto comp = lsm.get_comp();
@@ -644,7 +650,7 @@ class EstimateLSM {
 
         // compaction...
         Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
-        auto [files, hot_size] = worker.decay1(*iters);
+        auto [files, hot_size] = worker.decay1(*iters, std::forward<FuncT>(do_something));
         auto ret = new SuperVersion(del_mutex_, comp_);
         // major compaction, so levels except largest_ become empty.
         
@@ -676,7 +682,7 @@ class EstimateLSM {
 
         // compaction...
         Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
-        auto [files, hot_size] = worker.flush_with_filter(*iters, tick_filter);
+        auto [files, hot_size] = worker.flush_with_filter(*iters, tick_filter, std::forward<FuncT>(do_something));
         auto ret = new SuperVersion(del_mutex_, comp_);
         // major compaction, so levels except largest_ become empty.
         
@@ -745,7 +751,7 @@ class EstimateLSM {
           // compaction...
           Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
           // Don't use tick filter because it is partial merge.
-          auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514));
+          auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
           auto ret = new SuperVersion(del_mutex_, comp_);
           // minor compaction?
           // hot_size_overestimate = largest_ + remaining levels + new level
@@ -979,6 +985,17 @@ class EstimateLSM {
     _update_superversion(new_sv);
   }
 
+  
+  void update_tick_threshold_and_update_est(double new_threshold, KthEst<double>& est) {
+    tick_threshold_ = new_threshold;
+    std::unique_lock del_range_lck(sv_modify_mutex_);
+    logger(get_tick_filter().get_tick_threshold(), ", ", new_threshold);
+    auto new_sv = sv_->compact(*this, SuperVersion::JobType::kMajorCompaction, [&](const auto& key, const ValueT& value) {
+      est.scan1(-value.get_tick(), key.len() + value.get_hot_size());
+    });
+    _update_superversion(new_sv);
+  }
+
   double get_tick_threshold() const {
     return tick_threshold_.load(std::memory_order_relaxed);
   }
@@ -1082,7 +1099,8 @@ class EstimateLSM {
 
 enum class CachePolicyT {
   kUseDecay = 0,
-  kUseTick
+  kUseTick,
+  kUseFasterTick
 };
 
 // Viscnts, implement lsm tree and other things.
@@ -1102,6 +1120,10 @@ class VisCnts {
   std::condition_variable decay_cv_;
   std::thread decay_thread_;
   std::atomic<size_t> current_tick_{0};
+
+  // For kUseFasterTick
+  KthEst<double> last_est_{kEstPointNum, hot_set_limit_};
+  bool is_first_tick_update_{true};
 
  public:
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
@@ -1132,7 +1154,7 @@ class VisCnts {
   void access(int tier, SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
       tree[tier]->append(key, ValueT(1, vlen));
-    } else if (cache_policy == CachePolicyT::kUseTick) {
+    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       auto tick = current_tick_.fetch_add(1, std::memory_order_relaxed);
       tree[tier]->append(key, ValueT(tick, vlen));
     }
@@ -1189,7 +1211,7 @@ class VisCnts {
           tree[1]->trigger_decay();  
         }
       }  
-    } else if (cache_policy == CachePolicyT::kUseTick) {
+    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit) && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
         decay_cv_.notify_one(); 
       }
@@ -1198,38 +1220,68 @@ class VisCnts {
   void flush() {
     std::unique_lock lck(decay_m_);
     for(auto& a : tree) a->all_flush();
-    if (cache_policy == CachePolicyT::kUseTick) {
+    if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit)) {
         update_tick_threshold();
       }
     }
   }
   void update_tick_threshold() {
-    auto hot_size = weight_sum(0) + weight_sum(1);
-    KthEst<double> est(kEstPointNum, hot_set_limit_);
-    est.pre_scan1(hot_size);
-    auto append_all_to = [&](auto&& iter, auto&& scan_f) {
-      for(; iter->valid(); iter->next()) {
-        auto L = iter->read();
-        // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
-        // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
-        scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+    if (cache_policy == CachePolicyT::kUseTick) {
+      auto hot_size = weight_sum(0) + weight_sum(1);
+      KthEst<double> est(kEstPointNum, hot_set_limit_);
+      est.pre_scan1(hot_size);
+      auto append_all_to = [&](auto&& iter, auto&& scan_f) {
+        for(; iter->valid(); iter->next()) {
+          auto L = iter->read();
+          // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
+          // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
+          scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+        }
+      };
+      StopWatch sw;
+      logger("first scan");
+      append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+      append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+      // logger("first scan end");
+      est.pre_scan2();
+      // logger("second scan");
+      append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
+      append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
+      // logger("second scan end");
+      double new_tick_threshold = est.get_interplot_kth();
+
+      tree[0]->update_tick_threshold(-new_tick_threshold);
+      tree[1]->update_tick_threshold(-new_tick_threshold);
+      logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+    } else if (cache_policy == CachePolicyT::kUseFasterTick) {
+      auto hot_size = weight_sum(0) + weight_sum(1);
+      StopWatch sw;
+      if (is_first_tick_update_) {
+        is_first_tick_update_ = false;
+        KthEst<double> est(kEstPointNum, hot_set_limit_);
+        est.pre_scan1(hot_size);
+        auto append_all_to = [&](auto&& iter, auto&& scan_f) {
+          for(; iter->valid(); iter->next()) {
+            auto L = iter->read();
+            // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
+            // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
+            scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+          }
+        };
+        logger("first fast scan");
+        append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+        append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+        last_est_ = est;
       }
-    };
-    StopWatch sw;
-    logger("first scan");
-    append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-    append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-    // logger("first scan end");
-    est.pre_scan2();
-    // logger("second scan");
-    append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-    append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-    // logger("second scan end");
-    double new_tick_threshold = est.get_interplot_kth();
-    tree[0]->update_tick_threshold(-new_tick_threshold);
-    tree[1]->update_tick_threshold(-new_tick_threshold);
-    logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+      logger("begin fast tick threshold update.");
+      double new_tick_threshold = last_est_.get_from_points();
+      last_est_.pre_scan1(hot_size);
+      tree[0]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+      tree[1]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+      logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+    }
+    
   }
 
   private:
@@ -1241,7 +1293,7 @@ class VisCnts {
         if (terminate_signal_) {
           return;
         }
-        if (cache_policy == CachePolicyT::kUseTick) {
+        if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
           update_tick_threshold();
         }
         is_updating_tick_threshold_ = false;
