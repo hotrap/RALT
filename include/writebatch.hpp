@@ -15,6 +15,9 @@ class WriteBatch {
   size_t used_size_;
   uint8_t* data_;
 
+  /* For statistics */
+  size_t stat_flushed_size_{0};
+
  public:
   const static size_t kBatchSize = 1 << 20;
   explicit WriteBatch(std::unique_ptr<AppendFile>&& file) : file_ptr_(std::move(file)), buffer_size_(kBatchSize), used_size_(0) {
@@ -73,9 +76,14 @@ class WriteBatch {
     if (used_size_) {
       auto ret = file_ptr_->write(Slice(data_, used_size_));
       (void)ret;
+      stat_flushed_size_ += used_size_;
       assert(ret == 0);
     }
     used_size_ = 0;
+  }
+
+  size_t get_stat_flushed_size() const {
+    return stat_flushed_size_;
   }
 };
 

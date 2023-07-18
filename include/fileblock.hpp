@@ -75,7 +75,7 @@ class FileBlock {     // process blocks in a file
     Chunk currenct_value_chunk_, current_key_chunk_;
     uint32_t current_value_id_, current_key_id_;
   };
-
+/*
   // Do something like coroutine..
   // SearchDataType: used to get binary search data.
   template<typename SearchDataType>
@@ -191,7 +191,7 @@ class FileBlock {     // process blocks in a file
     void read_key_end() {
       KV _key;
       block_.read_key(tmp_offset_, current_key_chunk_, _key);
-      /* if the answer is updated, then we update the corresponding offset. */
+      // if the answer is updated, then we update the corresponding offset. 
       if(bs_data_.gen_next(_key)) {
         ans_offset_ = candidate_ans_offset_;
       }
@@ -206,9 +206,10 @@ class FileBlock {     // process blocks in a file
     uint32_t ans_offset_{0};
     uint32_t candidate_ans_offset_{0};
     int state_{0};
-    /* for binary search. */
+    // for binary search. 
     SearchDataType bs_data_;
   };
+*/
 
   // maintain one Chunk for key. Thus, we need the offset of the first key, and its id.
   class EnumIterator {
@@ -347,10 +348,10 @@ class FileBlock {     // process blocks in a file
     aio.read(ra_fd, c.data(), id * kChunkSize, kChunkSize, std::forward<T>(aio_info));
   }
 
-  template<typename T>
-  AsyncSeekHandle<T> get_async_seek_handle(async_io::AsyncIOQueue& aio, const T& bs_data) const {
-    return AsyncSeekHandle<T>(*this, aio, bs_data);
-  }
+  // template<typename T>
+  // AsyncSeekHandle<T> get_async_seek_handle(async_io::AsyncIOQueue& aio, const T& bs_data) const {
+  //   return AsyncSeekHandle<T>(*this, aio, bs_data);
+  // }
 
   // assume that input is valid, read_key_offset and read_value_offset
   template <typename ChunkT, typename T>
@@ -370,9 +371,9 @@ class FileBlock {     // process blocks in a file
   bool is_empty_key(uint32_t offset, const Chunk& c) const { return *reinterpret_cast<uint32_t*>(c.data(offset)) == 0; }
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
-  uint32_t upper_offset(SKey key, int ra_fd) const {
+  typename KV::ValueType upper_offset(SKey key, int ra_fd) const {
     int l = 0, r = handle_.counts - 1;
-    uint32_t ret = -1;
+    typename KV::ValueType ret{-1};
     SeekIterator it = SeekIterator(*this);
     KV _key;
     while (l <= r) {
@@ -389,9 +390,9 @@ class FileBlock {     // process blocks in a file
 
   // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
   // Find the biggest _key that _key <= key.
-  int get_block_id_from_index(SKey key, int ra_fd) const {
+  typename KV::ValueType get_block_id_from_index(SKey key, int ra_fd) const {
     int l = 0, r = handle_.counts - 1;
-    int ret = -1;
+    typename KV::ValueType ret{-1};
     SeekIterator it = SeekIterator(*this);
     KV _key;
     while (l <= r) {

@@ -2,6 +2,8 @@
 #include "logging.hpp"
 #include "cache.hpp"
 
+#include <fstream>
+
 class DefaultComparator : public rocksdb::Comparator {
   public:
     DefaultComparator() {}
@@ -103,11 +105,16 @@ void parallel_run(int TH, F&& func) {
   for (auto& a : handles) a.get();
 }
 
+void clear() {
+  sync();
+  system("bash -c \"echo 3 >/proc/sys/vm/drop_caches\"");
+}
+
 
 void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
-  size_t N = 3e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
@@ -116,7 +123,10 @@ void test_store_and_scan() {
   sw.Reset();
   sort_data(data);
   DB_INFO("sort end. Used: {} s", sw.GetTimeInSeconds());
+  clear();
   sw.Reset();
+
+  
   {
     auto iter = vc.Begin(0);
     auto ans_iter = data.begin();
@@ -134,9 +144,11 @@ void test_store_and_scan() {
         break;
       }
     }
-    DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
-    sw.Reset();  
   }
+
+  DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
+  clear();
+  sw.Reset();  
   
   {
     auto iter = vc.FastBegin(0);
@@ -182,13 +194,16 @@ void test_store_and_scan() {
 
 void test_decay_simple() {
   // all keys are distinct.
-  size_t max_hot_set_size = 1e7;
-  size_t N = 3e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  size_t max_hot_set_size = 6e9;
+  size_t N = 3e7, TH = 4, vlen = 100, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
   input_all(vc, 0, data, TH, vlen);
+  input_all(vc, 1, data, TH, vlen);
+  input_all(vc, 0, data, TH, vlen);
+  input_all(vc, 1, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   std::thread th([&]() {
     input_all(vc, 0, data, TH, vlen);
@@ -329,7 +344,7 @@ void test_cache_efficiency() {
 int main() {
   test_store_and_scan();
   // test_decay_simple();
-  // test_transfer_range();
+  test_transfer_range();
   // test_parallel();
-  // test_ishot_simple();
+  test_ishot_simple();
 }

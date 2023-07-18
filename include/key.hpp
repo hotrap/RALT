@@ -22,68 +22,114 @@ using IndSKey = IndSlice;
 // inline int operator==(SKey A, const IndSKey& B) { return A == B.ref(); }
 // inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
-struct SValue {
-  double counts{0};
-  size_t vlen{0};
+class SValue {
+  double counts_{0};
+  size_t vlen_{0};
+  public:
   SValue() {}
-  SValue(double _counts, size_t _vlen) : counts(_counts), vlen(_vlen) {}
+  SValue(double _counts, size_t _vlen) : counts_(_counts), vlen_(_vlen) {}
   void merge(const SValue& v, double) {
-    counts += v.counts;
+    counts_ += v.counts_;
   }
   size_t get_hot_size() const {
-    return vlen;
+    return vlen_;
   }
   double get_tick() const {
-    return counts;
+    return counts_;
+  }
+  double get_counts() const {
+    return counts_;
   }
   bool decay(double prob, std::mt19937_64& rgen) {
-    counts *= prob; 
-    if (counts < 1) {
+    counts_ *= prob; 
+    if (counts_ < 1) {
       std::uniform_real_distribution<> dis(0, 1.);
-      if (dis(rgen) < counts) {
+      if (dis(rgen) < counts_) {
         return false;
       }
-      counts = 1;
+      counts_ = 1;
     }
     return true;
   }
+  int tag() const {
+    return 0;
+  }
 };
 
-struct TickValue {
-  double tick{0};
-  size_t vlen{0};
+class TickValue {
+  double tick_{0};
+  size_t vlen_{0};
+  public:
   TickValue() {}
-  TickValue(double _tick, size_t _vlen) : tick(_tick), vlen(_vlen) {}
+  TickValue(double _tick, size_t _vlen) : tick_(_tick), vlen_(_vlen) {}
   void merge(const TickValue& v, double cur_tick) {
-    tick = cur_tick - 1 / (1 / (cur_tick - tick) + 1 / (cur_tick - v.tick));
+    tick_ = cur_tick - 1 / (1 / (cur_tick - tick_) + 1 / (cur_tick - v.tick_));
   }
   size_t get_hot_size() const {
-    return vlen;
+    return vlen_;
   }
   double get_tick() const {
-    return tick;
+    return tick_;
   }
   bool decay(double, std::mt19937_64&) {
     return true;
+  }
+  int tag() const {
+    return 0;
   }
 };
 
-struct LRUTickValue {
-  double tick{0};
-  size_t vlen{0};
+class LRUTickValue {
+  double tick_{0};
+  size_t vlen_{0};
+  public:
   LRUTickValue() {}
-  LRUTickValue(double _tick, size_t _vlen) : tick(_tick), vlen(_vlen) {}
+  LRUTickValue(double _tick, size_t _vlen) : tick_(_tick), vlen_(_vlen) {}
   void merge(const LRUTickValue& v, double cur_tick) {
-    tick = std::max(tick, v.tick);
+    tick_ = std::max(tick_, v.tick_);
   }
   size_t get_hot_size() const {
-    return vlen;
+    return vlen_;
   }
   double get_tick() const {
-    return tick;
+    return tick_;
   }
   bool decay(double, std::mt19937_64&) {
     return true;
+  }
+  int tag() const {
+    return 0;
+  }
+};
+
+class Tag2TickValue {
+  double tick_{0};
+  size_t vlen_{0};
+  public:
+  Tag2TickValue() {}
+  Tag2TickValue(double _tick, size_t _vlen, size_t tag) : tick_(_tick), vlen_(tag << 63 | _vlen) {}
+  void merge(const Tag2TickValue& v, double cur_tick) {
+    if (v.tag() != tag()) {
+      if (v.tag() < tag()) {
+        tick_ = v.tick_;
+        vlen_ = v.vlen_;
+      } else {
+        return;
+      }
+    }
+    tick_ = std::max(tick_, v.tick_);
+  }
+  size_t get_hot_size() const {
+    return vlen_ & ((1ull << 63) - 1);
+  }
+  double get_tick() const {
+    return tick_;
+  }
+  bool decay(double, std::mt19937_64&) {
+    return true;
+  }
+  int tag() const {
+    return vlen_ >> 63 & 1;
   }
 };
 
@@ -98,6 +144,7 @@ struct SKeyComparator {
   }
 };
 
+/* KeyT is a variable-length key, and ValueT is fixed size. */
 template <typename KeyT, typename ValueT>
 class BlockKey {
  private:
@@ -105,6 +152,9 @@ class BlockKey {
   ValueT v_;
 
  public:
+  using KeyType = KeyT;
+  using ValueType = ValueT;
+
   BlockKey() : key_(), v_() {}
   BlockKey(KeyT key, ValueT v) : key_(key), v_(v) {}
   const uint8_t* read(const uint8_t* from) {
@@ -126,8 +176,38 @@ class BlockKey {
   }
 };
 
+#pragma pack(4)
+template<const int num_tier>
+class IndexData {
+  std::array<size_t, num_tier> hot_size_{};
+  int offset_{0};
+  public:
+    IndexData() {}
+    IndexData(int offset) : offset_(offset) {}
+
+    /* offset is determined when creating this. */
+    IndexData(int offset, const IndexData& data) {
+      offset_ = offset;
+      hot_size_ = data.hot_size_;
+    }
+
+    /*add key to this index block*/
+    template<typename T>
+    void add(const SKey& key, const T& value) {
+      hot_size_[value.tag()] += value.get_hot_size();
+    }
+
+    const std::array<size_t, num_tier>& get_hot_size() const {
+      return hot_size_;
+    }
+
+    int get_offset() const {
+      return offset_;
+    }
+};
+
 // using DataKey = BlockKey<SKey, SValue>;
-using IndexKey = BlockKey<SKey, uint32_t>;
+// using IndexKey = BlockKey<SKey, uint32_t>;
 // using RefDataKey = BlockKey<SKey, SValue*>;
 
 }  // namespace viscnts_lsm

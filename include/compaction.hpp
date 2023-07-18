@@ -9,8 +9,8 @@
 
 namespace viscnts_lsm {
 
-constexpr size_t kSSTable = 1 << 24;
-template <typename KeyCompT, typename ValueT>
+constexpr size_t kSSTable = 1ull << 24;
+template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class Compaction {
   // builder_ is used to build one file
   // files_ is used to get global file name
@@ -23,7 +23,7 @@ class Compaction {
   // - the filename of files
   // - the file_id of files
   // file_id is used if we have cache.
-  SSTBuilder<ValueT> builder_;
+  SSTBuilder<ValueT, IndexDataT> builder_;
   FileName* files_;
   Env* env_;
   bool flag_;
@@ -126,6 +126,10 @@ class Compaction {
   template<typename TIter>
   auto flush_with_filter(TIter& left, TickFilter<ValueT> tick_filter) {
     return flush(left, [tick_filter](auto& kv) { return tick_filter.check(kv.second); });
+  }
+
+  size_t get_write_bytes() const {
+    return builder_.get_write_bytes();
   }
 
 

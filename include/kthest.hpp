@@ -19,7 +19,7 @@ class KthEst {
     void pre_scan1(size_t total_size) {
       std::mt19937_64 rgen((std::random_device())());
       logger(total_size);
-      std::uniform_int_distribution<> dis(0, total_size - 1);
+      std::uniform_int_distribution<size_t> dis(0, total_size - 1);
       point_size_.resize(point_num_);
       for(int i = 0; i < point_num_; i++) {
         point_size_[i] = dis(rgen);
@@ -41,7 +41,7 @@ class KthEst {
     }
     
     void pre_scan2() {
-      logger(scan1_point_num_);
+      logger("scan1 size: ", scan1_size_sum_, ", scan1 points: ", scan1_point_num_);
       std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first < y.first;
       });

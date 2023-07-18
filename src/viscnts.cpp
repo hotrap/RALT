@@ -27,7 +27,7 @@ struct SKeyComparatorFromRocksDB {
   }
 };
 
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::TickValue, viscnts_lsm::CachePolicyT::kUseTick>;
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseTick>;
 
 class VisCntsIter : public rocksdb::TraitIterator<rocksdb::Slice> {
   public:
@@ -90,6 +90,7 @@ void VisCnts::Access(size_t tier, rocksdb::Slice key, size_t vlen) {
 }
 bool VisCnts::IsHot(size_t tier, rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
+  // logger("is_hot");
   return vc->is_hot(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
 }
 void VisCnts::TransferRange(
@@ -134,5 +135,5 @@ void VisCnts::Flush() {
 
 size_t VisCnts::GetHotSize(size_t tier) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  return vc->get_hot_size(tier);
+  return vc->weight_sum(tier);
 }

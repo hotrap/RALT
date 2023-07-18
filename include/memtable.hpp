@@ -139,7 +139,7 @@ class UnsortedBuffer {
   size_t buffer_size_;
   KeyCompT comp_;
   uint8_t *data_;
-  std::vector<std::pair<SKey, const uint8_t *>> sorted_result_;
+  std::vector<std::pair<SKey, uint8_t *>> sorted_result_;
 
   class Comparator {
     KeyCompT comp_;
@@ -202,44 +202,55 @@ class UnsortedBuffer {
     }
     working_count_ += 1;
     *reinterpret_cast<ValueT *>(key.write(data_ + pos)) = value;
-    {
-      SKey k;
-      auto v = k.read(data_ + pos);
-      mp_[std::hash<std::thread::id>{}(std::this_thread::get_id()) % (kHashTableSize)].insert(std::make_pair(k, v));
-    }
+    // {
+    //   SKey k;
+    //   auto v = k.read(data_ + pos);
+    //   mp_[std::hash<std::thread::id>{}(std::this_thread::get_id()) % (kHashTableSize)].insert(std::make_pair(k, v));
+    // }
     working_count_ -= 1;
     return true;
   }
 
-  void sort() {
+  void sort(size_t current_tick) {
     while(working_count_.load(std::memory_order_relaxed) != 0);
     sorted_result_.clear();
     size_t limit = used_size_;
-    auto comp_func = [this](const std::pair<SKey, const uint8_t *> &x, const std::pair<SKey, const uint8_t *> &y) {
+    auto comp_func = [this](const std::pair<SKey, uint8_t *> &x, const std::pair<SKey, uint8_t *> &y) {
       return comp_(x.first, y.first) < 0;
     };
     for (uint8_t *d = data_; d - data_ + sizeof(uint32_t) < limit && *reinterpret_cast<uint32_t *>(d) != 0;) {
       SKey key;
-      const uint8_t *v = key.read(d);
-      sorted_result_.emplace_back(std::pair<SKey, const uint8_t *>(key, v));
+      uint8_t *v = key.read(d);
+      sorted_result_.emplace_back(std::pair<SKey, uint8_t *>(key, v));
       d += key.size() + sizeof(ValueT);
     }
     // tim::timsort(sorted_result_.begin(), sorted_result_.end(), comp_func);
     std::sort(sorted_result_.begin(), sorted_result_.end(), comp_func);
+    int d = 0;
+    for (auto& a : sorted_result_) {
+      if (d == 0 || comp_(sorted_result_[d - 1].first, a.first) != 0) {
+        sorted_result_[d++] = a;
+      } else {
+        reinterpret_cast<ValueT*>(sorted_result_[d - 1].second)->merge(*reinterpret_cast<ValueT*>(a.second), current_tick);
+      }
+    }
+    sorted_result_.resize(d);
   }
 
-  void sort_with_mp() {
-    while(working_count_.load(std::memory_order_relaxed) != 0);
-    sorted_result_.clear();
-    SeqIteratorSet<MpIterator, KeyCompT, const uint8_t*> iters(comp_);
-    for (auto& a : mp_) if (a.size()) {
-      iters.push(MpIterator(a.begin(), a.end()));
-    }
-    iters.build();
-    while(iters.valid()) {
-      sorted_result_.push_back(iters.read());
-      iters.next();
-    }
+  void sort_with_mp(size_t current_tick) {
+    sort(current_tick);
+    return;
+    // while(working_count_.load(std::memory_order_relaxed) != 0);
+    // sorted_result_.clear();
+    // SeqIteratorSet<MpIterator, KeyCompT, const uint8_t*> iters(comp_);
+    // for (auto& a : mp_) if (a.size()) {
+    //   iters.push(MpIterator(a.begin(), a.end()));
+    // }
+    // iters.build();
+    // while(iters.valid()) {
+    //   sorted_result_.push_back(iters.read());
+    //   iters.next();
+    // }
   }
 
   void clear() {
@@ -250,8 +261,8 @@ class UnsortedBuffer {
   }
   size_t size() const { return used_size_; }
   class Iterator {
-    std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_;
-    std::vector<std::pair<SKey, const uint8_t *>>::const_iterator iter_end_;
+    std::vector<std::pair<SKey, uint8_t *>>::const_iterator iter_;
+    std::vector<std::pair<SKey, uint8_t *>>::const_iterator iter_end_;
 
    public:
     Iterator(const UnsortedBuffer &buf) : iter_(buf.sorted_result_.begin()), iter_end_(buf.sorted_result_.end()) {}

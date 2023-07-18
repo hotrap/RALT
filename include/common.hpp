@@ -29,6 +29,11 @@ class Slice {
     a_ = from + sizeof(len_);
     return from + sizeof(len_) + len_;
   }
+  uint8_t* read(uint8_t* from) {
+    len_ = *reinterpret_cast<const decltype(len_)*>(from);
+    a_ = from + sizeof(len_);
+    return from + sizeof(len_) + len_;
+  }
   uint8_t* write(uint8_t* to) const {
     *reinterpret_cast<decltype(len_)*>(to) = len_;
     to += sizeof(len_);

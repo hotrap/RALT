@@ -21,7 +21,7 @@ void test_files() {
   memset(a, 0, sizeof(a));
 
   Env* env_ = createDefaultEnv();
-  std::vector<SSTBuilder<SValue>> builders(FS);
+  std::vector<SSTBuilder<SValue, IndexData<1>>> builders(FS);
   for (int i = 0; i < FS; i++)
     builders[i].new_file(
         std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(env_->openAppFile("/tmp/viscnts/test" + std::to_string(i)))));
@@ -45,14 +45,14 @@ void test_files() {
     return (int)x - (int)y;
   };
 
-  std::vector<ImmutableFile<KeyCompType*, SValue>> files;
+  std::vector<ImmutableFile<KeyCompType*, SValue, IndexData<1>>> files;
   for (int i = 0; i < FS; ++i)
-    files.push_back(ImmutableFile<KeyCompType*, SValue>(0, builders[i].size(),
+    files.push_back(ImmutableFile<KeyCompType*, SValue, IndexData<1>>(0, builders[i].size(),
                                                 std::unique_ptr<RandomAccessFile>(env_->openRAFile("/tmp/viscnts/test" + std::to_string(i))),
                                                 {}, {}, {}, comp));
   auto iters = std::make_unique<SeqIteratorSet<SSTIterator<KeyCompType*, SValue>, KeyCompType*, SValue>>(comp);
   for (int i = 0; i < FS; ++i) {
-    SSTIterator iter(&files[i]);
+    SSTIterator<KeyCompType*, SValue> iter(files[i].seek_to_first());
     iters->push(std::move(iter));
   }
   iters->build();
@@ -98,7 +98,7 @@ void test_unordered_buf() {
             continue;
           }
           for (auto& buf : buf_q_) {
-            buf->sort();
+            buf->sort(114514);
             UnsortedBuffer<decltype(comp), SValue>::Iterator iter(*buf);
             while (iter.valid()) {
               result.emplace_back(iter.read());
@@ -161,7 +161,7 @@ void test_lsm_store() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
     int L = 1e7;
     uint8_t a[12];
     memset(a, 0, sizeof(a));
@@ -189,7 +189,7 @@ void test_lsm_store_and_scan() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp, unused_tick);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp, unused_tick);
     int L = 3e7;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
@@ -199,7 +199,7 @@ void test_lsm_store_and_scan() {
     int TH = 4;
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
-          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, SValue>& tree) {
+          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, SValue, IndexData<1>>& tree) {
             uint8_t a[16];
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
@@ -218,7 +218,7 @@ void test_lsm_store_and_scan() {
 
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
-          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, SValue>& tree) {
+          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, SValue, IndexData<1>>& tree) {
             uint8_t a[16];
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
@@ -234,7 +234,7 @@ void test_lsm_store_and_scan() {
     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
     start = std::chrono::system_clock::now();
-    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue>::SuperVersionIterator>(tree.seek_to_first());
+    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue, IndexData<1>>::SuperVersionIterator>(tree.seek_to_first());
     for (int i = 0; i < L; i++) {
       DB_ASSERT(iter->valid());
       auto kv = iter->read();
@@ -251,8 +251,8 @@ void test_lsm_store_and_scan() {
           x = 0;
         }
       }
-      DB_ASSERT(kv.second.counts == i + 1);
-      DB_ASSERT(kv.second.vlen == 1);
+      DB_ASSERT(kv.second.get_counts() == i + 1);
+      DB_ASSERT(kv.second.get_hot_size() == 1);
       iter->next();
     }
   }
@@ -269,7 +269,7 @@ void test_random_scan_and_count() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
     int L = 3e7, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -323,7 +323,7 @@ void test_random_scan_and_count() {
       int id = abs(rand()) % numbers.size();
       for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
 
-      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue, IndexData<1>>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
       auto check_func = [](const uint8_t* a, int goal) {
         int x = 0, y = 0;
         for (int j = 0; j < 12; j++) {
@@ -369,45 +369,45 @@ void test_random_scan_and_count() {
   logger("test_random_scan(): OK");
 }
 
-void test_lsm_decay() {
-  using namespace viscnts_lsm;
+// void test_lsm_decay() {
+//   using namespace viscnts_lsm;
 
-  auto start = std::chrono::system_clock::now();
-  {
-    std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
-    int L = 3e7;
-    std::vector<int> numbers(L);
-    // auto comp2 = +[](int x, int y) {
-    //   uint8_t a[12], b[12];
-    //   for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
-    //   for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
-    //   return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
-    // };
-    for (int i = 0; i < L; i++) numbers[i] = i;
-    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
-    srand(std::random_device()());
-    for (int i = 0; i < L; i++) {
-      uint8_t a[12];
-      for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-      tree.append(SKey(a, 12), SValue(1, 1));
-    }
-    uint8_t a[12];
-    memset(a, 0, sizeof(a));
-    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
-    double ans = 0;
-    while (iter->valid()) {
-      auto kv = iter->read();
-      ans += (kv.second.vlen + 12) * std::min(kv.second.counts * 0.5, 1.);
-      iter->next();
-    }
-    logger("decay size: ", ans);
-    auto end = std::chrono::system_clock::now();
-    auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    logger("decay used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
-  }
-  logger("test_lsm_decay(): OK");
-}
+//   auto start = std::chrono::system_clock::now();
+//   {
+//     std::atomic<size_t> unused_tick; 
+//     EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
+//     int L = 3e7;
+//     std::vector<int> numbers(L);
+//     // auto comp2 = +[](int x, int y) {
+//     //   uint8_t a[12], b[12];
+//     //   for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
+//     //   for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
+//     //   return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
+//     // };
+//     for (int i = 0; i < L; i++) numbers[i] = i;
+//     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+//     srand(std::random_device()());
+//     for (int i = 0; i < L; i++) {
+//       uint8_t a[12];
+//       for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
+//       tree.append(SKey(a, 12), SValue(1, 1));
+//     }
+//     uint8_t a[12];
+//     memset(a, 0, sizeof(a));
+//     auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+//     double ans = 0;
+//     while (iter->valid()) {
+//       auto kv = iter->read();
+//       ans += (kv.second.get_hot_size() + 12) * std::min(kv.second.counts * 0.5, 1.);
+//       iter->next();
+//     }
+//     logger("decay size: ", ans);
+//     auto end = std::chrono::system_clock::now();
+//     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+//     logger("decay used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+//   }
+//   logger("test_lsm_decay(): OK");
+// }
 
 void test_delete_range() {
   using namespace viscnts_lsm;
@@ -415,7 +415,7 @@ void test_delete_range() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
     int L = 1e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -491,7 +491,7 @@ void test_delete_range() {
       int id = abs(rand()) % numbers.size();
       for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
 
-      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue, IndexData<1>>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
       auto check_func = [](const uint8_t* a, int goal) {
         int x = 0, y = 0;
         for (int j = 0; j < 12; j++) {
@@ -710,15 +710,48 @@ void test_lru_cache() {
   }
 }
 
+
+void test_scan_size() {
+  using namespace viscnts_lsm;
+  std::atomic<size_t> unused_tick; 
+  EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick);
+  int L = 3e7, Q = 1e4;
+  std::vector<int> numbers(L);
+  for (int i = 0; i < L; i++) numbers[i] = i;
+  std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+  for (int i = 0; i < L / 2; i++) {
+    uint8_t a[12];
+    for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
+    tree.append(SKey(a, 12), SValue(i, 1));
+  }
+  tree.all_flush();
+  
+  {
+    KthEst<double> est(1e4, 1e7);
+    est.pre_scan1(L / 2 * 13);
+    size_t sum = 0;
+    auto iter = tree.seek_to_first();
+    for(; iter->valid(); iter->next()) {
+      auto L = iter->read();
+      sum += L.first.len() + L.second.get_hot_size();
+      est.scan1(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+    }
+    est.pre_scan2();
+    DB_INFO("{}, {}", sum, tree.get_current_hot_size());
+  }
+  
+}
+
 int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  test_lsm_store_and_scan();
+  // test_lsm_store_and_scan();
   // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
   // test_delete_range();
   // test_kthest();
   // test_lru_cache();
+  test_scan_size();
 }

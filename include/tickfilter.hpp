@@ -23,7 +23,7 @@ template<>
 class TickFilter<TickValue> {
   public:
     TickFilter(double tick_threshold) : tick_threshold_(tick_threshold) {}
-    bool check(TickValue v) const { return v.tick > tick_threshold_; }
+    bool check(TickValue v) const { return v.get_tick() > tick_threshold_; }
     double get_tick_threshold() const { return tick_threshold_; }
 
   private:
@@ -35,7 +35,7 @@ template<>
 class TickFilter<LRUTickValue> {
   public:
     TickFilter(double tick_threshold) : tick_threshold_(tick_threshold) {}
-    bool check(LRUTickValue v) const { return v.tick > tick_threshold_; }
+    bool check(LRUTickValue v) const { return v.get_tick() > tick_threshold_; }
     double get_tick_threshold() const { return tick_threshold_; }
 
   private:

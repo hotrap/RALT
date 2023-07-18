@@ -3,6 +3,7 @@
 
 #include "key.hpp"
 #include "tickfilter.hpp"
+#include "logging.hpp"
 
 namespace viscnts_lsm {
 
@@ -13,8 +14,12 @@ class SeqIteratorSet {
   std::vector<Iterator*> seg_tree_;
   std::vector<SKey> keys_;
   std::vector<ValueT> values_;
-  uint32_t size_;
+  uint32_t size_{0};
   KVCompT comp_;
+
+  // Check if the current key value is equal to some key value from other iterator.
+  // That means, A = read(), B = get_is_equal(), next(), C = read(), then if B is true, A equals to C.
+  bool is_equal_{false};
 
   using SeqIteratorSetT = SeqIteratorSet<Iterator, KVCompT, ValueT>;
 
@@ -54,13 +59,14 @@ class SeqIteratorSet {
       seg_tree_[i]->read(kv);
       keys_[i - 1] = std::move(kv.key());
       values_[i - 1] = kv.value();
-      for (uint32_t j = i; j > 1 && _min(j, j >> 1) == j; j >>= 1) std::swap(seg_tree_[j], seg_tree_[j >> 1]);
+      for (uint32_t j = i; j > 1 && _comp(j, j >> 1) < 0; j >>= 1) std::swap(seg_tree_[j], seg_tree_[j >> 1]);
     }
   }
   bool valid() { return size_ >= 1; }
   void next() {
     // logger_printf("[S.Set, next, %d]", size_);
     seg_tree_[1]->next();
+    is_equal_ = false;
     while (!seg_tree_[1]->valid()) {
       if (size_ == 1) {
         size_ = 0;
@@ -78,13 +84,23 @@ class SeqIteratorSet {
 
     uint32_t x = 1;
     while ((x << 1 | 1) <= size_) {
-      auto r = _min(x << 1, x << 1 | 1);
-      if (_min(r, x) == x) return;
-      std::swap(seg_tree_[x], seg_tree_[r]);
-      x = r;
+      auto L = x << 1, R = x << 1 | 1;
+      auto r1 = _comp(L, R);
+      auto choose = r1 < 0 ? L : R;
+      auto r2 = _comp(choose, x);
+      if (r2 >= 0) {
+        if (x == 1 && r2 == 0) is_equal_ = true;
+        return;
+      } else {
+        if (x == 1 && r1 == 0) is_equal_ = true;
+      }
+      std::swap(seg_tree_[x], seg_tree_[choose]);
+      x = choose;
     }
     if ((x << 1) <= size_) {
-      if (_min(x, x << 1) == (x << 1)) std::swap(seg_tree_[x], seg_tree_[x << 1]);
+      auto r = _comp(x, x << 1);
+      if (x == 1 && r == 0) is_equal_ = true;
+      if (r > 0) std::swap(seg_tree_[x], seg_tree_[x << 1]);
     }
   }
   std::pair<SKey, ValueT> read() {
@@ -102,11 +118,15 @@ class SeqIteratorSet {
     return iters_;
   }
 
+  bool get_is_equal() const {
+    return is_equal_;
+  }
+
  private:
-  uint32_t _min(uint32_t x, uint32_t y) {
+  int _comp(uint32_t x, uint32_t y) {
     uint32_t idx = seg_tree_[x] - iters_.data();
     uint32_t idy = seg_tree_[y] - iters_.data();
-    return comp_(keys_[idx], keys_[idy]) < 0 ? x : y;
+    return comp_(keys_[idx], keys_[idy]);
   }
 };
 
@@ -137,10 +157,11 @@ class SeqIteratorSetForScan {
     auto result = iter_.read();
     current_key_ = result.first;
     current_value_ = result.second;
+    bool is_equal = iter_.get_is_equal();
     iter_.next();
     while (iter_.valid()) {
       result = iter_.read();
-      if (iter_.comp_func()(result.first, current_key_.ref()) == 0) {
+      if (is_equal) {
         current_value_.merge(result.second, current_tick_);
       } else {
         if (tick_filter_.check(current_value_)) {
@@ -150,6 +171,7 @@ class SeqIteratorSetForScan {
           current_value_ = result.second;
         }
       }  
+      is_equal = iter_.get_is_equal();
       iter_.next();
     }
     if (!tick_filter_.check(current_value_)) {
