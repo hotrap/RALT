@@ -27,7 +27,7 @@ struct SKeyComparatorFromRocksDB {
   }
 };
 
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseFasterTick>;
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseTick>;
 
 class VisCntsIter : public rocksdb::TraitIterator<rocksdb::Slice> {
   public:
@@ -111,6 +111,7 @@ size_t VisCnts::RangeHotSize(
 }
 rocksdb::CompactionRouter::Iter VisCnts::Begin(size_t tier) {
   auto vc = static_cast<VisCntsType*>(vc_);
+  logger("Iter Begin");
   return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek_to_first(tier)));
 }
 std::unique_ptr<FastIter<rocksdb::Slice>> VisCnts::FastBegin(size_t tier) {
@@ -121,6 +122,7 @@ rocksdb::CompactionRouter::Iter VisCnts::LowerBound(
   size_t tier, rocksdb::Slice key
 ) {
   auto vc = static_cast<VisCntsType*>(vc_);
+  logger("Iter LowerBound");
   return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
 }
 

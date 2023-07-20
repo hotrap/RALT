@@ -433,7 +433,7 @@ class SSTBuilder {
   }
 
   size_t get_write_bytes() const {
-    return file_->get_stat_flushed_size();
+    return file_ ? file_->get_stat_flushed_size() : 0;
   }
 
  private:

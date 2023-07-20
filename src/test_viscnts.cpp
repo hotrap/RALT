@@ -194,8 +194,8 @@ void test_store_and_scan() {
 
 void test_decay_simple() {
   // all keys are distinct.
-  size_t max_hot_set_size = 6e9;
-  size_t N = 3e7, TH = 4, vlen = 100, Q = 1e4, QLEN = 100;
+  size_t max_hot_set_size = 1e9;
+  size_t N = 1e7, TH = 4, vlen = 100, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);

@@ -1109,7 +1109,7 @@ constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
 
 template <typename KeyCompT, typename ValueT, typename IndexDataT, CachePolicyT cache_policy>
-class VisCnts {
+class alignas(128) VisCnts {
   std::unique_ptr<EstimateLSM<KeyCompT, ValueT, IndexDataT>> tree[2];
   KeyCompT comp_;
   size_t hot_set_limit_;
@@ -1122,7 +1122,7 @@ class VisCnts {
   std::atomic<size_t> current_tick_{0};
 
   // For kUseFasterTick
-  KthEst<double> last_est_{kEstPointNum, hot_set_limit_};
+  KthEst<double> last_est_;
   bool is_first_tick_update_{true};
 
  public:
@@ -1131,7 +1131,7 @@ class VisCnts {
   VisCnts(KeyCompT comp, const std::string& path, size_t delta)
     : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a0"), comp, current_tick_), 
           std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a1"), comp, current_tick_)},
-      comp_(comp), hot_set_limit_(delta) {
+      comp_(comp), hot_set_limit_(delta), last_est_(kEstPointNum, hot_set_limit_) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
       }
   ~VisCnts() {
@@ -1276,6 +1276,7 @@ class VisCnts {
       }
       logger("begin fast tick threshold update.");
       double new_tick_threshold = last_est_.get_from_points();
+      logger(new_tick_threshold, ", ", current_tick_.load());
       last_est_.pre_scan1(hot_size);
       tree[0]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
       tree[1]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);

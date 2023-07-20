@@ -66,7 +66,7 @@ class Compaction {
   }
 
   template <typename TIter, typename FilterFunc, typename OtherFunc>
-  auto flush(TIter& left, FilterFunc&& filter_func, OtherFunc other_func) {
+  auto flush(TIter& left, FilterFunc&& filter_func, OtherFunc&& other_func) {
     vec_newfiles_.clear();
     // null iterator
     if (!left.valid()) {
@@ -91,7 +91,7 @@ class Compaction {
       } else {
         // only store those filter returning true.
         if (filter_func(lst_value_)) {
-          // other_func(lst_value_.first, lst_value_.second);
+          other_func(lst_value_.first, lst_value_.second);
           real_size_ += _calc_hot_size(lst_value_);
           builder_.append(lst_value_);
           _divide_file(L.first.size() + L.second.get_hot_size());
@@ -104,6 +104,7 @@ class Compaction {
     {
       builder_.set_lstkey(lst_value_.first);
       if (filter_func(lst_value_)) {
+        other_func(lst_value_.first, lst_value_.second);
         builder_.append(lst_value_);
         real_size_ += _calc_hot_size(lst_value_); 
       } 
