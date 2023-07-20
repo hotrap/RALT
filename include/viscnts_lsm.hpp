@@ -1131,7 +1131,7 @@ class alignas(128) VisCnts {
   VisCnts(KeyCompT comp, const std::string& path, size_t delta)
     : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a0"), comp, current_tick_), 
           std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a1"), comp, current_tick_)},
-      comp_(comp), hot_set_limit_(delta), last_est_(kEstPointNum, hot_set_limit_) {
+      comp_(comp), hot_set_limit_(delta), last_est_(kEstPointNum, hot_set_limit_ * (1 - kHotSetExceedLimit)) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
       }
   ~VisCnts() {
@@ -1255,6 +1255,9 @@ class alignas(128) VisCnts {
       tree[1]->update_tick_threshold(-new_tick_threshold);
       logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
     } else if (cache_policy == CachePolicyT::kUseFasterTick) {
+      // We sample and find the oldest 10% * SIZE records. These records are removed in the next decay.
+      // But we have a constraint: The tick threshold must be able to be updated with new current tick.
+      // For harmonic mean (class TickValue) it's impossible. 
       auto hot_size = weight_sum(0) + weight_sum(1);
       StopWatch sw;
       if (is_first_tick_update_) {
@@ -1272,7 +1275,14 @@ class alignas(128) VisCnts {
         logger("first fast scan");
         append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
         append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-        last_est_ = est;
+        
+        double new_tick_threshold = est.get_from_points();
+        logger(new_tick_threshold, ", ", current_tick_.load());
+        last_est_.pre_scan1(hot_size);
+        tree[0]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+        tree[1]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+        logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+        return;
       }
       logger("begin fast tick threshold update.");
       double new_tick_threshold = last_est_.get_from_points();
