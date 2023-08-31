@@ -22,17 +22,19 @@ using IndSKey = IndSlice;
 // inline int operator==(SKey A, const IndSKey& B) { return A == B.ref(); }
 // inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
+// Dedicate.
 class SValue {
   double counts_{0};
   size_t vlen_{0};
-  public:
+ public:
   SValue() {}
-  SValue(double _counts, size_t _vlen) : counts_(_counts), vlen_(_vlen) {}
+  SValue(double counts, size_t vlen) : counts_(counts), vlen_(vlen << 1) {}
   void merge(const SValue& v, double) {
     counts_ += v.counts_;
+    set_stable(1);
   }
   size_t get_hot_size() const {
-    return vlen_;
+    return vlen_ >> 1;
   }
   double get_tick() const {
     return counts_;
@@ -54,19 +56,26 @@ class SValue {
   int tag() const {
     return 0;
   }
+  bool is_stable() const {
+    return vlen_ & 1;
+  }
+  void set_stable(bool x) {
+    vlen_ = (vlen_ >> 1) << 1 | x;
+  }
 };
 
 class TickValue {
   double tick_{0};
   size_t vlen_{0};
-  public:
+ public:
   TickValue() {}
-  TickValue(double _tick, size_t _vlen) : tick_(_tick), vlen_(_vlen) {}
+  TickValue(double tick, size_t vlen) : tick_(tick), vlen_(vlen << 1) {}
   void merge(const TickValue& v, double cur_tick) {
     tick_ = cur_tick - 1 / (1 / (cur_tick - tick_) + 1 / (cur_tick - v.tick_));
+    set_stable(1);
   }
   size_t get_hot_size() const {
-    return vlen_;
+    return vlen_ >> 1;
   }
   double get_tick() const {
     return tick_;
@@ -76,20 +85,27 @@ class TickValue {
   }
   int tag() const {
     return 0;
+  }
+  bool is_stable() const {
+    return vlen_ & 1;
+  }
+  void set_stable(bool x) {
+    vlen_ = (vlen_ >> 1) << 1 | x;
   }
 };
 
 class LRUTickValue {
   double tick_{0};
   size_t vlen_{0};
-  public:
+ public:
   LRUTickValue() {}
-  LRUTickValue(double _tick, size_t _vlen) : tick_(_tick), vlen_(_vlen) {}
+  LRUTickValue(double tick, size_t vlen) : tick_(tick), vlen_(vlen << 1) {}
   void merge(const LRUTickValue& v, double cur_tick) {
     tick_ = std::max(tick_, v.tick_);
+    set_stable(1);
   }
   size_t get_hot_size() const {
-    return vlen_;
+    return vlen_ >> 1;
   }
   double get_tick() const {
     return tick_;
@@ -100,38 +116,45 @@ class LRUTickValue {
   int tag() const {
     return 0;
   }
+  bool is_stable() const {
+    return vlen_ & 1;
+  }
+  void set_stable(bool x) {
+    vlen_ = (vlen_ >> 1) << 1 | x;
+  }
 };
 
-class Tag2TickValue {
-  double tick_{0};
-  size_t vlen_{0};
-  public:
-  Tag2TickValue() {}
-  Tag2TickValue(double _tick, size_t _vlen, size_t tag) : tick_(_tick), vlen_(tag << 63 | _vlen) {}
-  void merge(const Tag2TickValue& v, double cur_tick) {
-    if (v.tag() != tag()) {
-      if (v.tag() < tag()) {
-        tick_ = v.tick_;
-        vlen_ = v.vlen_;
-      } else {
-        return;
-      }
-    }
-    tick_ = std::max(tick_, v.tick_);
-  }
-  size_t get_hot_size() const {
-    return vlen_ & ((1ull << 63) - 1);
-  }
-  double get_tick() const {
-    return tick_;
-  }
-  bool decay(double, std::mt19937_64&) {
-    return true;
-  }
-  int tag() const {
-    return vlen_ >> 63 & 1;
-  }
-};
+// Not used.
+// class Tag2TickValue {
+//   double tick_{0};
+//   size_t vlen_{0};
+//   public:
+//   Tag2TickValue() {}
+//   Tag2TickValue(double _tick, size_t _vlen, size_t tag) : tick_(_tick), vlen_(tag << 63 | _vlen) {}
+//   void merge(const Tag2TickValue& v, double cur_tick) {
+//     if (v.tag() != tag()) {
+//       if (v.tag() < tag()) {
+//         tick_ = v.tick_;
+//         vlen_ = v.vlen_;
+//       } else {
+//         return;
+//       }
+//     }
+//     tick_ = std::max(tick_, v.tick_);
+//   }
+//   size_t get_hot_size() const {
+//     return vlen_ & ((1ull << 63) - 1);
+//   }
+//   double get_tick() const {
+//     return tick_;
+//   }
+//   bool decay(double, std::mt19937_64&) {
+//     return true;
+//   }
+//   int tag() const {
+//     return vlen_ >> 63 & 1;
+//   }
+// };
 
 struct SKeyComparator {
   int operator()(SKey A, SKey B) const {

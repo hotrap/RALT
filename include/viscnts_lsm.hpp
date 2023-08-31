@@ -990,8 +990,9 @@ class EstimateLSM {
     tick_threshold_ = new_threshold;
     std::unique_lock del_range_lck(sv_modify_mutex_);
     logger(get_tick_filter().get_tick_threshold(), ", ", new_threshold);
-    auto new_sv = sv_->compact(*this, SuperVersion::JobType::kMajorCompaction, [&](const auto& key, const ValueT& value) {
+    auto new_sv = sv_->compact(*this, SuperVersion::JobType::kMajorCompaction, [&](const auto& key, ValueT& value) {
       est.scan1(-value.get_tick(), key.len() + value.get_hot_size());
+      value.set_stable(0);
     });
     _update_superversion(new_sv);
   }
