@@ -102,8 +102,8 @@
 
 namespace viscnts_lsm {
 
-constexpr auto kLimitMin = 3;
-constexpr auto kLimitMax = 3;
+constexpr auto kLimitMin = 10;
+constexpr auto kLimitMax = 20;
 constexpr auto kMergeRatio = 0.1;
 constexpr auto kUnsortedBufferSize = 1ull << 24;
 constexpr auto kUnsortedBufferMaxQueue = 4;
@@ -593,7 +593,7 @@ class EstimateLSM {
     };
 
     SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type) const {
-      return compact(lsm, job_type, [](auto, auto){});
+      return compact(lsm, job_type, [](auto&&...){});
     }
 
     template<typename FuncT>
@@ -877,8 +877,8 @@ class EstimateLSM {
         bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue, comp),
         file_cache_(std::make_unique<FileChunkCache>(file_cache_size)),
         current_tick_(current_tick) {
-    compact_thread_ = std::thread([this]() { compact_thread(*this); });
-    flush_thread_ = std::thread([this]() { flush_thread(*this); });
+    compact_thread_ = std::thread([this]() { compact_thread(); });
+    flush_thread_ = std::thread([this]() { flush_thread(); });
   }
   ~EstimateLSM() {
     {
@@ -1026,14 +1026,14 @@ class EstimateLSM {
   }
 
  private:
-  void flush_thread(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm) {
+  void flush_thread() {
     while (!terminate_signal_) {
       flush_thread_state_ = 0;
       auto buf_q_ = bufs_.wait_and_get();
       if (terminate_signal_) return;
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
-      auto new_vec = sv_->flush_bufs(buf_q_, lsm);
+      auto new_vec = sv_->flush_bufs(buf_q_, *this);
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
@@ -1046,7 +1046,7 @@ class EstimateLSM {
       }
     }
   }
-  void compact_thread(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm) {
+  void compact_thread() {
     while (!terminate_signal_) {
       compact_thread_state_ = 0;
       SuperVersion* new_sv;
@@ -1063,7 +1063,7 @@ class EstimateLSM {
 
       auto last_compacted_sv = new_sv;
       while (true) {
-        auto new_compacted_sv = last_compacted_sv->compact(lsm, SuperVersion::JobType::kCompaction);
+        auto new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kCompaction);
         if (new_compacted_sv == nullptr) {
           break;
         } else {
@@ -1116,7 +1116,6 @@ class alignas(128) VisCnts {
   std::mutex decay_m_;
   std::atomic<bool> is_updating_tick_threshold_{false};
   bool terminate_signal_{false};
-  std::mutex decay_thread_m_;
   std::condition_variable decay_cv_;
   std::thread decay_thread_;
   std::atomic<size_t> current_tick_{0};
@@ -1135,11 +1134,8 @@ class alignas(128) VisCnts {
         decay_thread_ = std::thread([&](){ decay_thread(); });
       }
   ~VisCnts() {
-    {
-      std::unique_lock lck(decay_thread_m_);
-      terminate_signal_ = true;
-      decay_cv_.notify_all();  
-    }
+    terminate_signal_ = true;
+    decay_cv_.notify_all(); 
     decay_thread_.join();
     
     auto stat0 = tree[0]->get_cache()->get_stats();

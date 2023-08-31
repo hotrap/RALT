@@ -38,6 +38,14 @@ size_t convert_to_int(rocksdb::Slice input) {
   return *reinterpret_cast<const size_t*>(input.data() + input.size() - 8);
 }
 
+size_t convert_to_int(rocksdb::HotRecInfo input) {
+  return convert_to_int(input.key);
+}
+
+size_t get_size(rocksdb::HotRecInfo input) {
+  return input.key.size();
+}
+
 void input_all(VisCnts& vc, int tier, const std::vector<std::pair<size_t, size_t>>& data, int TH, int vlen) {
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
@@ -216,7 +224,7 @@ void test_decay_simple() {
     auto result = iter.next();
     if (result) {
       cnt += 1;
-      sum += vlen + result->size();
+      sum += vlen + get_size(*result);
     } else {
       break;
     }
@@ -293,7 +301,7 @@ void test_parallel() {
         while (true) {
           auto result = iter.next();
           if (result) {
-            sum += vlen + result->size();
+            sum += vlen + get_size(*result);
           } else {
             break;
           }
@@ -342,9 +350,9 @@ void test_cache_efficiency() {
 }
 
 int main() {
-  test_store_and_scan();
+  // test_store_and_scan();
   // test_decay_simple();
   // test_transfer_range();
   // test_parallel();
-  // test_ishot_simple();
+  test_ishot_simple();
 }

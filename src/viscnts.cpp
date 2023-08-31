@@ -29,12 +29,12 @@ struct SKeyComparatorFromRocksDB {
 
 using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseTick>;
 
-class VisCntsIter : public rocksdb::TraitIterator<rocksdb::Slice> {
+class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
   public:
     VisCntsIter(std::unique_ptr<VisCntsType::IteratorT> it) 
       : it_(std::move(it)) {}
     ~VisCntsIter() {}
-    std::unique_ptr<rocksdb::Slice> next() {
+    std::unique_ptr<rocksdb::HotRecInfo> next() override {
       if (is_first_) {
         is_first_ = false;
       } else {
@@ -42,7 +42,11 @@ class VisCntsIter : public rocksdb::TraitIterator<rocksdb::Slice> {
       }
       if (it_->valid()) {
         auto key = it_->read().first;
-        return std::make_unique<rocksdb::Slice>(reinterpret_cast<const char*>(key.data()), key.len());
+        rocksdb::HotRecInfo ret;
+        ret.key = rocksdb::Slice(reinterpret_cast<const char*>(key.data()), key.len());
+        // TODO
+        ret.stable = false;
+        return std::make_unique<rocksdb::HotRecInfo>(ret);
       }
       return nullptr;
     }
@@ -138,4 +142,21 @@ void VisCnts::Flush() {
 size_t VisCnts::GetHotSize(size_t tier) {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->weight_sum(tier);
+}
+
+
+void VisCnts::Access(rocksdb::Slice key, size_t vlen) {
+  return Access(0, key, vlen);
+}
+bool VisCnts::IsHot(rocksdb::Slice key) {
+  return IsHot(0, key);
+}
+size_t VisCnts::RangeHotSize(rocksdb::RangeBounds range) {
+  return RangeHotSize(0, range);
+}
+rocksdb::CompactionRouter::Iter VisCnts::Begin() {
+  return Begin(0);
+}
+rocksdb::CompactionRouter::Iter VisCnts::LowerBound(rocksdb::Slice key) {
+  return LowerBound(0, key);
 }

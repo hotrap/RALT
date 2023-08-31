@@ -34,6 +34,12 @@ public:
 		size_t tier, rocksdb::Slice key
 	);
 	std::unique_ptr<FastIter<rocksdb::Slice>> FastBegin(size_t tier);
+	// single tier
+	void Access(rocksdb::Slice key, size_t vlen);
+	bool IsHot(rocksdb::Slice key);
+	size_t RangeHotSize(rocksdb::RangeBounds range);
+	rocksdb::CompactionRouter::Iter Begin();
+	rocksdb::CompactionRouter::Iter LowerBound(rocksdb::Slice key);
 	void Flush();
 	size_t GetHotSize(size_t tier);
 private:
