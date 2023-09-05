@@ -126,7 +126,7 @@ rocksdb::CompactionRouter::Iter VisCnts::LowerBound(
   size_t tier, rocksdb::Slice key
 ) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  logger("Iter LowerBound");
+  // logger("Iter LowerBound");
   return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
 }
 

@@ -349,10 +349,14 @@ void test_cache_efficiency() {
   
 }
 
+void test_stable_hot() {
+  
+}
+
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
   // test_transfer_range();
   // test_parallel();
-  test_ishot_simple();
+  // test_ishot_simple();
 }
