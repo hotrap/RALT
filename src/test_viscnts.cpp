@@ -382,11 +382,27 @@ void test_stable_hot() {
   DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
 }
 
+void test_lowerbound() {
+  size_t max_hot_set_size = 1e18;
+  size_t N = 1e7, TH = 4, vlen = 10;
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  std::mt19937_64 gen(0x202309252052);
+  auto data = gen_testdata(N, gen);
+  StopWatch sw;
+  input_all(vc, 0, data, TH, vlen);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  for (int i = 0; i < data.size(); i++) {
+    char a[30];
+    vc.LowerBound(0, convert_to_slice(a, data[i].first, data[i].second));
+  }
+}
+
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  test_stable_hot();
+  // test_stable_hot();
+  test_lowerbound();
 }

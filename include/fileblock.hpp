@@ -388,8 +388,7 @@ class FileBlock {     // process blocks in a file
     return ret;
   }
 
-  // it's only used for IndexKey, i.e. BlockKey<uint32_t>, so that the type of kv.value() is uint32_t.
-  // Find the biggest _key that _key <= key.
+  // Find the biggest _key that _key <= key. Return the value.
   typename KV::ValueType get_block_id_from_index(SKey key, int ra_fd) const {
     int l = 0, r = handle_.counts - 1;
     typename KV::ValueType ret{-1};

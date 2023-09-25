@@ -1278,7 +1278,9 @@ class alignas(128) VisCnts {
       tree[1]->update_tick_threshold(-new_tick_threshold);
       logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
     } else if (cache_policy == CachePolicyT::kUseFasterTick) {
-      // We sample and find the oldest 10% * SIZE records. These records are removed in the next decay.
+      // We sample some points and find the oldest 10% * SIZE records. These records are removed in major compaction (update_tick_threshold_and_update_est).
+      // We sample points when we are doing compaction, and we get threshold from those points. 
+      // The threshold is old but it ensures that we always remove >= 10% * SIZE records. 
       // But we have a constraint: The tick threshold must be able to be updated with new current tick.
       // For harmonic mean (class TickValue) it's impossible. 
       auto hot_size = weight_sum(0) + weight_sum(1);

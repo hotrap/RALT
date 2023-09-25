@@ -91,6 +91,8 @@ class Compaction {
       } else {
         // only store those filter returning true.
         if (filter_func(lst_value_)) {
+          // It maybe the last key.      
+          builder_.set_lstkey(lst_value_.first);
           other_func(lst_value_.first, lst_value_.second);
           real_size_ += _calc_hot_size(lst_value_);
           builder_.append(lst_value_);
@@ -102,8 +104,9 @@ class Compaction {
     }
     // store the last kv.
     {
-      builder_.set_lstkey(lst_value_.first);
       if (filter_func(lst_value_)) {
+        // It is the last key.
+        builder_.set_lstkey(lst_value_.first);
         other_func(lst_value_.first, lst_value_.second);
         builder_.append(lst_value_);
         real_size_ += _calc_hot_size(lst_value_); 

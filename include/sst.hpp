@@ -349,6 +349,8 @@ class SSTBuilder {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
     if (!offsets.size() || offsets.size() % (kIndexChunkSize / sizeof(uint32_t)) == 0) {
+      // If it is the first element, then the second parameter (cumulative sum) should be empty.
+      // Otherwise, we use the data of the last element.
       IndexDataT new_index_block(offsets.size(), index.size() ? index.back().second : IndexDataT());
       index.emplace_back(kv.key(), new_index_block);
       if (offsets.size() == 0) first_key = kv.key();
