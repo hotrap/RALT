@@ -23,6 +23,7 @@ public:
 	size_t TierNum();
 	void Access(size_t tier, rocksdb::Slice key, size_t vlen);
 	bool IsHot(size_t tier, rocksdb::Slice key);
+	bool IsStablyHot(size_t tier, rocksdb::Slice key);
 	void TransferRange(
 		size_t target_tier, size_t source_tier, rocksdb::RangeBounds range
 	);
@@ -37,6 +38,7 @@ public:
 	// single tier
 	void Access(rocksdb::Slice key, size_t vlen);
 	bool IsHot(rocksdb::Slice key);
+	bool IsStablyHot(rocksdb::Slice key);
 	size_t RangeHotSize(rocksdb::RangeBounds range);
 	rocksdb::CompactionRouter::Iter Begin();
 	rocksdb::CompactionRouter::Iter LowerBound(rocksdb::Slice key);

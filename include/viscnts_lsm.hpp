@@ -102,8 +102,8 @@
 
 namespace viscnts_lsm {
 
-constexpr auto kLimitMin = 10;
-constexpr auto kLimitMax = 20;
+constexpr auto kLimitMin = 5;
+constexpr auto kLimitMax = 5;
 constexpr auto kMergeRatio = 0.1;
 constexpr auto kUnsortedBufferSize = 1ull << 24;
 constexpr auto kUnsortedBufferMaxQueue = 4;
@@ -544,6 +544,24 @@ class EstimateLSM {
       return false;
     }
 
+    bool is_stably_hot(SKey key) const {
+      auto iter = seek(key);
+      // logger("fuck");
+      // key.print();
+      bool cnt = 0;
+      for(auto& a : iter.get_iterators()) {
+        BlockKey<SKey, ValueT> kv;
+        a.read(kv);
+        if (comp_(kv.key(), key) == 0) {
+          if (kv.value().is_stable() || cnt) {
+            return true;
+          }
+          cnt = 1;
+        }
+      }
+      return false;
+    }
+
     std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<KeyCompT, ValueT>*>& bufs, EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm) {
       if (bufs.size() == 0) return {};
       std::vector<std::shared_ptr<Level>> ret_vectors;
@@ -969,6 +987,11 @@ class EstimateLSM {
     return sv->search_key(key);
   }
 
+  bool is_stably_hot(SKey key) {
+    auto sv = get_current_sv();
+    return sv->is_stably_hot(key);
+  }
+
   double get_current_tick() const {
     return current_tick_.load(std::memory_order_relaxed);
   }
@@ -1168,6 +1191,9 @@ class alignas(128) VisCnts {
   }
   bool is_hot(int tier, SKey key) {
     return tree[tier]->search_key(key);
+  }
+  bool is_stably_hot(int tier, SKey key) {
+    return tree[tier]->is_stably_hot(key);
   }
   void transfer_range(int src_tier, int dst_tier, const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) {
     if (src_tier == dst_tier) return;

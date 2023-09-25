@@ -27,7 +27,7 @@ struct SKeyComparatorFromRocksDB {
   }
 };
 
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseTick>;
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseFasterTick>;
 
 class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
   public:
@@ -97,6 +97,11 @@ bool VisCnts::IsHot(size_t tier, rocksdb::Slice key) {
   // logger("is_hot");
   return vc->is_hot(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
 }
+bool VisCnts::IsStablyHot(size_t tier, rocksdb::Slice key) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  // logger("is_hot");
+  return vc->is_stably_hot(tier, viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
+}
 void VisCnts::TransferRange(
   size_t target_tier, size_t source_tier, rocksdb::RangeBounds range
 ) {
@@ -159,4 +164,8 @@ rocksdb::CompactionRouter::Iter VisCnts::Begin() {
 }
 rocksdb::CompactionRouter::Iter VisCnts::LowerBound(rocksdb::Slice key) {
   return LowerBound(0, key);
+}
+
+bool VisCnts::IsStablyHot(rocksdb::Slice key) {
+  return IsStablyHot(0, key);
 }
