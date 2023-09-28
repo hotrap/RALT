@@ -984,12 +984,16 @@ class EstimateLSM {
 
   bool search_key(SKey key) {
     auto sv = get_current_sv();
-    return sv->search_key(key);
+    auto ret = sv->search_key(key);
+    sv->unref();
+    return ret;
   }
 
   bool is_stably_hot(SKey key) {
     auto sv = get_current_sv();
-    return sv->is_stably_hot(key);
+    auto ret = sv->is_stably_hot(key);
+    sv->unref();
+    return ret;
   }
 
   double get_current_tick() const {
