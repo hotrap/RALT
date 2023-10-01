@@ -403,6 +403,6 @@ int main() {
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  // test_stable_hot();
-  test_lowerbound();
+  test_stable_hot();
+  // test_lowerbound();
 }

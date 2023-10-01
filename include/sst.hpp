@@ -73,6 +73,20 @@ class ImmutableFile {
   // LRUCache pointer reference to the one in VisCnts (is deleted)
   KeyCompT comp_;
 
+  
+  class FileOpen {
+    public:
+      FileOpen(RandomAccessFile* file) : file_(file) { fd_ = file_->get_fd(); }
+      ~FileOpen() { file_->release_fd(fd_); }
+      int get_fd() const { return fd_; } 
+      
+    private:
+      RandomAccessFile* file_;
+      int fd_;
+  };
+
+  FileOpen open_ra_file_;
+
   using DataKey = BlockKey<SKey, ValueT>;
   using IndexKey = BlockKey<SKey, IndexDataT>;
 
@@ -194,24 +208,25 @@ class ImmutableFile {
   // };
 
   // Used in seek. We get a temporary fd before seeking, and release it after seeking.
-  class TempFileOpen {
-    public:
-      TempFileOpen(const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file) : file_(file) { fd_ = file_.file_ptr_->get_fd(); }
-      ~TempFileOpen() { file_.file_ptr_->release_fd(fd_); }
-      int get_fd() const { return fd_; } 
+  // We don't use it now.
+  // class TempFileOpen {
+  //   public:
+  //     TempFileOpen(const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file) : file_(file) { fd_ = file_.file_ptr_->get_fd(); }
+  //     ~TempFileOpen() { file_.file_ptr_->release_fd(fd_); }
+  //     int get_fd() const { return fd_; } 
       
-    private:
-      const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file_;
-      int fd_;
-  };
+  //   private:
+  //     const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file_;
+  //     int fd_;
+  // };
 
 
   ImmutableFile(uint32_t file_id, uint32_t size, std::unique_ptr<RandomAccessFile>&& file_ptr, 
                 const std::pair<IndSKey, IndSKey>& range, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, 
                 KeyCompT comp)
-      : file_id_(file_id), size_(size), range_(range), file_ptr_(std::move(file_ptr)), comp_(comp) {
+      : file_id_(file_id), size_(size), range_(range), file_ptr_(std::move(file_ptr)), comp_(comp), open_ra_file_(file_ptr_.get()) {
     // read index block
-    int ra_fd = file_ptr_->get_fd();
+    int ra_fd = open_ra_file_.get_fd();
     FileBlockHandle index_bh, data_bh;
     size_t mgn;
     auto ret = file_ptr_->read(ra_fd, size_ - sizeof(size_t), sizeof(size_t), (uint8_t*)(&mgn));
@@ -223,32 +238,28 @@ class ImmutableFile {
     assert(ret >= 0);
     index_block_ = FileBlock<IndexKey, KeyCompT>(file_id, index_bh, file_ptr_.get(), file_index_cache, comp_);
     data_block_ = FileBlock<DataKey, KeyCompT>(file_id, data_bh, file_ptr_.get(), file_key_cache, comp_);
-    file_ptr_->release_fd(ra_fd);
   }
 
   // seek the first key that >= key, but only seek index block.
   typename FileBlock<DataKey, KeyCompT>::EnumIterator estimate_seek(SKey key) {
     if (comp_(range_.second.ref(), key) < 0) return {};
-    TempFileOpen tmp_open(*this);
-    auto id = index_block_.upper_offset(key, tmp_open.get_fd()).get_offset();
+    auto id = index_block_.upper_offset(key, open_ra_file_.get_fd()).get_offset();
     if (id == -1) return {};
-    return data_block_.seek_with_id(id, tmp_open.get_fd());
+    return data_block_.seek_with_id(id, open_ra_file_.get_fd());
   }
 
   // seek the first key that >= key
   typename FileBlock<DataKey, KeyCompT>::EnumIterator seek(SKey key) const {
     if (comp_(range_.second.ref(), key) < 0) return {};
-    TempFileOpen tmp_open(*this);
-    auto id = index_block_.get_block_id_from_index(key, tmp_open.get_fd()).get_offset();
-    if (id == -1) return data_block_.seek_with_id(0, tmp_open.get_fd());
-    id = data_block_.lower_key(key, id, id + kIndexChunkSize - 1, tmp_open.get_fd());
-    return data_block_.seek_with_id(id, tmp_open.get_fd());
+    auto id = index_block_.get_block_id_from_index(key, open_ra_file_.get_fd()).get_offset();
+    if (id == -1) return data_block_.seek_with_id(0, open_ra_file_.get_fd());
+    id = data_block_.lower_key(key, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd());
+    return data_block_.seek_with_id(id, open_ra_file_.get_fd());
   }
 
   
   typename FileBlock<DataKey, KeyCompT>::EnumIterator seek_to_first() const {
-    TempFileOpen tmp_open(*this);
-    return data_block_.seek_with_id(0, tmp_open.get_fd());
+    return data_block_.seek_with_id(0, open_ra_file_.get_fd());
   }
 
   // ImmutableFileAsyncSeekHandle get_seek_handle(SKey key, async_io::AsyncIOQueue& aio) const {
@@ -256,7 +267,6 @@ class ImmutableFile {
   // }
 
   std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) const {
-    TempFileOpen tmp_open(*this);
     int retl = 0, retr = 0;
     auto& [L, R] = range;
     if (comp_(range_.second.ref(), L) < 0)
@@ -264,13 +274,13 @@ class ImmutableFile {
     else if (comp_(L, range_.first.ref()) < 0)
       retl = 0;
     else {
-      auto id = index_block_.get_block_id_from_index(L, tmp_open.get_fd()).get_offset();
+      auto id = index_block_.get_block_id_from_index(L, open_ra_file_.get_fd()).get_offset();
       if (id == -1) {
         retl = 0;
       } else {
         retl = !exclude_info.first 
-              ? data_block_.lower_key(L, id, id + kIndexChunkSize - 1, tmp_open.get_fd())
-              : data_block_.upper_key(L, id, id + kIndexChunkSize - 1, tmp_open.get_fd());
+              ? data_block_.lower_key(L, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd())
+              : data_block_.upper_key(L, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd());
       }
     }
     if (comp_(range_.second.ref(), R) <= 0)
@@ -278,13 +288,13 @@ class ImmutableFile {
     else if (comp_(R, range_.first.ref()) < 0)
       retr = 0;
     else {
-      auto id = index_block_.get_block_id_from_index(R, tmp_open.get_fd()).get_offset();
+      auto id = index_block_.get_block_id_from_index(R, open_ra_file_.get_fd()).get_offset();
       if (id == -1) {
         retr = 0;
       } else {
         retr = !exclude_info.second
-              ? data_block_.upper_key(R, id, id + kIndexChunkSize - 1, tmp_open.get_fd())
-              : data_block_.lower_key(R, id, id + kIndexChunkSize - 1, tmp_open.get_fd());
+              ? data_block_.upper_key(R, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd())
+              : data_block_.lower_key(R, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd());
       }
     }
 
@@ -348,7 +358,7 @@ class SSTBuilder {
   void append(const DataKey& kv) {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
-    if (!offsets.size() || offsets.size() % (kIndexChunkSize / sizeof(uint32_t)) == 0) {
+    if (!offsets.size() || offsets.size() % kIndexChunkCount == 0) {
       // If it is the first element, then the second parameter (cumulative sum) should be empty.
       // Otherwise, we use the data of the last element.
       IndexDataT new_index_block(offsets.size(), index.size() ? index.back().second : IndexDataT());

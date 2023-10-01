@@ -9,8 +9,9 @@
 
 namespace viscnts_lsm {
 
-const static size_t kChunkSize = 1 << 12;  // 4 KB
-const static size_t kIndexChunkSize = 1024;
+constexpr static size_t kChunkSize = 1 << 12;  // 4 KB
+constexpr static size_t kIndexChunkSize = 512;
+constexpr static size_t kIndexChunkCount = kIndexChunkSize / sizeof(uint32_t);
 
 // manage a temporary chunk (several pages) in SST files
 // I don't use cache here, because we don't need it? (I think we can cache index blocks)

@@ -466,6 +466,42 @@ class EstimateLSM {
       for (auto& a : tree_) ret.push(a->seek(key, comp_));
       return ret;
     }
+
+    // optimize is stably hot.
+    // We seek from the largest level to the smallest level. 
+    // Because it may have stably hot tag in the largest level
+    // then we don't need to seek other levels. 
+    bool is_stably_hot(SKey key) const {
+      bool cnt = 0;
+      for (int i = tree_.size() - 1; i >= 0; --i) {
+        auto iter = tree_[i]->seek(key, comp_);
+        if (!iter.valid()) continue;
+        BlockKey<SKey, ValueT> kv;
+        iter.read(kv);
+        if (comp_(kv.key(), key) == 0) {
+          if (kv.value().is_stable() || cnt) {
+            return true;
+          }
+          cnt = 1;
+        }
+      }
+      return false;
+      // auto iter = seek(key);
+      // logger("fuck");
+      // key.print();
+      // bool cnt = 0;
+      // for(auto& a : iter.get_iterators()) {
+      //   BlockKey<SKey, ValueT> kv;
+      //   a.read(kv);
+      //   if (comp_(kv.key(), key) == 0) {
+      //     if (kv.value().is_stable() || cnt) {
+      //       return true;
+      //     }
+      //     cnt = 1;
+      //   }
+      // }
+      // return false;
+    }
     
     // return lowerbound.
     // seek concurrently, using std::async.
@@ -540,24 +576,6 @@ class EstimateLSM {
         a.read(kv);
         // kv.key().print();
         if (comp_(kv.key(), key) == 0) return true;
-      }
-      return false;
-    }
-
-    bool is_stably_hot(SKey key) const {
-      auto iter = seek(key);
-      // logger("fuck");
-      // key.print();
-      bool cnt = 0;
-      for(auto& a : iter.get_iterators()) {
-        BlockKey<SKey, ValueT> kv;
-        a.read(kv);
-        if (comp_(kv.key(), key) == 0) {
-          if (kv.value().is_stable() || cnt) {
-            return true;
-          }
-          cnt = 1;
-        }
       }
       return false;
     }
@@ -1012,7 +1030,7 @@ class EstimateLSM {
     _update_superversion(new_sv);
   }
 
-  
+  /* used for fast decay. */
   void update_tick_threshold_and_update_est(double new_threshold, KthEst<double>& est) {
     tick_threshold_ = new_threshold;
     std::unique_lock del_range_lck(sv_modify_mutex_);
