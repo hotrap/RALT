@@ -299,6 +299,10 @@ class EstimateLSM {
     double hot_size() const { return hot_size_; }
     /* seek the first key >= key. */
     LevelIterator seek(SKey key, KeyCompT comp) const {
+      if (head_.size() == 1 && head_[0]->range().first.data() == nullptr) {
+        assert(head_[0]->range().second.data() == nullptr);
+        return LevelIterator();
+      }
       int l = 0, r = head_.size() - 1, where = -1;
       while (l <= r) {
         int mid = (l + r) >> 1;
@@ -415,6 +419,10 @@ class EstimateLSM {
 
    private:
     std::pair<int, int> _get_range_in_head(const std::pair<SKey, SKey>& range, KeyCompT comp) {
+      if (head_.size() == 1 && head_[0]->range().first.data() == nullptr) {
+        assert(head_[0]->range().second.data() == nullptr);
+        return {-1, -1};
+      }
       int l = 0, r = head_.size() - 1, where_l = -1, where_r = -1;
       while (l <= r) {
         int mid = (l + r) >> 1;

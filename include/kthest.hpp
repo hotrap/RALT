@@ -110,7 +110,16 @@ class KthEst {
         return x.first < y.first;
       });
       logger(size_limit_ / (double) scan1_size_sum_);
-      return point_data_[std::max<size_t>(0, std::min<size_t>(scan1_point_num_ - 1, int((scan1_point_num_ * size_limit_) / scan1_size_sum_)))].first;
+      size_t i;
+      if (scan1_size_sum_ == 0) {
+        i = 0;
+      } else {
+        i = std::max<size_t>(
+            0, std::min<size_t>(
+                  scan1_point_num_ - 1,
+                  int((scan1_point_num_ * size_limit_) / scan1_size_sum_)));
+      }
+      return point_data_[i].first;
     }
 
   private:
