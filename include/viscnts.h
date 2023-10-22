@@ -2,6 +2,7 @@
 #define VISCNTS_N_
 
 #include <boost/fiber/buffered_channel.hpp>
+#include <optional>
 
 #include "rocksdb/compaction_router.h"
 #include "rocksdb/comparator.h"
