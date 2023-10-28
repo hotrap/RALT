@@ -1182,8 +1182,8 @@ class alignas(128) VisCnts {
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
   // Use different file path for two trees.
   VisCnts(KeyCompT comp, const std::string& path, size_t delta)
-    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a0"), comp, current_tick_), 
-          std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "a1"), comp, current_tick_)},
+    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_), 
+          std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a1"), comp, current_tick_)},
       comp_(comp), hot_set_limit_(delta), last_est_(kEstPointNum, hot_set_limit_ * (1 - kHotSetExceedLimit)) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
       }
