@@ -344,6 +344,11 @@ void test_ishot_simple() {
   }
   DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
 }
+void print_memory() {
+  std::system(("ps -q " + std::to_string(getpid()) +
+              " -o rss | tail -n 1")
+                .c_str());
+}
 
 void test_cache_efficiency() {
   
@@ -351,8 +356,8 @@ void test_cache_efficiency() {
 
 void test_stable_hot() {
   size_t max_hot_set_size = 1e18;
-  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
@@ -361,24 +366,32 @@ void test_stable_hot() {
   input_all(vc, 0, data2, TH, vlen);
   input_all(vc, 0, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  print_memory();
   sw.Reset();
   {
     std::vector<std::future<void>> h;
     for (int i = 0; i < TH; i++) {
-      h.push_back(std::async([L = N / 100 * i, R = N / 100 * (i + 1), &data, &vc]() {
+      h.push_back(std::async([L = N / 10 * i, R = N / 10 * (i + 1), &data, &vc]() {
       for (int j = L; j < R; j++) {
         char a[30];
         DB_ASSERT(vc.IsStablyHot(0, convert_to_slice(a, data[j].first, data[j].second)));
       }}));    
     }
   }
-  
+  print_memory();
   DB_INFO("true query end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
-  for (int i = 0; i < N / 100; i++) {
-    char a[30];
-    DB_ASSERT(!vc.IsStablyHot(0, convert_to_slice(a, data2[i].first, data2[i].second)));
+  {
+    std::vector<std::future<void>> h;
+    for (int i = 0; i < TH; i++) {
+      h.push_back(std::async([L = N / 10 * i, R = N / 10 * (i + 1), &data2, &vc]() {
+      for (int j = L; j < R; j++) {
+        char a[30];
+        DB_ASSERT(!vc.IsStablyHot(0, convert_to_slice(a, data2[j].first, data2[j].second)));
+      }}));    
+    }
   }
+  print_memory();
   DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
 }
 

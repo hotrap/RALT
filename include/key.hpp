@@ -22,7 +22,7 @@ using IndSKey = IndSlice;
 // inline int operator==(SKey A, const IndSKey& B) { return A == B.ref(); }
 // inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
-// Dedicate.
+// Dedicated.
 class SValue {
   double counts_{0};
   size_t vlen_{0};

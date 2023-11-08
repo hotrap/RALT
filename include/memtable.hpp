@@ -154,30 +154,9 @@ class UnsortedBuffer {
       }
   };
 
-  std::vector<std::set<std::pair<SKey, const uint8_t*>, Comparator>> mp_;
-  constexpr static auto kHashTableSize = 1024576;
-
-  class MpIterator {
-    typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it_;
-    typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it_end_;
-    
-    public:
-      MpIterator(typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it, typename std::set<std::pair<SKey, const uint8_t*>, Comparator>::iterator it_end)
-        : it_(it), it_end_(it_end) {}
-      std::pair<SKey, const uint8_t*> read() { return *it_; }
-      void read(BlockKey<SKey, const uint8_t*>& kv) {
-        kv = BlockKey<SKey, const uint8_t*>(it_->first, it_->second);
-      }
-      void next() { it_++; }
-      bool valid() { return it_end_ != it_; }
-  };
-
  public:
   UnsortedBuffer(size_t size, KeyCompT comp) : used_size_(0), working_count_(0), buffer_size_(size), comp_(comp), data_(new uint8_t[size]) { 
     memset(data_, 0, size);
-    for(uint i = 0; i < kHashTableSize; i++) {
-      mp_.emplace_back(Comparator(comp_));
-    } 
   }
   UnsortedBuffer(const UnsortedBuffer &buf) = delete;
   UnsortedBuffer(UnsortedBuffer &&buf) {
@@ -185,7 +164,6 @@ class UnsortedBuffer {
     working_count_ = buf.working_count_.load();
     buffer_size_ = buf.buffer_size_;
     comp_ = std::move(buf.comp_);
-    mp_ = std::move(mp_);
     data_ = buf.data_;
     sorted_result_ = std::move(buf.sorted_result_);
     buf.data_ = nullptr;
@@ -202,11 +180,6 @@ class UnsortedBuffer {
     }
     working_count_ += 1;
     *reinterpret_cast<ValueT *>(key.write(data_ + pos)) = value;
-    // {
-    //   SKey k;
-    //   auto v = k.read(data_ + pos);
-    //   mp_[std::hash<std::thread::id>{}(std::this_thread::get_id()) % (kHashTableSize)].insert(std::make_pair(k, v));
-    // }
     working_count_ -= 1;
     return true;
   }
@@ -255,7 +228,6 @@ class UnsortedBuffer {
 
   void clear() {
     auto limit = std::min(used_size_.load(std::memory_order_relaxed), buffer_size_);
-    for (auto& a : mp_) a.clear();
     memset(data_, 0, limit);
     used_size_ = 0;
   }

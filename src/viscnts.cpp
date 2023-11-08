@@ -169,3 +169,13 @@ rocksdb::CompactionRouter::Iter VisCnts::LowerBound(rocksdb::Slice key) {
 bool VisCnts::IsStablyHot(rocksdb::Slice key) {
   return IsStablyHot(0, key);
 }
+
+void VisCnts::SetHotSetSizeLimit(size_t new_limit) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  vc->set_new_limit(new_limit);
+}
+
+size_t VisCnts::DecayCount() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->decay_count();
+}

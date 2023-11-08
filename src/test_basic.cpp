@@ -177,6 +177,12 @@ void test_lsm_store() {
   logger("test_lsm_store(): OK");
 }
 
+void print_memory() {
+  std::system(("ps -q " + std::to_string(getpid()) +
+              " -o rss | tail -n 1")
+                .c_str());
+}
+
 void test_lsm_store_and_scan() {
   using namespace viscnts_lsm;
 
@@ -194,6 +200,10 @@ void test_lsm_store_and_scan() {
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+    
+    DB_INFO("data generated. size = ({})", numbers.size() * sizeof(decltype(numbers)::value_type));
+    print_memory();
+    DB_INFO("begin to do work.");
     start = std::chrono::system_clock::now();
     std::vector<std::thread> threads;
     int TH = 4;
@@ -210,6 +220,7 @@ void test_lsm_store_and_scan() {
           std::ref(numbers), std::ref(tree));
     }
     for (auto& a : threads) a.join();
+    print_memory();
     threads.clear();
     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
 
@@ -229,6 +240,7 @@ void test_lsm_store_and_scan() {
           std::ref(_numbers), std::ref(tree));
     }
     for (auto& a : threads) a.join();
+    print_memory();
     tree.all_flush();
     auto end = std::chrono::system_clock::now();
     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -255,6 +267,7 @@ void test_lsm_store_and_scan() {
       DB_ASSERT(kv.second.get_hot_size() == 1);
       iter->next();
     }
+    print_memory();
   }
 
   auto end = std::chrono::system_clock::now();
@@ -746,12 +759,12 @@ int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  // test_lsm_store_and_scan();
+  test_lsm_store_and_scan();
   // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
   // test_delete_range();
-  test_kthest();
+  // test_kthest();
   // test_lru_cache();
   // test_scan_size();
 }

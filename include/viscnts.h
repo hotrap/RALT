@@ -45,6 +45,9 @@ public:
 	rocksdb::CompactionRouter::Iter LowerBound(rocksdb::Slice key);
 	void Flush();
 	size_t GetHotSize(size_t tier);
+
+	void SetHotSetSizeLimit(size_t new_limit);
+	size_t DecayCount();
 private:
 	VisCnts(void *vc) : vc_(vc) {}
 

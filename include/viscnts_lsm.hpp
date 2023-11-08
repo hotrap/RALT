@@ -106,7 +106,7 @@ constexpr auto kLimitMin = 5;
 constexpr auto kLimitMax = 5;
 constexpr auto kMergeRatio = 0.1;
 constexpr auto kUnsortedBufferSize = 1ull << 24;
-constexpr auto kUnsortedBufferMaxQueue = 4;
+constexpr auto kUnsortedBufferMaxQueue = 1;
 constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 
@@ -1081,17 +1081,25 @@ class EstimateLSM {
 
  private:
   void flush_thread() {
-    while (!terminate_signal_) {
-      flush_thread_state_ = 0;
+    while (true) {
+      if (bufs_.size() == 0) {      
+        flush_thread_state_ = 0;
+      }
+      if (terminate_signal_) {
+        flush_thread_state_ = 0;
+        return;
+      }
       auto buf_q_ = bufs_.wait_and_get();
-      if (terminate_signal_) return;
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
       auto new_vec = sv_->flush_bufs(buf_q_, *this);
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
-        if (terminate_signal_) return;
+        if (terminate_signal_) {            
+          flush_thread_state_ = 0;
+          return;
+        }
       }
       {
         std::unique_lock lck(flush_buf_vec_mutex_);
@@ -1102,10 +1110,16 @@ class EstimateLSM {
   }
   void compact_thread() {
     while (!terminate_signal_) {
-      compact_thread_state_ = 0;
       SuperVersion* new_sv;
       {
         std::unique_lock flush_lck(flush_buf_vec_mutex_);
+        if (flush_buf_vec_.empty()) {      
+          compact_thread_state_ = 0;
+        }
+        if (terminate_signal_) {      
+          compact_thread_state_ = 0;
+          return;
+        }
         // wait buffers from flush_thread()
         signal_flush_to_compact_.wait(flush_lck, [&]() { return !flush_buf_vec_.empty() || terminate_signal_; });
         if (terminate_signal_) return;
@@ -1177,6 +1191,7 @@ class alignas(128) VisCnts {
   // For kUseFasterTick
   KthEst<double> last_est_;
   bool is_first_tick_update_{true};
+  size_t decay_count_{0};
 
  public:
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
@@ -1280,6 +1295,7 @@ class alignas(128) VisCnts {
     }
   }
   void update_tick_threshold() {
+    decay_count_ += 1;
     if (cache_policy == CachePolicyT::kUseTick) {
       auto hot_size = weight_sum(0) + weight_sum(1);
       KthEst<double> est(kEstPointNum, hot_set_limit_);
@@ -1348,6 +1364,19 @@ class alignas(128) VisCnts {
       logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
     }
     
+  }
+
+  void set_new_limit(double new_limit) {
+    decay_m_.lock();
+    hot_set_limit_ = new_limit;
+    is_first_tick_update_ = true;
+    decay_count_ = 0;
+    decay_m_.unlock();
+    check_decay();
+  }
+
+  size_t decay_count() {
+    return decay_count_;
   }
 
   private:
