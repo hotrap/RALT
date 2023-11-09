@@ -124,6 +124,43 @@ class LRUTickValue {
   }
 };
 
+
+class ExpTickValue {
+  double tick_{0};
+  double score_{0};
+  size_t vlen_{0};
+ public:
+  ExpTickValue() {}
+  ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 1) {}
+  void merge(const ExpTickValue& v, double cur_tick) {
+    if (tick_ < v.tick_) {
+      score_ = pow(0.999999, v.tick_ - tick_) * score_ + v.score_;
+      tick_ = v.tick_;
+    } else {
+      score_ = pow(0.999999, tick_ - v.tick_) * v.score_ + score_;
+    }
+    set_stable(1);
+  }
+  size_t get_hot_size() const {
+    return vlen_ >> 1;
+  }
+  double get_tick() const {
+    return log(score_) + log(0.999999) * (-tick_);
+  }
+  bool decay(double, std::mt19937_64&) {
+    return true;
+  }
+  int tag() const {
+    return 0;
+  }
+  bool is_stable() const {
+    return vlen_ & 1;
+  }
+  void set_stable(bool x) {
+    vlen_ = (vlen_ >> 1) << 1 | x;
+  }
+};
+
 // Not used.
 // class Tag2TickValue {
 //   double tick_{0};

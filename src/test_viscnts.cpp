@@ -90,9 +90,9 @@ auto get_lower_bound_in_data(std::vector<std::pair<size_t, size_t>>& data, size_
 template<typename T1, typename T2>
 void check_scan_result(T1 iter, T2 ans_iter, T2 ans_end) {
   while (true) {
-    auto result = iter.next();
-    if (result) {
-      auto num = convert_to_int(*result);
+    auto result = iter->next();
+    if (result.has_value()) {
+      auto num = convert_to_int(result.value());
       if (ans_iter->first != num) {
         DB_INFO("{}, {}", num, ans_iter->first);
       }
@@ -139,13 +139,13 @@ void test_store_and_scan() {
     auto iter = vc.Begin(0);
     auto ans_iter = data.begin();
     while (true) {
-      auto result = iter.next();
-      if (result) {
+      auto result = iter->next();
+      if (result.has_value()) {
         DB_ASSERT(ans_iter != data.end());
-        if(!(ans_iter->first == convert_to_int(*result))) {
-          DB_INFO("{}, {}, {}", ans_iter - data.begin(), ans_iter->first, convert_to_int(*result));
+        if(!(ans_iter->first == convert_to_int(result.value()))) {
+          DB_INFO("{}, {}, {}", ans_iter - data.begin(), ans_iter->first, convert_to_int(result.value()));
         }
-        DB_ASSERT(ans_iter->first == convert_to_int(*result));
+        DB_ASSERT(ans_iter->first == convert_to_int(result.value()));
         ans_iter++;
       } else {
         DB_ASSERT(ans_iter == data.end());
@@ -185,10 +185,10 @@ void test_store_and_scan() {
       auto iter = vc.LowerBound(0, convert_to_slice(a, qx, qx_len));
       auto ans_iter = get_lower_bound_in_data(data, qx, qx_len);
       for (int j = 0; j < QLEN; j++) {
-        auto result = iter.next();
-        if (result) {
+        auto result = iter->next();
+        if (result.has_value()) {
           DB_ASSERT(ans_iter != data.end());
-          DB_ASSERT(ans_iter->first == convert_to_int(*result));
+          DB_ASSERT(ans_iter->first == convert_to_int(result.value()));
           ans_iter++;
         } else {
           DB_ASSERT(ans_iter == data.end());
@@ -221,10 +221,10 @@ void test_decay_simple() {
   size_t sum = 0;
   int cnt = 0;
   while (true) {
-    auto result = iter.next();
-    if (result) {
+    auto result = iter->next();
+    if (result.has_value()) {
       cnt += 1;
-      sum += vlen + get_size(*result);
+      sum += vlen + get_size(result.value());
     } else {
       break;
     }
@@ -299,9 +299,9 @@ void test_parallel() {
         auto iter = vc.Begin(tier);
         size_t sum = 0;
         while (true) {
-          auto result = iter.next();
-          if (result) {
-            sum += vlen + get_size(*result);
+          auto result = iter->next();
+          if (result.has_value()) {
+            sum += vlen + get_size(result.value());
           } else {
             break;
           }
