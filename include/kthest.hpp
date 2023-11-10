@@ -109,7 +109,8 @@ class KthEst {
       std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first < y.first;
       });
-      logger(size_limit_ / (double) scan1_size_sum_);
+      double frac = size_limit_ / (double) scan1_size_sum_;
+      logger(frac);
       size_t i;
       if (scan1_size_sum_ == 0) {
         i = 0;
@@ -117,7 +118,30 @@ class KthEst {
         i = std::max<size_t>(
             0, std::min<size_t>(
                   scan1_point_num_ - 1,
-                  int((scan1_point_num_ * size_limit_) / scan1_size_sum_)));
+                  int(scan1_point_num_ * frac)));
+      }
+      return point_data_[i].first;
+    }
+
+    
+    Key get_from_lst_points(size_t now_size) {
+      logger(scan1_point_num_, ", ", scan1_size_sum_, ", ", now_size);
+      std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
+        return x.first < y.first;
+      });
+      // A = lst size
+      // B = additional size
+      // since the points are from the lst, we should use: (B - A) / A.
+      double frac = 0.9;
+      logger(frac);
+      size_t i;
+      if (scan1_size_sum_ == 0) {
+        i = 0;
+      } else {
+        i = std::max<size_t>(
+            0, std::min<size_t>(
+                  scan1_point_num_ - 1,
+                  int(scan1_point_num_ * frac)));
       }
       return point_data_[i].first;
     }

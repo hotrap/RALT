@@ -3,6 +3,7 @@
 #include "cache.hpp"
 
 #include <fstream>
+#include <set>
 
 class DefaultComparator : public rocksdb::Comparator {
   public:
@@ -234,6 +235,47 @@ void test_decay_simple() {
   th.join();
 }
 
+void test_decay_hit_rate() {
+  // all keys are distinct.
+  size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
+  size_t max_hot_set_size = N * 0.05 * vlen;
+  auto vc = VisCnts::New(&default_comp, "/testdb/viscnts/", max_hot_set_size * 1.2);
+  std::mt19937_64 gen(0x202311101830);
+  auto data = gen_testdata(N, gen);
+  auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_size / vlen);
+  std::set<std::pair<size_t, size_t>> hots;
+  for (auto& a : hot_data) hots.insert(a);
+  auto cold_data = decltype(data)(data.begin() + max_hot_set_size / vlen, data.end());
+  StopWatch sw;
+  auto real_data = decltype(data)();
+  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N; i++) {
+    std::uniform_real_distribution<> dis(0, 1);
+    if (dis(gen) < 0.95) {
+      std::uniform_int_distribution<> dis2(0, hot_data.size() - 1);
+      real_data.push_back(hot_data[dis2(gen)]);
+    } else {
+      std::uniform_int_distribution<> dis2(0, cold_data.size() - 1);
+      real_data.push_back(cold_data[dis2(gen)]);
+    }
+  }
+  input_all(vc, 0, real_data, TH, vlen);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  
+  auto iter = vc.Begin(0);
+  size_t sum = 0;
+  int cnt = 0;
+  while (true) {
+    auto result = iter->next();
+    if (result.has_value()) {
+      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().key.size()));
+      sum += 1;
+    } else {
+      break;
+    }
+  }
+  DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size / vlen);
+}
+
 void test_transfer_range() {
   size_t max_hot_set_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
@@ -413,9 +455,10 @@ void test_lowerbound() {
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
+  test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  test_stable_hot();
+  // test_stable_hot();
   // test_lowerbound();
 }

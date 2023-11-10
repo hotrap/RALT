@@ -1332,7 +1332,7 @@ class alignas(128) VisCnts {
       auto hot_size = weight_sum(0) + weight_sum(1);
       StopWatch sw;
       if (is_first_tick_update_) {
-        is_first_tick_update_ = false;
+        // is_first_tick_update_ = false;
         KthEst<double> est(kEstPointNum, hot_set_limit_);
         est.pre_scan1(hot_size);
         auto append_all_to = [&](auto&& iter, auto&& scan_f) {
@@ -1355,13 +1355,13 @@ class alignas(128) VisCnts {
         logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
         return;
       }
-      logger("begin fast tick threshold update.");
-      double new_tick_threshold = last_est_.get_from_points();
-      logger(new_tick_threshold, ", ", current_tick_.load());
-      last_est_.pre_scan1(hot_size);
-      tree[0]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
-      tree[1]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
-      logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+      // logger("begin fast tick threshold update.");
+      // double new_tick_threshold = last_est_.get_from_lst_points(hot_size);
+      // logger(new_tick_threshold, ", ", current_tick_.load());
+      // last_est_.pre_scan1(hot_size);
+      // tree[0]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+      // tree[1]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+      // logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
     }
     
   }
