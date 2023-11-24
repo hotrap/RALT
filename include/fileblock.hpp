@@ -4,7 +4,7 @@
 #include "alloc.hpp"
 #include "fileenv.hpp"
 #include "chunk.hpp"
-#include "asyncio.hpp"
+// #include "asyncio.hpp"
 #include "cache.hpp"
 
 namespace viscnts_lsm {
@@ -341,12 +341,12 @@ class FileBlock {     // process blocks in a file
     c.acquire(seqfile);
   }
 
-  template<typename T>
-  void async_acquire(int ra_fd, size_t id, Chunk& c, async_io::AsyncIOQueue& aio, T&& aio_info) {
-    assert(id * kChunkSize < handle_.offset + handle_.size);
-    c.allocate();
-    aio.read(ra_fd, c.data(), id * kChunkSize, kChunkSize, std::forward<T>(aio_info));
-  }
+  // template<typename T>
+  // void async_acquire(int ra_fd, size_t id, Chunk& c, async_io::AsyncIOQueue& aio, T&& aio_info) {
+  //   assert(id * kChunkSize < handle_.offset + handle_.size);
+  //   c.allocate();
+  //   aio.read(ra_fd, c.data(), id * kChunkSize, kChunkSize, std::forward<T>(aio_info));
+  // }
 
   // template<typename T>
   // AsyncSeekHandle<T> get_async_seek_handle(async_io::AsyncIOQueue& aio, const T& bs_data) const {
