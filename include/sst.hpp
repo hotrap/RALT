@@ -27,7 +27,6 @@ class SSTIterator {
     file_block_iter_ = std::move(it.file_block_iter_);
     return *this;
   }
-  SSTIterator(const SSTIterator& it) : file_block_iter_(it.file_block_iter_) {}
   SSTIterator& operator=(const SSTIterator& it) {
     file_block_iter_ = it.file_block_iter_;
     return *this;

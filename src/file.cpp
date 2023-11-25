@@ -61,6 +61,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
 
   int get_fd() const override {
     int fd = ::open(fname_.c_str(), O_RDONLY);
+    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_RANDOM);
     // logger(fd, ", ", fname_);
     if (fd < 0) {
       logger("Error: ", errno);
@@ -75,6 +76,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
 
   SeqFile* get_seqfile() const override {
     auto fd = ::open(fname_.c_str(), O_RDONLY);
+    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) {
       logger("Error: ", errno);
       exit(-1);

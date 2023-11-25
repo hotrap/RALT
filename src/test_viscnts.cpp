@@ -47,15 +47,15 @@ size_t get_size(rocksdb::HotRecInfo input) {
   return input.key.size();
 }
 
-void input_all(VisCnts& vc, int tier, const std::vector<std::pair<size_t, size_t>>& data, int TH, int vlen) {
+void input_all(VisCnts& vc,const std::vector<std::pair<size_t, size_t>>& data, int TH, int vlen) {
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
     int L = (data.size() / TH + 1) * i;
     int R = std::min<int>(L + (data.size() / TH + 1), data.size());
-    handles.push_back(std::async([L, R, &data, &vc, tier, vlen]() {
+    handles.push_back(std::async([L, R, &data, &vc, vlen]() {
       char a[100];
       for (int j = L; j < R; j++) {
-        vc.Access(tier, convert_to_slice(a, data[j].first, data[j].second), vlen);
+        vc.Access(convert_to_slice(a, data[j].first, data[j].second), vlen);
       }
     }));
   }
@@ -122,12 +122,14 @@ void clear() {
 
 void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
   size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size);
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
+  DB_INFO("gen_testdata end.");
   StopWatch sw;
-  input_all(vc, 0, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
   sort_data(data);
@@ -137,7 +139,7 @@ void test_store_and_scan() {
 
   
   {
-    auto iter = vc.Begin(0);
+    auto iter = vc.Begin();
     auto ans_iter = data.begin();
     while (true) {
       auto result = iter->next();
@@ -160,7 +162,7 @@ void test_store_and_scan() {
   sw.Reset();  
   
   {
-    auto iter = vc.FastBegin(0);
+    auto iter = vc.FastBegin();
     auto ans_iter = data.begin();
     while (true) {
       auto result = iter->next();
@@ -183,7 +185,7 @@ void test_store_and_scan() {
     for (int i = 0; i < Q; i++) {
       char a[30];
       size_t qx = gen(), qx_len = 8;
-      auto iter = vc.LowerBound(0, convert_to_slice(a, qx, qx_len));
+      auto iter = vc.LowerBound(convert_to_slice(a, qx, qx_len));
       auto ans_iter = get_lower_bound_in_data(data, qx, qx_len);
       for (int j = 0; j < QLEN; j++) {
         auto result = iter->next();
@@ -204,21 +206,22 @@ void test_store_and_scan() {
 void test_decay_simple() {
   // all keys are distinct.
   size_t max_hot_set_size = 1e9;
+  size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 100, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, 0, data, TH, vlen);
-  input_all(vc, 1, data, TH, vlen);
-  input_all(vc, 0, data, TH, vlen);
-  input_all(vc, 1, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   std::thread th([&]() {
-    input_all(vc, 0, data, TH, vlen);
+    input_all(vc, data, TH, vlen);
   });
   
-  auto iter = vc.Begin(0);
+  auto iter = vc.Begin();
   size_t sum = 0;
   int cnt = 0;
   while (true) {
@@ -230,7 +233,7 @@ void test_decay_simple() {
       break;
     }
   }
-  DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size);
+  DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size, max_physical_size);
   DB_ASSERT(sum <= max_hot_set_size * 1.1);
   th.join();
 }
@@ -239,7 +242,8 @@ void test_decay_hit_rate() {
   // all keys are distinct.
   size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
   size_t max_hot_set_size = N * 0.05 * vlen;
-  auto vc = VisCnts::New(&default_comp, "/testdb/viscnts/", max_hot_set_size * 1.2);
+  size_t max_physical_size = 1e18;
+  auto vc = VisCnts::New(&default_comp, "/testdb/viscnts/", max_hot_set_size * 1.1, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
   auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_size / vlen);
@@ -248,7 +252,7 @@ void test_decay_hit_rate() {
   auto cold_data = decltype(data)(data.begin() + max_hot_set_size / vlen, data.end());
   StopWatch sw;
   auto real_data = decltype(data)();
-  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N; i++) {
+  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N / 4; i++) {
     std::uniform_real_distribution<> dis(0, 1);
     if (dis(gen) < 0.95) {
       std::uniform_int_distribution<> dis2(0, hot_data.size() - 1);
@@ -258,10 +262,10 @@ void test_decay_hit_rate() {
       real_data.push_back(cold_data[dis2(gen)]);
     }
   }
-  input_all(vc, 0, real_data, TH, vlen);
+  input_all(vc, real_data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   
-  auto iter = vc.Begin(0);
+  auto iter = vc.Begin();
   size_t sum = 0;
   int cnt = 0;
   while (true) {
@@ -273,72 +277,25 @@ void test_decay_hit_rate() {
       break;
     }
   }
-  DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size / vlen);
-}
-
-void test_transfer_range() {
-  size_t max_hot_set_size = 1e18;
-  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
-  std::mt19937_64 gen(0x202306242118);
-  auto data0 = gen_testdata(N, gen);
-  auto data1 = gen_testdata(N, gen);
-  StopWatch sw;
-  input_all(vc, 0, data0, TH, vlen);
-  input_all(vc, 1, data1, TH, vlen);
-  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
-  sw.Reset();
-  rocksdb::RangeBounds range;
-  char ax[30], ay[30];
-  range.start.user_key = convert_to_slice(ax, 1e18, 10);
-  range.start.excluded = false;
-  range.end.user_key = convert_to_slice(ay, 1e9, 10);
-  range.end.excluded = false;
-  vc.Flush();
-  DB_INFO("{}, {}", vc.RangeHotSize(1, range), vc.GetHotSize(1));
-  vc.TransferRange(0, 1, range);
-  vc.Flush();
-  DB_INFO("{}, {}", vc.RangeHotSize(1, range), vc.GetHotSize(1));
-  DB_INFO("transfer end. Used: {} s", sw.GetTimeInSeconds());
-  sw.Reset();
-
-  char a[30];
-  auto data_ans0 = data0;
-  auto data_ans1 = decltype(data1)();
-  for (auto [a0, a0len] : data1) {
-    if (default_comp.Compare(range.start.user_key, convert_to_slice(a, a0, a0len)) <= 0
-        && default_comp.Compare(convert_to_slice(a, a0, a0len), range.end.user_key) <= 0) {
-      data_ans0.push_back({a0, a0len});
-    } else {
-      data_ans1.push_back({a0, a0len});
-    }
-  }
-  sort_data(data_ans0);
-  sort_data(data_ans1);
-  DB_INFO("sort end. Used: {} s. Result set size: {}, {}", sw.GetTimeInSeconds(), data_ans0.size(), data_ans1.size());
-  sw.Reset();
-
-  check_scan_result(vc.Begin(0), data_ans0.begin(), data_ans0.end());
-  check_scan_result(vc.Begin(1), data_ans1.begin(), data_ans1.end());
-  DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
+  DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size, max_physical_size / vlen);
 }
 
 void test_parallel() {
   size_t max_hot_set_size = 1e9;
+  size_t max_physical_size = 1e18;
   size_t N = 1e7, NBLOCK = 1e5, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
     handles.push_back(std::async([&, i]() {
       std::mt19937_64 gen(0x202306251128 + i);
       for (int j = 0; j < N; j += NBLOCK) {
         auto data = gen_testdata(NBLOCK, gen);
-        int tier = i & 1;
         char a[100];
         for (int k = 0; k < NBLOCK; k++) {
-          vc.Access(tier, convert_to_slice(a, data[k].first, data[k].second), vlen);
+          vc.Access(convert_to_slice(a, data[k].first, data[k].second), vlen);
         }
-        auto iter = vc.Begin(tier);
+        auto iter = vc.Begin();
         size_t sum = 0;
         while (true) {
           auto result = iter->next();
@@ -358,13 +315,14 @@ void test_parallel() {
 
 void test_ishot_simple() {
   size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, 0, data, TH, vlen);
+  input_all(vc,  data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
   {
@@ -373,7 +331,7 @@ void test_ishot_simple() {
       h.push_back(std::async([L = N / 100 * i, R = N / 100 * (i + 1), &data, &vc]() {
       for (int j = L; j < R; j++) {
         char a[30];
-        DB_ASSERT(vc.IsHot(0, convert_to_slice(a, data[j].first, data[j].second)));
+        DB_ASSERT(vc.IsHot(convert_to_slice(a, data[j].first, data[j].second)));
       }}));    
     }
   }
@@ -382,7 +340,7 @@ void test_ishot_simple() {
   sw.Reset();
   for (int i = 0; i < N / 100; i++) {
     char a[30];
-    DB_ASSERT(!vc.IsHot(0, convert_to_slice(a, data2[i].first, data2[i].second)));
+    DB_ASSERT(!vc.IsHot(convert_to_slice(a, data2[i].first, data2[i].second)));
   }
   DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
 }
@@ -398,15 +356,16 @@ void test_cache_efficiency() {
 
 void test_stable_hot() {
   size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
   size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size);
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, 0, data, TH, vlen);
-  input_all(vc, 0, data2, TH, vlen);
-  input_all(vc, 0, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
+  input_all(vc, data2, TH, vlen);
+  input_all(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   print_memory();
   sw.Reset();
@@ -416,7 +375,7 @@ void test_stable_hot() {
       h.push_back(std::async([L = N / 10 * i, R = N / 10 * (i + 1), &data, &vc]() {
       for (int j = L; j < R; j++) {
         char a[30];
-        DB_ASSERT(vc.IsStablyHot(0, convert_to_slice(a, data[j].first, data[j].second)));
+        DB_ASSERT(vc.IsStablyHot(convert_to_slice(a, data[j].first, data[j].second)));
       }}));    
     }
   }
@@ -429,7 +388,7 @@ void test_stable_hot() {
       h.push_back(std::async([L = N / 10 * i, R = N / 10 * (i + 1), &data2, &vc]() {
       for (int j = L; j < R; j++) {
         char a[30];
-        DB_ASSERT(!vc.IsStablyHot(0, convert_to_slice(a, data2[j].first, data2[j].second)));
+        DB_ASSERT(!vc.IsStablyHot(convert_to_slice(a, data2[j].first, data2[j].second)));
       }}));    
     }
   }
@@ -439,16 +398,17 @@ void test_stable_hot() {
 
 void test_lowerbound() {
   size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202309252052);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, 0, data, TH, vlen);
+  input_all(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   for (int i = 0; i < data.size(); i++) {
     char a[30];
-    vc.LowerBound(0, convert_to_slice(a, data[i].first, data[i].second));
+    vc.LowerBound(convert_to_slice(a, data[i].first, data[i].second));
   }
 }
 

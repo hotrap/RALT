@@ -3,6 +3,7 @@
 
 #include <boost/fiber/buffered_channel.hpp>
 #include <queue>
+#include <memory>
 
 #include "alloc.hpp"
 #include "cache.hpp"
@@ -109,6 +110,91 @@ constexpr auto kUnsortedBufferSize = 1ull << 24;
 constexpr auto kUnsortedBufferMaxQueue = 1;
 constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
+constexpr auto kLevelMultiplier = 10;
+constexpr auto kStepDecayLen = 15;
+
+template<typename T>
+class atomic_shared_ptr {
+ public:
+  atomic_shared_ptr() = default;
+  atomic_shared_ptr(const atomic_shared_ptr& p) {
+    ptr_ = p.ptr_;
+    ref_ = p.ref_;
+    if (ptr_) {
+      p.ref_->fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  atomic_shared_ptr(atomic_shared_ptr&& p) {
+    ptr_ = p.ptr_;
+    ref_ = p.ref_;
+    p.ptr_ = nullptr;
+    p.ref_ = nullptr;
+  }
+  atomic_shared_ptr(T* p) : ptr_(p) {
+    if (ptr_ != nullptr) {
+      ref_ = new std::atomic<int>(1);
+    }
+  }
+  ~atomic_shared_ptr() {
+    if (ptr_) {
+      release();
+    }
+  }
+  atomic_shared_ptr& operator=(const atomic_shared_ptr& p) {
+    if (p.ptr_) {
+      p.ref_->fetch_add(1, std::memory_order_relaxed);
+    }
+    if (ptr_) {
+      release();
+    }
+    ptr_ = p.ptr_;
+    ref_ = p.ref_;
+    return *this;
+  }
+  atomic_shared_ptr& operator=(atomic_shared_ptr&& p) {
+    if (ptr_) {
+      release();
+    }
+    ptr_ = p.ptr_;
+    ref_ = p.ref_;
+    p.ptr_ = nullptr;
+    p.ref_ = nullptr;
+    return *this;
+  }
+  T* operator->() {
+    return ptr_;
+  }
+  const T* operator->() const {
+    return ptr_;
+  }
+  
+  T& operator*() {
+    return *ptr_;
+  }
+  const T& operator*() const {
+    return *ptr_;
+  }
+  operator bool() const {
+    return ptr_ != nullptr;
+  }
+  void release() {
+    if (ref_->fetch_sub(1, std::memory_order_relaxed) == 1) {
+      delete ptr_;
+      delete ref_;
+      ptr_ = nullptr;
+      ref_ = nullptr;
+    }
+  }
+
+ private:
+  std::atomic<int>* ref_{nullptr};
+  T* ptr_{nullptr};
+};
+
+template<typename T, typename... Args>
+atomic_shared_ptr<T> make_atomic_shared(Args&&... args) {
+  return atomic_shared_ptr<T>(new T(std::forward<Args>(args)...));
+}
 
 template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class EstimateLSM {
@@ -134,8 +220,8 @@ class EstimateLSM {
       file_.remove();
     }
 
-    SSTIterator<KeyCompT, ValueT> seek(SKey key) { return SSTIterator<KeyCompT, ValueT>(file_.seek(key)); }
-    SSTIterator<KeyCompT, ValueT> begin() { return SSTIterator<KeyCompT, ValueT>(file_.seek_to_first()); }
+    SSTIterator<KeyCompT, ValueT> seek(SKey key) const { return SSTIterator<KeyCompT, ValueT>(file_.seek(key)); }
+    SSTIterator<KeyCompT, ValueT> begin() const { return SSTIterator<KeyCompT, ValueT>(file_.seek_to_first()); }
     bool overlap(SKey lkey, SKey rkey) const { return file_.range_overlap({lkey, rkey}); }
     auto range() const { return file_.range(); }
     size_t size() const { return file_.size(); }
@@ -181,29 +267,29 @@ class EstimateLSM {
     // }
   };
   class Level {
-    std::vector<std::shared_ptr<Partition>> head_;
+    std::vector<atomic_shared_ptr<Partition>> head_;
     size_t size_;
     size_t data_size_;
     double hot_size_;
   public:
     // iterator for level
     class LevelIterator {
-      typename std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_;
-      typename std::vector<std::shared_ptr<Partition>>::const_iterator vec_it_end_;
+      typename std::vector<atomic_shared_ptr<Partition>>::const_iterator vec_it_;
+      typename std::vector<atomic_shared_ptr<Partition>>::const_iterator vec_it_end_;
       SSTIterator<KeyCompT, ValueT> iter_;
-      std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr_;
+      atomic_shared_ptr<std::vector<atomic_shared_ptr<Partition>>> vec_ptr_;
       DeletedRange::Iterator del_ranges_iterator_;
 
      public:
       LevelIterator() {}
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, uint32_t id, SSTIterator<KeyCompT, ValueT>&& iter, DeletedRange::Iterator&& del_iter)
+      LevelIterator(const std::vector<atomic_shared_ptr<Partition>>& vec, uint32_t id, SSTIterator<KeyCompT, ValueT>&& iter, DeletedRange::Iterator&& del_iter)
           : vec_it_(id >= vec.size() ? vec.end() : vec.begin() + id + 1),
             vec_it_end_(vec.end()),
             iter_(std::move(iter)),
             del_ranges_iterator_(std::move(del_iter)) {
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(const std::vector<std::shared_ptr<Partition>>& vec, uint32_t id) {
+      LevelIterator(const std::vector<atomic_shared_ptr<Partition>>& vec, uint32_t id) {
         if (id < vec.size()) {
           del_ranges_iterator_ = DeletedRange::Iterator(vec[id]->deleted_ranges());
           vec_it_ = vec.begin() + id + 1;
@@ -215,7 +301,7 @@ class EstimateLSM {
         }
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, uint32_t id, SSTIterator<KeyCompT, ValueT>&& iter,
+      LevelIterator(atomic_shared_ptr<std::vector<atomic_shared_ptr<Partition>>> vec_ptr, uint32_t id, SSTIterator<KeyCompT, ValueT>&& iter,
                     DeletedRange::Iterator&& del_iter)
           : vec_it_(id >= vec_ptr->size() ? vec_ptr->end() : vec_ptr->begin() + id + 1),
             vec_it_end_(vec_ptr->end()),
@@ -224,7 +310,7 @@ class EstimateLSM {
             del_ranges_iterator_(std::move(del_iter)) {
         if (iter_.valid()) _del_next();
       }
-      LevelIterator(std::shared_ptr<std::vector<std::shared_ptr<Partition>>> vec_ptr, uint32_t id) : vec_ptr_(std::move(vec_ptr)) {
+      LevelIterator(atomic_shared_ptr<std::vector<atomic_shared_ptr<Partition>>> vec_ptr, uint32_t id) : vec_ptr_(std::move(vec_ptr)) {
         if (id < vec_ptr_->size()) {
           del_ranges_iterator_ = DeletedRange::Iterator((*vec_ptr_)[id]->deleted_ranges());
           vec_it_ = vec_ptr_->begin() + id + 1;
@@ -315,6 +401,81 @@ class EstimateLSM {
       auto sst_iter = head_[where]->seek(key);
       return LevelIterator(head_, where, std::move(sst_iter), DeletedRange::Iterator(sst_iter.rank(), head_[where]->deleted_ranges()));
     }
+    // Get minimal overlapping SSTs.
+    std::vector<atomic_shared_ptr<Partition>> get_min_overlap_pars(const Level& next_level, int cnt, KeyCompT comp) {
+      int lp = 0, rp = 0, mn = 1e9, mni = 0;
+      for (int i = cnt - 1; i < head_.size(); i++) {
+        while(lp < next_level.head_.size() && comp(next_level.head_[lp]->range().second, head_[i - cnt + 1]->range().first) < 0) lp++;
+        while(rp < next_level.head_.size() && comp(next_level.head_[rp]->range().first, head_[i]->range().second) <= 0) rp++;
+        if (mn > rp - lp) {
+          mn = rp - lp;
+          mni = i - cnt + 1;
+        }
+      }
+      auto ret = std::vector<atomic_shared_ptr<Partition>>(head_.begin() + mni, head_.begin() + std::min<size_t>(mni + cnt, head_.size()));
+      for (auto& par : ret) {
+        size_ -= par->size();
+        data_size_ -= par->data_size();
+        hot_size_ -= par->hot_size();
+      }
+      head_.erase(head_.begin() + mni, head_.begin() + std::min<size_t>(mni + cnt, head_.size()));
+      return ret;
+    }
+    std::vector<atomic_shared_ptr<Partition>> get_overlapped_pars(const std::pair<SKey, SKey>& range) {
+      int l = -1, r = -1;
+      for (int i = 0; i < head_.size(); i++) {
+        if (head_[i]->overlap(range.first, range.second)) {
+          if (l == -1) {
+            l = i;
+          }
+          r = i;
+        }
+      }
+      if (l == -1) {
+        return {};
+      }
+      auto ret = std::vector<atomic_shared_ptr<Partition>>(head_.begin() + l, head_.begin() + r + 1);
+      for (auto& par : ret) {
+        size_ -= par->size();
+        data_size_ -= par->data_size();
+        hot_size_ -= par->hot_size();
+      }
+      head_.erase(head_.begin() + l, head_.begin() + r + 1);
+      return ret;
+    }
+    // Get Partitions from L to R.
+    std::vector<atomic_shared_ptr<Partition>> get_pars_range(int l, int r) {
+      if (l >= r || l < 0) {
+        return {};
+      }
+      auto ret = std::vector<atomic_shared_ptr<Partition>>(head_.begin() + l, head_.begin() + r + 1);
+      for (auto& par : ret) {
+        size_ -= par->size();
+        data_size_ -= par->data_size();
+        hot_size_ -= par->hot_size();
+      }
+      head_.erase(head_.begin() + l, head_.begin() + r + 1);
+      return ret;
+    }
+    // Insert ordered partitions, ensure no overlaps.
+    void insert_pars(const std::vector<atomic_shared_ptr<Partition>>& pars, KeyCompT comp) {
+      if (pars.empty()) {
+        return;
+      }
+      for (auto& par : pars) {
+        size_ += par->size();
+        data_size_ += par->data_size();
+        hot_size_ += par->hot_size();
+      }
+      int pos = head_.size();
+      for (int i = 0; i < head_.size(); i++) {
+        if (comp(head_[i]->range().first, pars[0]->range().second) > 0) {
+          pos = i;
+          break;
+        }
+      }
+      head_.insert(head_.begin() + pos, pars.begin(), pars.end());
+    }
     // std::optional<LevelAsyncSeekHandle> get_async_seek_handle(SKey key, KeyCompT comp, async_io::AsyncIOQueue& aio) const {
     //   int l = 0, r = head_.size() - 1, where = -1;
     //   while (l <= r) {
@@ -343,7 +504,7 @@ class EstimateLSM {
       if (where == -1) return false;
       return head_[where]->overlap(lkey, rkey);
     }
-    void append_par(std::shared_ptr<Partition> par) {
+    void append_par(atomic_shared_ptr<Partition> par) {
       logger("[append_par]: ", par->size());
       size_ += par->size();
       data_size_ += par->data_size();
@@ -403,8 +564,12 @@ class EstimateLSM {
     }
 
     
-    const std::vector<std::shared_ptr<Partition>>& get_pars() const {
+    const std::vector<atomic_shared_ptr<Partition>>& get_pars() const {
       return head_;
+    }
+
+    size_t pars_cnt() const {
+      return head_.size();
     }
 
     // void update_hot_size_by_tick_threshold(TickFilter<ValueT> tick_filter) {
@@ -444,18 +609,23 @@ class EstimateLSM {
     }
   };
   class SuperVersion {
-    std::vector<std::shared_ptr<Level>> tree_;
+    std::vector<atomic_shared_ptr<Level>> tree_;
     std::atomic<uint32_t> ref_;
-    double hot_size_overestimate_;
+    double hot_size_overestimate_{0}, size_{0};
     KeyCompT comp_;
-
-    std::mutex* del_mutex_;
+    size_t decay_step_{0};
 
     using LevelIteratorSetT = SeqIteratorSet<typename Level::LevelIterator, KeyCompT, ValueT>;
 
    public:
-    SuperVersion(std::mutex* mutex, KeyCompT comp)
-        : ref_(1), hot_size_overestimate_(0), comp_(comp), del_mutex_(mutex) {}
+    SuperVersion(KeyCompT comp)
+        : ref_(1), comp_(comp) {}
+    SuperVersion(const SuperVersion& sv)
+        : ref_(1), hot_size_overestimate_(sv.hot_size_overestimate_), size_(sv.size_), comp_(sv.comp_), decay_step_(sv.decay_step_) {
+          for (auto& level : sv.tree_) {
+            tree_.push_back(make_atomic_shared<Level>(*level));
+          }
+        }
     void ref() {
       ref_++;
       // logger("ref count becomes (", this, "): ", ref_);
@@ -463,9 +633,29 @@ class EstimateLSM {
     void unref() {
       // logger("ref count (", this, "): ", ref_);
       if (!--ref_) {
-        std::unique_lock lck(*del_mutex_);
         delete this;
       }
+    }
+
+    std::string to_string() const {
+      std::string str = "tree: [";
+      for (auto& a : tree_) {
+        str += "(" + std::to_string(a->pars_cnt()) + ", " + std::to_string(a->size() / (double)kSSTable) + "), ";
+      }
+      str += "], step: " + std::to_string(decay_step_) + ", hot_size: " + std::to_string(hot_size_overestimate_) + ", size: " + std::to_string(size_);
+      return str;
+    }
+
+    uint32_t get_ref_cnt() const {
+      return ref_.load(std::memory_order_relaxed);
+    }
+
+    void set_decay_step(size_t decay_step) {
+      decay_step_ = decay_step;
+    }
+
+    size_t get_decay_step() const {
+      return decay_step_;
     }
 
     // return lowerbound.
@@ -588,16 +778,16 @@ class EstimateLSM {
       return false;
     }
 
-    std::vector<std::shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<KeyCompT, ValueT>*>& bufs, EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm) {
+    std::vector<atomic_shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<KeyCompT, ValueT>*>& bufs, EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm) {
       if (bufs.size() == 0) return {};
-      std::vector<std::shared_ptr<Level>> ret_vectors;
-      auto flush_func = [&lsm](UnsortedBuffer<KeyCompT, ValueT>* buf, std::mutex& mu, std::vector<std::shared_ptr<Level>>& ret_vectors) {
+      std::vector<atomic_shared_ptr<Level>> ret_vectors;
+      auto flush_func = [&lsm](UnsortedBuffer<KeyCompT, ValueT>* buf, std::mutex& mu, std::vector<atomic_shared_ptr<Level>>& ret_vectors) {
         Compaction<KeyCompT, ValueT, IndexDataT> worker(lsm.get_current_tick(), lsm.get_filename(), lsm.get_env(), lsm.get_comp());
         buf->sort(lsm.get_current_tick());
         auto iter = std::make_unique<typename UnsortedBuffer<KeyCompT, ValueT>::Iterator>(*buf);
         auto [files, hot_size] = worker.flush(*iter);
-        auto level = std::make_shared<Level>(0, hot_size);
-        for (auto& a : files) level->append_par(std::make_shared<Partition>(lsm.get_env(), lsm.get_file_index_cache(), lsm.get_file_key_cache(), lsm.get_comp(), a));
+        auto level = make_atomic_shared<Level>(0, hot_size);
+        for (auto& a : files) level->append_par(make_atomic_shared<Partition>(lsm.get_env(), lsm.get_file_index_cache(), lsm.get_file_key_cache(), lsm.get_comp(), a));
         delete buf;
         lsm.update_write_bytes(worker.get_write_bytes());
         {
@@ -618,22 +808,19 @@ class EstimateLSM {
       for (auto& a : thread_pool) a.join();
       return ret_vectors;
     }
-    SuperVersion* push_new_buffers(const std::vector<std::shared_ptr<Level>>& vec) {
-      auto ret = new SuperVersion(del_mutex_, comp_);
-      ret->tree_ = tree_;
-      // logger(tree_.size(), ", ", ret->tree_.size());
-      ret->hot_size_overestimate_ = hot_size_overestimate_;
+    SuperVersion* push_new_buffers(const std::vector<atomic_shared_ptr<Level>>& vec) {
+      auto ret = new SuperVersion(*this);
       ret->tree_.insert(ret->tree_.end(), vec.begin(), vec.end());
-      for (auto&& x : vec) {
-        ret->hot_size_overestimate_ += x->hot_size();
-      }
+      ret->recalc_stats();
       ret->_sort_levels();
       return ret;
     }
     enum class JobType {
       kDecay = 0,
       kMajorCompaction = 1,
-      kCompaction = 2,
+      kTieredCompaction = 2,
+      kLeveledCompaction = 3,
+      kStepDecay = 4,
     };
 
     SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type) const {
@@ -642,8 +829,6 @@ class EstimateLSM {
 
     template<typename FuncT>
     SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type, FuncT&& do_something) const {
-      auto Lsize = 0;
-      for (auto& a : tree_) Lsize += a->size();
       auto comp = lsm.get_comp();
       auto current_tick = lsm.get_current_tick();
       auto filename = lsm.get_filename();
@@ -651,6 +836,7 @@ class EstimateLSM {
       auto file_index_cache = lsm.get_file_index_cache();
       auto file_key_cache = lsm.get_file_key_cache();
       auto tick_filter = lsm.get_tick_filter();
+      auto decay_tick_filter = lsm.get_decay_tick_filter();
       // check if overlap with any partition
       auto check_func = [comp, this](const Partition& par) {
         for (auto& a : tree_)
@@ -659,9 +845,9 @@ class EstimateLSM {
       };
       // add partitions that is overlapped with other levels.
       // the remaining partitions are stored in a std::vector.
-      std::vector<std::shared_ptr<Partition>> rest;
+      std::vector<atomic_shared_ptr<Partition>> rest;
       auto add_level = [&rest, &check_func](const Level& level) {
-        auto for_iter_ptr = std::make_shared<std::vector<std::shared_ptr<Partition>>>();
+        auto for_iter_ptr = make_atomic_shared<std::vector<atomic_shared_ptr<Partition>>>();
         for (auto& par : level.get_pars()) {
           if (check_func(*par)) {
             // logger("fuck<", par->size(), ">");
@@ -673,18 +859,10 @@ class EstimateLSM {
         }
         return for_iter_ptr;
       };
-      // print size
-      {
-        std::string __print_str = "[";
-        for (auto& a : tree_) {
-          __print_str += std::to_string(a->size() / (double)kSSTable) + ", ";
-        }
-        logger(__print_str + "]");  
-      }
-      
+      logger("current superversion. ", this->to_string());
       // decay
       if (job_type == JobType::kDecay) {
-        logger("[addr, decay size, Lsize]: ", this, ", ", hot_size_overestimate_, ", ", Lsize);
+        logger("[decay]");
         auto iters = std::make_unique<LevelIteratorSetT>(comp);
 
         // logger("Major Compaction tree_.size() = ", tree_.size());
@@ -695,28 +873,24 @@ class EstimateLSM {
         // compaction...
         Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
         auto [files, hot_size] = worker.decay1(*iters, std::forward<FuncT>(do_something));
-        auto ret = new SuperVersion(del_mutex_, comp_);
+        auto ret = new SuperVersion(*this);
         // major compaction, so levels except largest_ become empty.
         
-        // std::shared_ptr move... maybe no problem.
-        {
-          std::unique_lock lck(*del_mutex_);
-          auto level = std::make_shared<Level>(0, 0);
-          for (auto& a : files) {
-            auto par = std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
-            level->append_par(std::move(par));
-          }   
-          ret->tree_.push_back(std::move(level));
-          // calculate new current decay size
-          ret->hot_size_overestimate_ = ret->_calc_current_hot_size();
-          logger("[new decay size]: ", ret->hot_size_overestimate_);
-          ret->_sort_levels();
-        }
+        auto level = make_atomic_shared<Level>(0, 0);
+        for (auto& a : files) {
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          level->append_par(std::move(par));
+        }   
+        ret->tree_.push_back(std::move(level));
+        // calculate new current decay size
+        ret->recalc_stats();
+        ret->_sort_levels();
+
         lsm.update_write_bytes(worker.get_write_bytes());
         return ret;
       } else if (job_type == JobType::kMajorCompaction) {
-        logger("[addr, decay size, Lsize]: ", this, ", ", hot_size_overestimate_, ", ", Lsize);
-        logger(tick_filter.get_tick_threshold());
+        logger("[major compaction]");
+        logger("tick threshold", tick_filter.get_tick_threshold());
         auto iters = std::make_unique<LevelIteratorSetT>(comp);
 
         // logger("Major Compaction tree_.size() = ", tree_.size());
@@ -727,28 +901,23 @@ class EstimateLSM {
         // compaction...
         Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
         auto [files, hot_size] = worker.flush_with_filter(*iters, tick_filter, std::forward<FuncT>(do_something));
-        auto ret = new SuperVersion(del_mutex_, comp_);
+        auto ret = new SuperVersion(comp);
         // major compaction, so levels except largest_ become empty.
         
-        // std::shared_ptr move... maybe no problem.
-        {
-          std::unique_lock lck(*del_mutex_);
-          auto level = std::make_shared<Level>(0, 0);
-          for (auto& a : files) {
-            auto par = std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
-            level->append_par(std::move(par));
-          }   
-          ret->tree_.push_back(std::move(level));
-          // calculate new current decay size
-          ret->hot_size_overestimate_ = ret->_calc_current_hot_size();
-          logger("[new decay size]: ", ret->hot_size_overestimate_, ", hot_size: ", hot_size);
-          ret->_sort_levels();
-        }
+        auto level = make_atomic_shared<Level>(0, 0);
+        for (auto& a : files) {
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          level->append_par(std::move(par));
+        }   
+        ret->tree_.push_back(std::move(level));
+        // calculate new current decay size
+        ret->recalc_stats();
+        ret->_sort_levels();
 
         lsm.update_write_bytes(worker.get_write_bytes());
          
         return ret;
-      } else {
+      } else if (job_type == JobType::kTieredCompaction) {
         // similar to universal compaction in rocksdb
         // if tree_[i]->size()/(\sum_{j=0..i-1}tree_[j]->size()) <= kMergeRatio
         // then merge them.
@@ -780,6 +949,7 @@ class EstimateLSM {
             }
           }
           if (where == -1) return nullptr;
+          logger("[tiered compaction]");
 
           auto iters = std::make_unique<LevelIteratorSetT>(comp);
 
@@ -787,7 +957,7 @@ class EstimateLSM {
           // push all iterators to necessary partitions to SeqIteratorSet.
           for (uint32_t i = where; i < tree_.size(); ++i) iters->push(typename Level::LevelIterator(add_level(*tree_[i]), 0));
           iters->build();
-          std::sort(rest.begin(), rest.end(), [comp](const std::shared_ptr<Partition>& x, const std::shared_ptr<Partition>& y) {
+          std::sort(rest.begin(), rest.end(), [comp](const atomic_shared_ptr<Partition>& x, const atomic_shared_ptr<Partition>& y) {
             return comp(x->range().first, y->range().second) < 0;
           });
 
@@ -796,35 +966,167 @@ class EstimateLSM {
           Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
           // Don't use tick filter because it is partial merge.
           auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
-          auto ret = new SuperVersion(del_mutex_, comp_);
+          auto ret = new SuperVersion(*this);
+          lsm.update_write_bytes(worker.get_write_bytes());
           // minor compaction?
           // hot_size_overestimate = largest_ + remaining levels + new level
 
-          {  
-            std::unique_lock lck(*del_mutex_);
-            ret->tree_ = tree_;
-            for (int i = 0; i < where; i++) ret->hot_size_overestimate_ += tree_[i]->hot_size();
-            auto rest_iter = rest.begin();
-            auto level = std::make_shared<Level>();
-            for (auto& a : files) {
-              auto par = std::make_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
-              while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
-                level->append_par(std::move(*rest_iter));
-                rest_iter++;
-              }
-              level->append_par(std::move(par));
-            }  
-            while (rest_iter != rest.end()) level->append_par(std::move(*rest_iter++));
-            ret->tree_.erase(ret->tree_.begin() + where, ret->tree_.end());
-            ret->tree_.push_back(std::move(level));
-            // calculate new current decay size
-            ret->hot_size_overestimate_ = ret->_calc_current_hot_size();
-            ret->_sort_levels();
-            return ret;
-          }
+          auto rest_iter = rest.begin();
+          auto level = make_atomic_shared<Level>();
+          for (auto& a : files) {
+            auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+            while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
+              level->append_par(std::move(*rest_iter));
+              rest_iter++;
+            }
+            level->append_par(std::move(par));
+          }  
+          while (rest_iter != rest.end()) level->append_par(std::move(*rest_iter++));
+          ret->tree_.erase(ret->tree_.begin() + where, ret->tree_.end());
+          ret->tree_.push_back(std::move(level));
+          // calculate new current decay size
+          ret->recalc_stats();
+          ret->_sort_levels();
+          logger("[new superversion]", ret->to_string());
+          return ret;
 
-          lsm.update_write_bytes(worker.get_write_bytes());
         }
+        return nullptr;
+      } else if (job_type == JobType::kLeveledCompaction) {
+        
+        if (tree_.size() < 3) {
+          return nullptr;
+        }
+
+        double size_limit = tree_[0]->size();
+        uint32_t mni = -1;
+        for (int i = 1; i < tree_.size(); i++) {
+          size_limit /= kLevelMultiplier;
+          if (tree_[i]->size() > size_limit) {
+            mni = i;
+          }
+        }
+
+        if (mni == -1) {
+          return nullptr;
+        }
+
+
+        auto ret = new SuperVersion(*this);
+        auto pars0 = ret->tree_[mni]->get_min_overlap_pars(*tree_[mni - 1], 1, comp);
+        if (pars0.empty()) {
+          logger("Failed!");
+          ret->unref();
+          return nullptr;
+        }
+        auto pars1 = ret->tree_[mni - 1]->get_overlapped_pars({pars0[0]->range().first, pars0.back()->range().second});
+        auto iters = std::make_unique<LevelIteratorSetT>(comp);
+        iters->push(typename Level::LevelIterator(pars0, 0));
+        iters->push(typename Level::LevelIterator(pars1, 0));
+        iters->build();
+
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+        auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
+        lsm.update_write_bytes(worker.get_write_bytes());
+
+        std::vector<atomic_shared_ptr<Partition>> pars;
+        for (auto& a : files) {
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          pars.push_back(std::move(par));
+        }
+        
+        logger("[leveled compaction]: ", mni, "(", pars0.size(), "), ", mni - 1, "(", pars1.size(), ") => ", mni - 1, "(", pars.size(), ")");
+        ret->tree_[mni - 1]->insert_pars(pars, comp);
+
+        ret->recalc_stats();
+        ret->_sort_levels();
+        logger("[new superversion]", ret->to_string());
+        return ret;
+      } else if (job_type == JobType::kStepDecay) {
+        if (tree_.empty()) {
+          return nullptr;
+        }
+
+        logger(lsm.get_physical_size_limit(), ", ", size_);
+
+        if (size_ < lsm.get_physical_size_limit()) {
+          return nullptr;
+        }
+
+        logger("[step decay]");
+        logger("tick threshold", tick_filter.get_tick_threshold());
+
+        auto ret = new SuperVersion(*this);
+        if (decay_step_ > ret->tree_[0]->pars_cnt()) {
+          ret->set_decay_step(0);
+        }
+
+        size_t step = ret->get_decay_step();
+
+        if (step >= ret->tree_[0]->pars_cnt()) {
+          step = 0;
+        }
+        
+        // Find kStepDecayLen SSTs to compact.
+        std::vector<int> compact_l(tree_.size());
+        for (auto& a : compact_l) a = 0;
+        compact_l[0] = step;
+        int sst_cnt = 0;
+        while (compact_l[0] < tree_[0]->pars_cnt()) {
+          auto range = tree_[0]->get_pars()[compact_l[0]]->range();
+          compact_l[0] += 1;
+          sst_cnt += 1;
+          for (int j = 1; j < tree_.size(); j++) {
+            while (compact_l[j] < tree_[j]->pars_cnt() && comp(tree_[j]->get_pars()[compact_l[j]]->range().first, range.second) <= 0
+                  && sst_cnt <= kStepDecayLen) {
+              compact_l[j] += 1;
+              sst_cnt += 1;
+            }
+          }
+        }
+
+        // Push all iterators.
+        std::vector<std::vector<atomic_shared_ptr<Partition>>> compact_data;
+        for (int i = 0; i < tree_.size(); i++) {
+          auto v = ret->tree_[i]->get_pars_range(i == 0 ? decay_step_ : 0, compact_l[i]);
+          if (v.empty()) continue;
+          compact_data.push_back(std::move(v));
+        }
+
+        auto iters = std::make_unique<LevelIteratorSetT>(comp);
+        for (auto& a : compact_data) {
+          iters->push(typename Level::LevelIterator(a, 0));
+        }
+
+        // compaction...
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+        auto [files, hot_size] = worker.flush_with_filter(*iters, decay_tick_filter, std::forward<FuncT>(do_something));
+        
+        std::vector<atomic_shared_ptr<Partition>> result;
+        std::vector<atomic_shared_ptr<Partition>> last_ssts;
+        last_ssts.clear();
+        for (auto& a : files) {
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          if (compact_l[0] < tree_[0]->pars_cnt() && comp(par->range().second, tree_[0]->get_pars()[compact_l[0]]->range().first) >= 0) {
+            last_ssts.push_back(std::move(par));
+          } else {
+            result.push_back(std::move(par));
+          }
+        }   
+        ret->tree_[0]->insert_pars(result, comp);
+        ret->set_decay_step(step + result.size() >= ret->tree_[0]->pars_cnt() ? 0 : step + result.size());
+        if (last_ssts.size()) {
+          auto level = make_atomic_shared<Level>();
+          level->insert_pars(last_ssts, comp);
+          ret->tree_.push_back(std::move(level));
+        }
+        // calculate new current decay size
+        ret->recalc_stats();
+        ret->_sort_levels();
+        lsm.update_write_bytes(worker.get_write_bytes());
+        logger("[new superversion]", ret->to_string());
+        return ret;
+      } else {
         return nullptr;
       }
     }
@@ -842,15 +1144,20 @@ class EstimateLSM {
     }
 
     SuperVersion* delete_range(std::pair<SKey, SKey> range, KeyCompT comp, std::pair<bool, bool> exclude_info) {
-      auto ret = new SuperVersion(del_mutex_, comp_);
-      ret->tree_ = tree_;
-      ret->hot_size_overestimate_ = hot_size_overestimate_;
+      auto ret = new SuperVersion(*this);
       for (auto& a : ret->tree_) a->delete_range(range, comp, exclude_info);
-      ret->hot_size_overestimate_ = ret->_calc_current_hot_size();
+      ret->recalc_stats();
       return ret;
     }
 
     double get_current_hot_size() const { return hot_size_overestimate_; }
+
+    double get_size() const { return size_; }
+
+    void recalc_stats() {
+      hot_size_overestimate_ = _calc_current_hot_size();
+      size_ = _calc_current_size();
+    }
 
    private:
     double _calc_current_hot_size() {
@@ -858,8 +1165,19 @@ class EstimateLSM {
       for (auto& a : tree_) ret += a->hot_size();
       return ret;
     }
+    double _calc_current_size() {
+      double ret = 0;
+      for (auto& a : tree_) ret += a->size();
+      return ret;
+    }
+    // Sort levels by size and remove empty levels.
+    // Levels are from the largest to the smallest.
     void _sort_levels() {
-      std::sort(tree_.begin(), tree_.end(), [](const std::shared_ptr<Level>& x, const std::shared_ptr<Level>& y) { return x->size() > y->size(); });
+      std::sort(tree_.begin(), tree_.end(), [](const atomic_shared_ptr<Level>& x, const atomic_shared_ptr<Level>& y) { return x->size() > y->size(); });
+      for (int i = 0; i < tree_.size(); i++) if (tree_[i]->size() == 0) {
+        tree_.erase(tree_.begin() + i, tree_.end());
+        break;
+      }
     }
   };
   Env* env_;
@@ -874,7 +1192,7 @@ class EstimateLSM {
   std::mutex sv_load_mutex_;
   // Only one thread can modify sv.
   std::mutex sv_modify_mutex_;
-  std::vector<std::shared_ptr<Level>> flush_buf_vec_;
+  std::vector<atomic_shared_ptr<Level>> flush_buf_vec_;
   std::mutex flush_buf_vec_mutex_;
   std::condition_variable signal_flush_to_compact_;
   double hot_size_overestimate_{0};
@@ -882,10 +1200,12 @@ class EstimateLSM {
   // 0: idle, 1: working
   uint8_t flush_thread_state_{0};
   uint8_t compact_thread_state_{0};
+  size_t physical_size_limit_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
   std::atomic<double> tick_threshold_{-114514};
+  std::atomic<double> decay_tick_threshold_{-1919810};
 
   // default cache
   std::unique_ptr<FileChunkCache> file_cache_;
@@ -912,15 +1232,16 @@ class EstimateLSM {
     auto next() { return iter_.next(); }
   };
   EstimateLSM(Env* env, size_t file_cache_size, std::unique_ptr<FileName>&& filename,
-              KeyCompT comp, std::atomic<size_t>& current_tick)
+              KeyCompT comp, std::atomic<size_t>& current_tick, size_t physical_size_limit)
       : env_(env),
         filename_(std::move(filename)),
         comp_(comp),
-        sv_(new SuperVersion(&sv_mutex_, comp)),
+        sv_(new SuperVersion(comp)),
         terminate_signal_(0),
         bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue, comp),
         file_cache_(std::make_unique<FileChunkCache>(file_cache_size)),
-        current_tick_(current_tick) {
+        current_tick_(current_tick),
+        physical_size_limit_(physical_size_limit) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
     flush_thread_ = std::thread([this]() { flush_thread(); });
   }
@@ -976,6 +1297,14 @@ class EstimateLSM {
     wait();
   }
 
+  void set_physical_size(size_t physical_size) {
+    physical_size_limit_ = physical_size;
+  }
+
+  size_t get_physical_size_limit() const {
+    return physical_size_limit_;
+  }
+
   void wait() {
     while (true) {
       {  
@@ -995,13 +1324,19 @@ class EstimateLSM {
     if (comp_(range.first, range.second) > 0) return;
     std::unique_lock del_range_lck(sv_modify_mutex_);
     auto new_sv = sv_->delete_range(range, comp_, exclude_info);
-    _update_superversion(new_sv);
+    auto old_sv = _update_superversion(new_sv);
+    if (old_sv) {
+      old_sv->unref();
+    }
   }
 
   void trigger_decay() {
     std::unique_lock del_range_lck(sv_modify_mutex_);
     auto new_sv = sv_->compact(*this, SuperVersion::JobType::kDecay);
-    _update_superversion(new_sv);
+    auto old_sv = _update_superversion(new_sv);
+    if (old_sv) {
+      old_sv->unref();
+    }
   }
 
   double get_current_hot_size() {
@@ -1030,12 +1365,19 @@ class EstimateLSM {
     return TickFilter<ValueT>(tick_threshold_.load(std::memory_order_relaxed));
   }
 
+  TickFilter<ValueT> get_decay_tick_filter() const {
+    return TickFilter<ValueT>(decay_tick_threshold_.load(std::memory_order_relaxed));
+  }
+
   void update_tick_threshold(double new_threshold) {
     tick_threshold_ = new_threshold;
     std::unique_lock del_range_lck(sv_modify_mutex_);
     logger(get_tick_filter().get_tick_threshold(), ", ", new_threshold);
     auto new_sv = sv_->compact(*this, SuperVersion::JobType::kMajorCompaction);
-    _update_superversion(new_sv);
+    auto old_sv = _update_superversion(new_sv);
+    if (old_sv) {
+      old_sv->unref();
+    }
   }
 
   /* used for fast decay. */
@@ -1047,7 +1389,10 @@ class EstimateLSM {
       est.scan1(-value.get_tick(), key.len() + value.get_hot_size());
       // value.set_stable(0);
     });
-    _update_superversion(new_sv);
+    auto old_sv = _update_superversion(new_sv);
+    if (old_sv) {
+      old_sv->unref();
+    }
   }
 
   double get_tick_threshold() const {
@@ -1131,7 +1476,12 @@ class EstimateLSM {
 
       auto last_compacted_sv = new_sv;
       while (true) {
-        auto new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kCompaction);
+        // auto new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
+        SuperVersion* new_compacted_sv = nullptr;
+        new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
+        if (new_compacted_sv == nullptr) {
+          new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kStepDecay);
+        }
         if (new_compacted_sv == nullptr) {
           break;
         } else {
@@ -1139,12 +1489,18 @@ class EstimateLSM {
           last_compacted_sv = new_compacted_sv;
         }
       }
-      _update_superversion(last_compacted_sv);
+      auto old_sv = _update_superversion(last_compacted_sv);
       sv_modify_mutex_.unlock();
+      // Wait to release old superversion
+      while (old_sv && old_sv->get_ref_cnt() > 1 && !terminate_signal_) {
+        logger("wait");
+        std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
+      }
+      old_sv->unref();
     }
   }
 
-  void _update_superversion(SuperVersion* new_sv) {
+  SuperVersion* _update_superversion(SuperVersion* new_sv) {
     if (new_sv != nullptr) {
       sv_load_mutex_.lock();
       auto old_sv = sv_;
@@ -1152,8 +1508,9 @@ class EstimateLSM {
       hot_size_overestimate_ = new_sv->get_current_hot_size();
       sv_tick_++;
       sv_load_mutex_.unlock();
-      old_sv->unref();
+      return old_sv;
     }
+    return nullptr;
   }
 
   SuperVersion* get_current_sv() {
@@ -1176,9 +1533,11 @@ enum class CachePolicyT {
 constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
 
+// We don't use tree[1] now.
 template <typename KeyCompT, typename ValueT, typename IndexDataT, CachePolicyT cache_policy>
 class alignas(128) VisCnts {
-  std::unique_ptr<EstimateLSM<KeyCompT, ValueT, IndexDataT>> tree[2];
+  std::unique_ptr<EstimateLSM<KeyCompT, ValueT, IndexDataT>> tree;
+  std::atomic<size_t> current_tick_{0};
   KeyCompT comp_;
   size_t hot_set_limit_;
   std::mutex decay_m_;
@@ -1186,7 +1545,6 @@ class alignas(128) VisCnts {
   bool terminate_signal_{false};
   std::condition_variable decay_cv_;
   std::thread decay_thread_;
-  std::atomic<size_t> current_tick_{0};
 
   // For kUseFasterTick
   KthEst<double> last_est_;
@@ -1196,9 +1554,8 @@ class alignas(128) VisCnts {
  public:
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
   // Use different file path for two trees.
-  VisCnts(KeyCompT comp, const std::string& path, size_t delta)
-    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_), 
-          std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a1"), comp, current_tick_)},
+  VisCnts(KeyCompT comp, const std::string& path, size_t delta, size_t physical_size)
+    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, physical_size)},
       comp_(comp), hot_set_limit_(delta), last_est_(kEstPointNum, hot_set_limit_ * (1 - kHotSetExceedLimit)) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
       }
@@ -1207,97 +1564,68 @@ class alignas(128) VisCnts {
     decay_cv_.notify_all(); 
     decay_thread_.join();
     
-    auto stat0 = tree[0]->get_cache()->get_stats();
+    auto stat0 = tree->get_cache()->get_stats();
     logger_printf("tier 0. hit: %zu, access: %zu", stat0.hit_count, stat0.access_count);
-    auto stat1 = tree[1]->get_cache()->get_stats();
-    logger_printf("tier 1. hit: %zu, access: %zu", stat1.hit_count, stat1.access_count);
-    size_t write_bytes0 = tree[0]->get_write_bytes();
+    size_t write_bytes0 = tree->get_write_bytes();
     logger_printf("tier 0. write bytes: %zu", write_bytes0);
-    size_t write_bytes1 = tree[1]->get_write_bytes();
-    logger_printf("tier 1. write bytes: %zu", write_bytes1);
   }
-  void access(int tier, SKey key, size_t vlen) { 
+  void access(SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
-      tree[tier]->append(key, ValueT(1, vlen));
+      tree->append(key, ValueT(1, vlen));
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       auto tick = current_tick_.fetch_add(1, std::memory_order_relaxed);
-      tree[tier]->append(key, ValueT(tick, vlen));
+      tree->append(key, ValueT(tick, vlen));
     }
     check_decay(); 
   }
-  auto delete_range(int tier, const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) { 
-    return tree[tier]->delete_range(range, exclude_info); 
+  auto delete_range(const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) { 
+    return tree->delete_range(range, exclude_info); 
   }
-  auto seek_to_first(int tier) { return tree[tier]->seek_to_first(); }
-  auto seek(int tier, SKey key) { return tree[tier]->seek(key); }
-  auto weight_sum(int tier) { return tree[tier]->get_current_hot_size(); }
-  auto range_data_size(int tier, const std::pair<SKey, SKey>& range) {
-    return tree[tier]->range_data_size(range); 
+  auto seek_to_first() { return tree->seek_to_first(); }
+  auto seek(SKey key) { return tree->seek(key); }
+  auto weight_sum() { return tree->get_current_hot_size(); }
+  auto range_data_size(const std::pair<SKey, SKey>& range) {
+    return tree->range_data_size(range); 
   }
-  bool is_hot(int tier, SKey key) {
-    return tree[tier]->search_key(key);
+  bool is_hot(SKey key) {
+    return tree->search_key(key);
   }
-  bool is_stably_hot(int tier, SKey key) {
-    return tree[tier]->is_stably_hot(key);
-  }
-  void transfer_range(int src_tier, int dst_tier, const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) {
-    if (src_tier == dst_tier) return;
-    if (comp_(range.first, range.second) > 0) return;
-    std::unique_lock lck(decay_m_);
-    auto iter = tree[src_tier]->seek(range.first);
-    if (exclude_info.first) {
-      while (iter->valid()) {
-        auto L = iter->read();
-        if (comp_(L.first, range.first) == 0) {
-          iter->next();
-        } else {
-          break;
-        }
-      }
-    }
-    int cnt = 0;
-    while(iter->valid()) {
-      auto L = iter->read();
-      if ((exclude_info.second && (comp_(L.first, range.second) >= 0)) || (!exclude_info.second && comp_(L.first, range.second) > 0)) {
-        break;
-      }
-      cnt++;
-      tree[dst_tier]->append(L.first, L.second);
-      iter->next();
-    }
-    tree[src_tier]->delete_range(range, exclude_info);
-    logger("transfer_range, ", src_tier, " to ", dst_tier, ", cnt: ", cnt);
+  bool is_stably_hot(SKey key) {
+    return tree->is_stably_hot(key);
   }
 
   /* check if hot size exceeds the limit. If so, trigger decay.*/
   void check_decay() {
     if (cache_policy == CachePolicyT::kUseDecay) {
-      if (weight_sum(0) + weight_sum(1) > hot_set_limit_) {
+      if (weight_sum() > hot_set_limit_) {
         std::unique_lock lck(decay_m_);
-        if (weight_sum(0) + weight_sum(1) > hot_set_limit_) {
-          tree[0]->trigger_decay();
-          tree[1]->trigger_decay();  
+        if (weight_sum() > hot_set_limit_) {
+          tree->trigger_decay();
         }
       }  
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
-      if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit) && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
+      if (weight_sum() > hot_set_limit_ * (1 + kHotSetExceedLimit) && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
         decay_cv_.notify_one(); 
       }
     }
   }
   void flush() {
     std::unique_lock lck(decay_m_);
-    for(auto& a : tree) a->all_flush();
+    tree->all_flush();
     if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
-      if (weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit)) {
+      if (weight_sum() > hot_set_limit_ * (1 + kHotSetExceedLimit)) {
         update_tick_threshold();
       }
     }
   }
+  void set_physical_size(size_t physical_size) {
+    tree->set_physical_size(physical_size);
+  }
+
   void update_tick_threshold() {
     decay_count_ += 1;
     if (cache_policy == CachePolicyT::kUseTick) {
-      auto hot_size = weight_sum(0) + weight_sum(1);
+      auto hot_size = weight_sum();
       KthEst<double> est(kEstPointNum, hot_set_limit_);
       est.pre_scan1(hot_size);
       auto append_all_to = [&](auto&& iter, auto&& scan_f) {
@@ -1310,26 +1638,23 @@ class alignas(128) VisCnts {
       };
       StopWatch sw;
       logger("first scan");
-      append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-      append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+      append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
       // logger("first scan end");
       est.pre_scan2();
       // logger("second scan");
-      append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-      append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
+      append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
       // logger("second scan end");
       double new_tick_threshold = est.get_interplot_kth();
 
-      tree[0]->update_tick_threshold(-new_tick_threshold);
-      tree[1]->update_tick_threshold(-new_tick_threshold);
-      logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+      tree->update_tick_threshold(-new_tick_threshold);
+      logger("threshold: ", -new_tick_threshold, ", weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
     } else if (cache_policy == CachePolicyT::kUseFasterTick) {
       // We sample some points and find the oldest 10% * SIZE records. These records are removed in major compaction (update_tick_threshold_and_update_est).
       // We sample points when we are doing compaction, and we get threshold from those points. 
       // The threshold is old but it ensures that we always remove >= 10% * SIZE records. 
       // But we have a constraint: The tick threshold must be able to be updated with new current tick.
       // For harmonic mean (class TickValue) it's impossible. 
-      auto hot_size = weight_sum(0) + weight_sum(1);
+      auto hot_size = weight_sum();
       StopWatch sw;
       if (is_first_tick_update_) {
         // is_first_tick_update_ = false;
@@ -1344,15 +1669,13 @@ class alignas(128) VisCnts {
           }
         };
         logger("first fast scan");
-        append_all_to(tree[0]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-        append_all_to(tree[1]->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+        append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
         
         double new_tick_threshold = est.get_from_points();
         logger(new_tick_threshold, ", ", current_tick_.load());
         last_est_.pre_scan1(hot_size);
-        tree[0]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
-        tree[1]->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
-        logger("threshold: ", -new_tick_threshold, ", weight_sum0: ", weight_sum(0), ", weight_sum1: ", weight_sum(1), "used time: ", sw.GetTimeInSeconds(), "s");
+        tree->update_tick_threshold_and_update_est(-new_tick_threshold, last_est_);
+        logger("threshold: ", -new_tick_threshold, ", weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
         return;
       }
       // logger("begin fast tick threshold update.");
@@ -1383,7 +1706,7 @@ class alignas(128) VisCnts {
     void decay_thread() {
       while(!terminate_signal_) {
         std::unique_lock lck(decay_m_);
-        decay_cv_.wait(lck, [&](){ return terminate_signal_ || weight_sum(0) + weight_sum(1) > hot_set_limit_ * (1 + kHotSetExceedLimit); });
+        decay_cv_.wait(lck, [&](){ return terminate_signal_ || weight_sum() > hot_set_limit_ * (1 + kHotSetExceedLimit); });
         is_updating_tick_threshold_ = true;
         if (terminate_signal_) {
           return;
