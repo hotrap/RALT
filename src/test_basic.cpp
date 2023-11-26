@@ -161,7 +161,7 @@ void test_lsm_store() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1e18);
     int L = 1e7;
     uint8_t a[12];
     memset(a, 0, sizeof(a));
@@ -195,7 +195,7 @@ void test_lsm_store_and_scan() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp, unused_tick, 1e18);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp, unused_tick, 1e18, 1e18);
     int L = 3e7;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
@@ -282,7 +282,7 @@ void test_random_scan_and_count() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1e18);
     int L = 3e7, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -388,7 +388,7 @@ void test_random_scan_and_count() {
 //   auto start = std::chrono::system_clock::now();
 //   {
 //     std::atomic<size_t> unused_tick; 
-//     EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18);
+//     EstimateLSM<KeyCompType*, SValue> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1e18);
 //     int L = 3e7;
 //     std::vector<int> numbers(L);
 //     // auto comp2 = +[](int x, int y) {
@@ -428,7 +428,7 @@ void test_delete_range() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18);
+    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1e18);
     int L = 1e8, Q = 1e4;
     std::vector<int> numbers(L);
     auto comp2 = +[](int x, int y) {
@@ -727,7 +727,7 @@ void test_lru_cache() {
 void test_scan_size() {
   using namespace viscnts_lsm;
   std::atomic<size_t> unused_tick; 
-  EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18);
+  EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1e18);
   int L = 3e7, Q = 1e4;
   std::vector<int> numbers(L);
   for (int i = 0; i < L; i++) numbers[i] = i;

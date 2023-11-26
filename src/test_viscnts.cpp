@@ -240,10 +240,10 @@ void test_decay_simple() {
 
 void test_decay_hit_rate() {
   // all keys are distinct.
-  size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
+  size_t N = 3e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
   size_t max_hot_set_size = N * 0.05 * vlen;
   size_t max_physical_size = 1e18;
-  auto vc = VisCnts::New(&default_comp, "/testdb/viscnts/", max_hot_set_size * 1.1, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size * 1.1, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
   auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_size / vlen);
