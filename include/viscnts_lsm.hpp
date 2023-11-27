@@ -1685,11 +1685,11 @@ class alignas(128) VisCnts {
     decay_thread_.join();
     
     auto stat0 = tree->get_cache()->get_stats();
-    logger_printf("all. read bytes: %zu B, %lf GB", GetReadBytes(), GetReadBytes() / 1e9);
-    logger_printf("all. write bytes: %zu B, %lf GB", GetWriteBytes(), GetWriteBytes() / 1e9);
-    logger_printf("all. input bytes: %zu B, %lf GB", stat_input_bytes_.load(), stat_input_bytes_.load() / 1e9);
+    logger_printf("all. read bytes: %zu B, %lf GB", GetReadBytes(), GetReadBytes() / 1073741824.0);
+    logger_printf("all. write bytes: %zu B, %lf GB", GetWriteBytes(), GetWriteBytes() / 1073741824.0);
+    logger_printf("all. input bytes: %zu B, %lf GB", stat_input_bytes_.load(), stat_input_bytes_.load() / 1073741824.0);
     logger_printf("tier 0. hit: %zu, access: %zu", stat0.hit_count, stat0.access_count);
-    logger_printf("tier 0. write bytes: %zu B, %lf GB", tree->get_write_bytes(), tree->get_write_bytes() / 1e9);
+    logger_printf("tier 0. write bytes: %zu B, %lf GB", tree->get_write_bytes(), tree->get_write_bytes() / 1073741824.0);
     logger_printf("tier 0. compact time: %zu ns, %.6lf s", tree->get_compact_time(), tree->get_compact_time() / 1e9);
     logger_printf("tier 0. flush time: %zu ns, %.6lf s", tree->get_flush_time(), tree->get_flush_time() / 1e9);
     logger_printf("tier 0. decay scan time: %zu ns, %.6lf s", tree->get_decay_scan_time(), tree->get_decay_scan_time() / 1e9);
