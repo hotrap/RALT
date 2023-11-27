@@ -1514,6 +1514,11 @@ class EstimateLSM {
     hot_size_limit_ = new_limit;
   }
 
+  void set_phy_limit(size_t new_limit) {
+    physical_size_limit_ = new_limit;
+  }
+
+
  private:
   void flush_thread() {
     while (true) {
@@ -1749,10 +1754,19 @@ class alignas(128) VisCnts {
     
   }
 
-  void set_new_limit(size_t new_limit) {
+  void set_new_hot_limit(size_t new_limit) {
     decay_m_.lock();
     hot_set_limit_ = new_limit;
     tree->set_hot_set_limit(new_limit);
+    is_first_tick_update_ = true;
+    decay_count_ = 0;
+    decay_m_.unlock();
+    check_decay();
+  }
+
+  void set_new_phy_limit(size_t new_limit) {
+    decay_m_.lock();
+    tree->set_phy_limit(new_limit);
     is_first_tick_update_ = true;
     decay_count_ = 0;
     decay_m_.unlock();

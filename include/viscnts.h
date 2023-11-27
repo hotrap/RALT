@@ -33,6 +33,7 @@ public:
 	size_t GetHotSize();
 
 	void SetHotSetSizeLimit(size_t new_limit);
+	void SetPhysicalSizeLimit(size_t new_limit);
 	size_t DecayCount();
 private:
 	VisCnts(void *vc) : vc_(vc) {}
