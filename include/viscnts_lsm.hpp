@@ -1253,8 +1253,12 @@ class EstimateLSM {
 
   // Statistics
   std::mutex stat_mutex_;
-  size_t stat_write_bytes_{0};
+  std::atomic<size_t> stat_write_bytes_{0};
   size_t stat_read_bytes_{0};
+  size_t stat_compact_time_{0};
+  size_t stat_decay_scan_time_{0};
+  size_t stat_decay_write_time_{0};
+  size_t stat_flush_time_{0};
 
 
   using LevelIteratorSetTForScan = SeqIteratorSetForScan<typename Level::LevelIterator, KeyCompT, ValueT>;
@@ -1433,7 +1437,10 @@ class EstimateLSM {
     sv_modify_mutex_.lock();
     logger("[tick threshold for hot]: ", tick_threshold_.load(), ", [for phy]: ", decay_tick_threshold_.load());
     while(true) {
+      StopWatch sw;
       auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay);
+      stat_decay_write_time_ += sw.GetTimeInNanos();
+
       if (new_sv == nullptr) {
         break;
       }
@@ -1467,6 +1474,22 @@ class EstimateLSM {
     return stat_write_bytes_;
   }
 
+  size_t get_compact_time() const {
+    return stat_compact_time_;
+  }
+
+  size_t get_flush_time() const {
+    return stat_flush_time_;
+  }
+
+  size_t get_decay_scan_time() const {
+    return stat_decay_scan_time_;
+  }
+
+  size_t get_decay_write_time() const {
+    return stat_decay_write_time_;
+  }
+
   void update_tick_threshold() {
     KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
     KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
@@ -1476,11 +1499,13 @@ class EstimateLSM {
     size_t total_hot_size = 0;
     auto sv = get_current_sv();
     logger(sv->to_string());
+    StopWatch sw;
     sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
       est_phy.scan1(-tick, phy_size);
       est_hot.scan1(-tick, hot_size);
       total_hot_size += hot_size;
     });
+    stat_decay_scan_time_ += sw.GetTimeInNanos();
     sv->unref();
     logger("total_hot_size: ", total_hot_size);
     est_hot.sort();
@@ -1501,7 +1526,6 @@ class EstimateLSM {
   auto get_file_key_cache() const { return nullptr; }
 
   void update_write_bytes(size_t x) {
-    std::unique_lock lck(stat_mutex_);
     stat_write_bytes_ += x;
   }
 
@@ -1532,7 +1556,9 @@ class EstimateLSM {
       auto buf_q_ = bufs_.wait_and_get();
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
+      StopWatch sw;
       auto new_vec = sv_->flush_bufs(buf_q_, *this);
+      stat_flush_time_ += sw.GetTimeInNanos();
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
         std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
@@ -1569,11 +1595,14 @@ class EstimateLSM {
         flush_buf_vec_.clear();
       }
 
+      // Compact until there is no potential compaction.
       auto last_compacted_sv = new_sv;
       while (true) {
         // auto new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
         SuperVersion* new_compacted_sv = nullptr;
+        StopWatch sw;
         new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
+        stat_compact_time_ += sw.GetTimeInNanos();
         if (new_compacted_sv == nullptr) {
           break;
         } else {
@@ -1630,6 +1659,7 @@ template <typename KeyCompT, typename ValueT, typename IndexDataT, CachePolicyT 
 class alignas(128) VisCnts {
   std::unique_ptr<EstimateLSM<KeyCompT, ValueT, IndexDataT>> tree;
   std::atomic<size_t> current_tick_{0};
+  std::atomic<size_t> stat_input_bytes_{0};
   KeyCompT comp_;
   size_t hot_set_limit_;
   std::mutex decay_m_;
@@ -1655,15 +1685,22 @@ class alignas(128) VisCnts {
     decay_thread_.join();
     
     auto stat0 = tree->get_cache()->get_stats();
+    logger_printf("all. read bytes: %zu B, %lf GB", GetReadBytes(), GetReadBytes() / 1e9);
+    logger_printf("all. write bytes: %zu B, %lf GB", GetWriteBytes(), GetWriteBytes() / 1e9);
+    logger_printf("all. input bytes: %zu B, %lf GB", stat_input_bytes_.load(), stat_input_bytes_.load() / 1e9);
     logger_printf("tier 0. hit: %zu, access: %zu", stat0.hit_count, stat0.access_count);
-    size_t write_bytes0 = tree->get_write_bytes();
-    logger_printf("tier 0. write bytes: %zu", write_bytes0);
+    logger_printf("tier 0. write bytes: %zu B, %lf GB", tree->get_write_bytes(), tree->get_write_bytes() / 1e9);
+    logger_printf("tier 0. compact time: %zu ns, %.6lf s", tree->get_compact_time(), tree->get_compact_time() / 1e9);
+    logger_printf("tier 0. flush time: %zu ns, %.6lf s", tree->get_flush_time(), tree->get_flush_time() / 1e9);
+    logger_printf("tier 0. decay scan time: %zu ns, %.6lf s", tree->get_decay_scan_time(), tree->get_decay_scan_time() / 1e9);
+    logger_printf("tier 0. decay write time: %zu ns, %.6lf s", tree->get_decay_write_time(), tree->get_decay_write_time() / 1e9);
   }
   void access(SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
       tree->append(key, ValueT(1, vlen));
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       auto tick = current_tick_.fetch_add(1, std::memory_order_relaxed);
+      stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT));
       tree->append(key, ValueT(tick, vlen));
     }
     check_decay(); 

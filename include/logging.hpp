@@ -99,10 +99,14 @@ void __LOG(int level, const char *file, const char *func, int line,
 class StopWatch {
  public:
   StopWatch() { start_ = std::chrono::system_clock::now(); }
-  double GetTimeInSeconds() {
+  double GetTimeInSeconds() const {
     auto end = std::chrono::system_clock::now();
     std::chrono::duration<double> diff = end - start_;
     return diff.count();
+  }
+  size_t GetTimeInNanos() {
+    auto end = std::chrono::system_clock::now();
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start_).count();
   }
   void Reset() { start_ = std::chrono::system_clock::now(); }
 

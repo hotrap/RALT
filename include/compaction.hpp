@@ -33,6 +33,7 @@ class Compaction {
   double hot_size_;
   double lst_hot_size_;
   double decay_prob_;  // = 0.5 on default
+  size_t write_bytes_{0};
 
   void _begin_new_file() {
     builder_.reset();
@@ -46,6 +47,7 @@ class Compaction {
   void _end_new_file() {
     builder_.make_index();
     builder_.finish();
+    write_bytes_ += builder_.get_write_bytes();
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = std::move(builder_.range());
     vec_newfiles_.back().hot_size = hot_size_ - lst_hot_size_;
@@ -144,7 +146,7 @@ class Compaction {
   }
 
   size_t get_write_bytes() const {
-    return builder_.get_write_bytes();
+    return write_bytes_;
   }
 
 

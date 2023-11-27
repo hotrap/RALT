@@ -45,6 +45,12 @@ class Env {
 
 Env* createDefaultEnv();
 
+
+size_t GetWriteBytes();
+
+size_t GetReadBytes();
+
+
 // generate global filename
 class FileName {
   std::atomic<size_t> file_ts_;

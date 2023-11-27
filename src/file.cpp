@@ -8,14 +8,25 @@
 
 namespace viscnts_lsm {
 
+static std::atomic<size_t> global_read_bytes{0}, global_write_bytes{0};
+
+size_t GetWriteBytes() {
+  return global_write_bytes.load();
+}
+
+size_t GetReadBytes() {
+  return global_read_bytes.load();
+}
+
 class PosixSeqFile : public SeqFile {
  public:
   PosixSeqFile(int fd) : fd_(fd) {}
   
-  ~PosixSeqFile() { ::close(fd_); }
+  ~PosixSeqFile() { ::close(fd_); global_read_bytes.fetch_add(read_bytes_, std::memory_order_relaxed); }
 
   ssize_t read(size_t n, uint8_t* data) override {
     ::ssize_t read_size;
+    read_bytes_ += n;
     while (true) {
       read_size = ::read(fd_, data, n);
       if (read_size < 0) {
@@ -38,6 +49,7 @@ class PosixSeqFile : public SeqFile {
 
  private:
   int fd_;
+  size_t read_bytes_{0};
 };
 
 class PosixRandomAccessFile : public RandomAccessFile {
@@ -48,6 +60,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
 
   ssize_t read(int fd, size_t offset, size_t n, uint8_t* data) const override {
     auto rd_n = ::pread(fd, data, n, offset);
+    global_read_bytes.fetch_add(n, std::memory_order_relaxed);
     if (rd_n < 0) {
       logger("Error: ", errno);
       exit(-1);
@@ -94,9 +107,11 @@ class PosixAppendFile : public AppendFile {
     PosixAppendFile(int fd) : fd_(fd) {}
     ~PosixAppendFile() {
       ::close(fd_);
+      global_write_bytes.fetch_add(write_bytes_, std::memory_order_relaxed);
     }
     ssize_t write(const Slice& data) override {
       auto ret = ::write(fd_, data.data(), data.len());
+      write_bytes_ += data.len();
       if(ret < 0) {
         logger("Error: ", errno);
         exit(-1);
@@ -111,6 +126,7 @@ class PosixAppendFile : public AppendFile {
     }
   private:
     int fd_;
+    size_t write_bytes_{0};
 };
 
 class DefaultEnv : public Env {
