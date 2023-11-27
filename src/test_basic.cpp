@@ -615,7 +615,7 @@ void test_kthest() {
     est.pre_scan1(total_size);
     for (auto& a : vec) est.scan1(a.first, a.second);
     
-    auto the = est.get_from_points();
+    auto the = est.get_from_points(1e7);
     size_t sum = 0;
     for (auto& a : vec) if (a.first < the) sum += a.second;
     DB_INFO("{}, {}", sum, the);
@@ -637,7 +637,7 @@ void test_kthest() {
     auto total_size = std::accumulate(vec.begin(), vec.end(), 0, [](auto x, auto data) { return x + data.second; } );
     est.pre_scan1(total_size);
     for (auto& a : vec) est.scan1(a.first, a.second);
-    auto the = est.get_from_points();
+    auto the = est.get_from_points(1e7);
     size_t sum = 0;
     for (auto& a : vec) if (a.first < the) sum += a.second;
     DB_INFO("{}, {}", sum, the);

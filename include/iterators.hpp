@@ -61,6 +61,7 @@ class SeqIteratorSet {
       values_[i - 1] = kv.value();
       for (uint32_t j = i; j > 1 && _comp(j, j >> 1) < 0; j >>= 1) std::swap(seg_tree_[j], seg_tree_[j >> 1]);
     }
+    is_equal_ = (size_ >= 2 && _comp(1, 2)) || (size_ >= 3 && _comp(1, 3));
   }
   bool valid() { return size_ >= 1; }
   void next() {
@@ -161,7 +162,7 @@ class SeqIteratorSetForScan {
     iter_.next();
     while (iter_.valid()) {
       result = iter_.read();
-      if (is_equal) {
+      if (is_equal || iter_.comp_func()(current_key_.ref(), result.first) == 0) {
         current_value_.merge(result.second, current_tick_);
       } else {
         if (tick_filter_.check(current_value_)) {

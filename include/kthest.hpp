@@ -104,13 +104,16 @@ class KthEst {
       return max_key_;
     }
 
-    Key get_from_points() {
-      logger(scan1_point_num_);
+    void sort() {
+      logger("scan1 size: ", scan1_size_sum_);
       std::sort(point_data_.begin(), point_data_.begin() + scan1_point_num_, [](auto x, auto y) {
         return x.first < y.first;
       });
-      double frac = size_limit_ / (double) scan1_size_sum_;
-      logger(frac);
+    }
+
+    Key get_from_points(double size_limit) {
+      double frac = size_limit / (double) scan1_size_sum_;
+      logger(frac, size_limit, scan1_size_sum_);
       size_t i;
       if (scan1_size_sum_ == 0) {
         i = 0;

@@ -30,8 +30,8 @@ class Compaction {
   std::pair<IndSKey, ValueT> lst_value_;
   std::mt19937_64 rndgen_;
   KeyCompT comp_;
-  double real_size_;
-  double lst_real_size_;
+  double hot_size_;
+  double lst_hot_size_;
   double decay_prob_;  // = 0.5 on default
 
   void _begin_new_file() {
@@ -48,8 +48,8 @@ class Compaction {
     builder_.finish();
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = std::move(builder_.range());
-    vec_newfiles_.back().hot_size = real_size_ - lst_real_size_;
-    lst_real_size_ = real_size_;
+    vec_newfiles_.back().hot_size = hot_size_ - lst_hot_size_;
+    lst_hot_size_ = hot_size_;
   }
 
  public:
@@ -65,8 +65,8 @@ class Compaction {
     decay_prob_ = 0.5;
   }
 
-  template <typename TIter, typename FilterFunc, typename OtherFunc>
-  auto flush(TIter& left, FilterFunc&& filter_func, OtherFunc&& other_func) {
+  template <typename TIter, typename HotFilterFunc, typename PhyFilterFunc, typename OtherFunc>
+  auto flush(TIter& left, HotFilterFunc&& hot_filter_func, PhyFilterFunc&& phy_filter_func, OtherFunc&& other_func) {
     vec_newfiles_.clear();
     // null iterator
     if (!left.valid()) {
@@ -74,8 +74,8 @@ class Compaction {
     }
     _begin_new_file();
     flag_ = false;
-    real_size_ = 0;
-    lst_real_size_ = 0;
+    hot_size_ = 0;
+    lst_hot_size_ = 0;
     int CNT = 0;
     // read first kv.
     {
@@ -90,11 +90,13 @@ class Compaction {
         lst_value_.second.merge(L.second, current_tick_);
       } else {
         // only store those filter returning true.
-        if (filter_func(lst_value_)) {
+        if (phy_filter_func(lst_value_)) {
           // It maybe the last key.      
           builder_.set_lstkey(lst_value_.first);
           other_func(lst_value_.first, lst_value_.second);
-          real_size_ += _calc_hot_size(lst_value_);
+          if (hot_filter_func(lst_value_)) {
+            hot_size_ += _calc_hot_size(lst_value_);
+          }
           builder_.append(lst_value_);
           _divide_file(L.first.size() + L.second.get_hot_size());
         }
@@ -104,38 +106,41 @@ class Compaction {
     }
     // store the last kv.
     {
-      if (filter_func(lst_value_)) {
+      if (phy_filter_func(lst_value_)) {
         // It is the last key.
         builder_.set_lstkey(lst_value_.first);
         other_func(lst_value_.first, lst_value_.second);
         builder_.append(lst_value_);
-        real_size_ += _calc_hot_size(lst_value_); 
+        if (hot_filter_func(lst_value_)) {
+          hot_size_ += _calc_hot_size(lst_value_);
+        }
       } 
     }
     _end_new_file();
-    return std::make_pair(vec_newfiles_, real_size_);
+    return std::make_pair(vec_newfiles_, hot_size_);
   }
 
   template <typename TIter, typename FuncT>
   auto decay1(TIter& iters, FuncT&& func) {
     return flush(iters, [this](auto& kv){
       return kv.second.decay(decay_prob_, rndgen_);
-    }, std::forward<FuncT>(func));
+    }, [](auto&) { return true; }, std::forward<FuncT>(func));
   }
 
   template<typename TIter, typename FuncT>
   auto flush(TIter& left, FuncT&& func) {
-    return flush(left, [](auto&) { return true; }, std::forward<FuncT>(func));
+    return flush(left, [](auto&) { return true; }, [](auto&) { return true; }, std::forward<FuncT>(func));
   }
 
   template<typename TIter>
   auto flush(TIter& left) {
-    return flush(left, [](auto&) { return true; }, [](auto&&...){});
+    return flush(left, [](auto&) { return true; }, [](auto&) { return true; }, [](auto&&...){});
   }
 
   template<typename TIter, typename FuncT>
-  auto flush_with_filter(TIter& left, TickFilter<ValueT> tick_filter, FuncT&& func) {
-    return flush(left, [tick_filter](auto& kv) { return tick_filter.check(kv.second); }, std::forward<FuncT>(func));
+  auto flush_with_filter(TIter& left, TickFilter<ValueT> hot_tick_filter, TickFilter<ValueT> decay_tick_filter, FuncT&& func) {
+    return flush(left, [hot_tick_filter](auto& kv) { return hot_tick_filter.check(kv.second); },
+    [decay_tick_filter](auto& kv) { return decay_tick_filter.check(kv.second); }, std::forward<FuncT>(func));
   }
 
   size_t get_write_bytes() const {

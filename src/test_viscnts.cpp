@@ -240,23 +240,24 @@ void test_decay_simple() {
 
 void test_decay_hit_rate() {
   // all keys are distinct.
-  size_t N = 3e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
-  size_t max_hot_set_size = N * 0.05 * vlen;
-  size_t max_physical_size = 1e18;
+  size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
+  size_t max_hot_set_cnt = N * 0.05;
+  size_t max_hot_set_size = max_hot_set_cnt * vlen;
+  size_t max_physical_size = 60 * max_hot_set_cnt;
   auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size * 1.1, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
-  auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_size / vlen);
+  auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_cnt);
   std::set<std::pair<size_t, size_t>> hots;
   for (auto& a : hot_data) hots.insert(a);
-  auto cold_data = decltype(data)(data.begin() + max_hot_set_size / vlen, data.end());
+  auto cold_data = decltype(data)(data.begin() + max_hot_set_cnt, data.end());
   StopWatch sw;
   auto real_data = decltype(data)();
-  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N / 4; i++) {
+  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N / 5; i++) {
     std::uniform_real_distribution<> dis(0, 1);
     if (dis(gen) < 0.95) {
       std::uniform_int_distribution<> dis2(0, hot_data.size() - 1);
-      real_data.push_back(hot_data[dis2(gen)]);
+      real_data.push_back(hot_data[i % max_hot_set_cnt]);
     } else {
       std::uniform_int_distribution<> dis2(0, cold_data.size() - 1);
       real_data.push_back(cold_data[dis2(gen)]);
@@ -277,7 +278,22 @@ void test_decay_hit_rate() {
       break;
     }
   }
-  DB_INFO("{}, {}, {}", cnt, sum, max_hot_set_size, max_physical_size / vlen);
+  DB_INFO("{}, {}, {}", cnt, sum, hots.size());
+  iter = nullptr;
+  vc.SetHotSetSizeLimit(max_hot_set_size * 0.5);
+  vc.Flush();
+  sum = cnt = 0;
+  iter = vc.Begin();
+  while (true) {
+    auto result = iter->next();
+    if (result.has_value()) {
+      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().key.size()));
+      sum += 1;
+    } else {
+      break;
+    }
+  }
+  DB_INFO("{}, {}, {}", cnt, sum, hots.size());
 }
 
 void test_parallel() {
