@@ -134,6 +134,7 @@ class DefaultEnv : public Env {
   DefaultEnv() {}
   RandomAccessFile* openRAFile(std::string filename) override {
     auto fd = ::open(filename.c_str(), O_RDONLY);
+    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_RANDOM);
     if (fd < 0) return nullptr;
     auto result = new PosixRandomAccessFile(filename);
     ::close(fd);
@@ -141,11 +142,13 @@ class DefaultEnv : public Env {
   }
   SeqFile* openSeqFile(std::string filename) override {
     auto fd = ::open(filename.c_str(), O_RDONLY);
+    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) return nullptr;
     return new PosixSeqFile(fd);
   }
   AppendFile* openAppFile(std::string filename) override {
     auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) return nullptr;
     return new PosixAppendFile(fd);
   }
