@@ -114,4 +114,23 @@ class StopWatch {
   std::chrono::time_point<std::chrono::system_clock> start_;
 };
 
+class Timer {
+ public:
+  Timer() { start_ = get_ts(); }
+  size_t GetTimeInNanos() {
+    return get_ts() - start_;
+  }
+  void Reset() { start_ = get_ts(); }
+
+ private:
+  int64_t get_ts() {
+    struct timespec currTime;
+    clockid_t threadClockId;
+    pthread_getcpuclockid(pthread_self(), &threadClockId);
+    clock_gettime(threadClockId, &currTime);
+    return int64_t(1e9) * currTime.tv_sec +  currTime.tv_nsec;
+  }
+  int64_t start_;
+};
+
 #endif

@@ -53,10 +53,12 @@ void input_all(VisCnts& vc,const std::vector<std::pair<size_t, size_t>>& data, i
     int L = (data.size() / TH + 1) * i;
     int R = std::min<int>(L + (data.size() / TH + 1), data.size());
     handles.push_back(std::async([L, R, &data, &vc, vlen]() {
+      Timer timer;
       char a[100];
       for (int j = L; j < R; j++) {
         vc.Access(convert_to_slice(a, data[j].first, data[j].second), vlen);
       }
+      DB_INFO("timer: {}", timer.GetTimeInNanos());
     }));
   }
   for (auto& a : handles) a.get();
@@ -263,6 +265,8 @@ void test_decay_hit_rate() {
       real_data.push_back(cold_data[dis2(gen)]);
     }
   }
+  auto start = std::clock();
+  Timer timer;
   input_all(vc, real_data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   
@@ -293,7 +297,9 @@ void test_decay_hit_rate() {
       break;
     }
   }
+  DB_INFO("{}", timer.GetTimeInNanos());
   DB_INFO("{}, {}, {}", cnt, sum, hots.size());
+  DB_INFO("{}", std::clock() - start);
 }
 
 void test_parallel() {

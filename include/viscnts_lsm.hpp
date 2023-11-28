@@ -801,14 +801,14 @@ class EstimateLSM {
       std::vector<std::thread> thread_pool;
       std::mutex thread_mutex;
       // We now expect the number of SSTs is small, e.g. 4
-      for (uint32_t i = 1; i < bufs.size(); i++) {
-        thread_pool.emplace_back(flush_func, bufs[i], std::ref(thread_mutex), std::ref(ret_vectors));
-      }
-      if (bufs.size() >= 1) {
-        flush_func(bufs[0], thread_mutex, std::ref(ret_vectors));
-      }
-      // for (int i = 0; i < bufs.size(); ++i) flush_func(filename, env, comp, bufs[i], thread_mutex, ret);
-      for (auto& a : thread_pool) a.join();
+      // for (uint32_t i = 1; i < bufs.size(); i++) {
+        // thread_pool.emplace_back(flush_func, bufs[i], std::ref(thread_mutex), std::ref(ret_vectors));
+      // }
+      // if (bufs.size() >= 1) {
+        // flush_func(bufs[0], thread_mutex, std::ref(ret_vectors));
+      // }
+      for (int i = 0; i < bufs.size(); ++i) flush_func(bufs[i], thread_mutex, std::ref(ret_vectors));
+      // for (auto& a : thread_pool) a.join();
       return ret_vectors;
     }
     SuperVersion* push_new_buffers(const std::vector<atomic_shared_ptr<Level>>& vec) {
@@ -1437,7 +1437,7 @@ class EstimateLSM {
     sv_modify_mutex_.lock();
     logger("[tick threshold for hot]: ", tick_threshold_.load(), ", [for phy]: ", decay_tick_threshold_.load());
     while(true) {
-      StopWatch sw;
+      Timer sw;
       auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay);
       stat_decay_write_time_ += sw.GetTimeInNanos();
 
@@ -1499,19 +1499,19 @@ class EstimateLSM {
     size_t total_hot_size = 0;
     auto sv = get_current_sv();
     logger(sv->to_string());
-    StopWatch sw;
+    Timer sw;
     sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
       est_phy.scan1(-tick, phy_size);
       est_hot.scan1(-tick, hot_size);
       total_hot_size += hot_size;
     });
-    stat_decay_scan_time_ += sw.GetTimeInNanos();
     sv->unref();
     logger("total_hot_size: ", total_hot_size);
     est_hot.sort();
     est_phy.sort();
     tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
     decay_tick_threshold_ = std::max(-est_phy.get_from_points(physical_size_limit_), -est_hot.get_from_points(hot_size_limit_ * 2));
+    stat_decay_scan_time_ += sw.GetTimeInNanos();
   }
 
   
@@ -1556,7 +1556,7 @@ class EstimateLSM {
       auto buf_q_ = bufs_.wait_and_get();
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
-      StopWatch sw;
+      Timer sw;
       auto new_vec = sv_->flush_bufs(buf_q_, *this);
       stat_flush_time_ += sw.GetTimeInNanos();
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
@@ -1600,7 +1600,7 @@ class EstimateLSM {
       while (true) {
         // auto new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
         SuperVersion* new_compacted_sv = nullptr;
-        StopWatch sw;
+        Timer sw;
         new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
         stat_compact_time_ += sw.GetTimeInNanos();
         if (new_compacted_sv == nullptr) {
@@ -1700,7 +1700,7 @@ class alignas(128) VisCnts {
       tree->append(key, ValueT(1, vlen));
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       auto tick = current_tick_.fetch_add(1, std::memory_order_relaxed);
-      stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT));
+      stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT), std::memory_order_relaxed);
       tree->append(key, ValueT(tick, vlen));
     }
     check_decay(); 
