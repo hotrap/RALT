@@ -1814,6 +1814,23 @@ class alignas(128) VisCnts {
     return decay_count_;
   }
 
+  bool HandleCompactionCPUNanos(uint64_t *value) {
+    *value = tree->get_compact_time();
+    return true;
+  }
+  bool HandleFlushCPUNanos(uint64_t *value) {
+    *value = tree->get_flush_time();
+    return true;
+  }
+  bool HandleDecayScanCPUNanos(uint64_t *value) {
+    *value = tree->get_decay_scan_time();
+    return true;
+  }
+  bool HandleDecayWriteCPUNanos(uint64_t *value) {
+    *value = tree->get_decay_write_time();
+    return true;
+  }
+
   private:
     void decay_thread() {
       while(!terminate_signal_) {

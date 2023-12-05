@@ -10,6 +10,7 @@
 #include <queue>
 #include <set>
 #include <thread>
+#include <unordered_map>
 
 #include "viscnts_lsm.hpp"
 
@@ -141,6 +142,37 @@ size_t VisCnts::GetHotSize() {
   return vc->weight_sum();
 }
 
+const std::string VisCnts::Properties::kCompactionCPUNanos =
+    "viscnts.compaction.cpu.nanos";
+const std::string VisCnts::Properties::kFlushCPUNanos =
+    "viscnts.flush.cpu.nanos";
+const std::string VisCnts::Properties::kDecayScanCPUNanos =
+    "viscnts.decay.scan.cpu.nanos";
+const std::string VisCnts::Properties::kDecayWriteCPUNanos =
+    "viscnts.decay.write.cpu.nanos";
+
+struct PropertyInfo {
+  bool (VisCntsType::*handle_int)(uint64_t *value);
+};
+const std::unordered_map<std::string, PropertyInfo> ppt_name_to_info = {
+    {VisCnts::Properties::kCompactionCPUNanos,
+     {.handle_int = &VisCntsType::HandleCompactionCPUNanos}},
+    {VisCnts::Properties::kFlushCPUNanos,
+     {.handle_int = &VisCntsType::HandleFlushCPUNanos}},
+    {VisCnts::Properties::kDecayScanCPUNanos,
+     {.handle_int = &VisCntsType::HandleDecayScanCPUNanos}},
+    {VisCnts::Properties::kDecayWriteCPUNanos,
+     {.handle_int = &VisCntsType::HandleDecayWriteCPUNanos}}};
+bool VisCnts::GetIntProperty(std::string_view property, uint64_t *value) {
+  std::string p(property);
+  auto it = ppt_name_to_info.find(p);
+  if (it == ppt_name_to_info.end())
+      return false;
+  const PropertyInfo *property_info = &it->second;
+  assert(property_info->handle_int != nullptr);
+  auto vc = static_cast<VisCntsType *>(vc_);
+  return (vc->*(property_info->handle_int))(value);
+}
 
 void VisCnts::SetHotSetSizeLimit(size_t new_limit) {
   auto vc = static_cast<VisCntsType*>(vc_);
