@@ -34,6 +34,8 @@ public:
   size_t DecayCount();
 
   struct Properties {
+    static const std::string kReadBytes;
+    static const std::string kWriteBytes;
     static const std::string kCompactionCPUNanos;
     static const std::string kFlushCPUNanos;
     static const std::string kDecayScanCPUNanos;

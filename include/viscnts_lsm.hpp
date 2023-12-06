@@ -1814,6 +1814,14 @@ class alignas(128) VisCnts {
     return decay_count_;
   }
 
+  bool HandleReadBytes(uint64_t *value) {
+    *value = GetReadBytes();
+    return true;
+  }
+  bool HandleWriteBytes(uint64_t *value) {
+    *value = GetWriteBytes();
+    return true;
+  }
   bool HandleCompactionCPUNanos(uint64_t *value) {
     *value = tree->get_compact_time();
     return true;

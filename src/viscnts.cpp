@@ -142,6 +142,8 @@ size_t VisCnts::GetHotSize() {
   return vc->weight_sum();
 }
 
+const std::string VisCnts::Properties::kReadBytes = "viscnts.read.bytes";
+const std::string VisCnts::Properties::kWriteBytes = "viscnts.write.bytes";
 const std::string VisCnts::Properties::kCompactionCPUNanos =
     "viscnts.compaction.cpu.nanos";
 const std::string VisCnts::Properties::kFlushCPUNanos =
@@ -155,6 +157,10 @@ struct PropertyInfo {
   bool (VisCntsType::*handle_int)(uint64_t *value);
 };
 const std::unordered_map<std::string, PropertyInfo> ppt_name_to_info = {
+    {VisCnts::Properties::kReadBytes,
+     {.handle_int = &VisCntsType::HandleReadBytes}},
+    {VisCnts::Properties::kWriteBytes,
+     {.handle_int = &VisCntsType::HandleWriteBytes}},
     {VisCnts::Properties::kCompactionCPUNanos,
      {.handle_int = &VisCntsType::HandleCompactionCPUNanos}},
     {VisCnts::Properties::kFlushCPUNanos,
