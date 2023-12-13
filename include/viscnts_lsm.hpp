@@ -1,9 +1,9 @@
 #ifndef VISCNTS_LSM_H__
 #define VISCNTS_LSM_H__
 
-#include <boost/fiber/buffered_channel.hpp>
-#include <queue>
+#include <future>
 #include <memory>
+#include <queue>
 
 #include "alloc.hpp"
 #include "cache.hpp"

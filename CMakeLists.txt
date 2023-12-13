@@ -14,9 +14,9 @@ add_library(${PROJECT_NAME} SHARED src/viscnts.cpp src/file.cpp src/hash.cpp src
 
 add_subdirectory(third_party/fmt)
 
-target_link_libraries(test_basic PRIVATE pthread boost_fiber fmt)
-target_link_libraries(test_viscnts PRIVATE pthread boost_fiber fmt uring rocksdb)
-target_link_libraries(${PROJECT_NAME} PRIVATE pthread boost_fiber)
+target_link_libraries(test_basic PRIVATE pthread fmt)
+target_link_libraries(test_viscnts PRIVATE pthread fmt uring rocksdb)
+target_link_libraries(${PROJECT_NAME} PRIVATE pthread)
 target_link_directories(test_viscnts PRIVATE ${ROCKSDB_LIB})
 
 
