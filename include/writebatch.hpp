@@ -21,11 +21,11 @@ class WriteBatch {
  public:
   const static size_t kBatchSize = 1 << 20;
   explicit WriteBatch(std::unique_ptr<AppendFile>&& file) : file_ptr_(std::move(file)), buffer_size_(kBatchSize), used_size_(0) {
-    data_ = new uint8_t[kBatchSize];
+    data_ = BaseAllocator::align_alloc(kBatchSize, 4096);
   }
   ~WriteBatch() {
     flush();
-    delete[] data_;
+    BaseAllocator::release(data_);
   }
 
   template <typename T>

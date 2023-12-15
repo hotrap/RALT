@@ -162,7 +162,7 @@ class SeqIteratorSetForScan {
     iter_.next();
     while (iter_.valid()) {
       result = iter_.read();
-      if (is_equal || iter_.comp_func()(current_key_.ref(), result.first) == 0) {
+      if (iter_.comp_func()(current_key_.ref(), result.first) == 0) {
         current_value_.merge(result.second, current_tick_);
       } else {
         if (tick_filter_.check(current_value_)) {

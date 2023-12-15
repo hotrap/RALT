@@ -21,6 +21,10 @@ class Chunk {
  public:
   Chunk() {}
 
+  Chunk(const uint8_t* data) {
+    data_ = BaseAllocator::align_alloc(kChunkSize, 4096);
+    memcpy(data_, data, kChunkSize);  
+  }
   Chunk(const Chunk& c) {
     data_ = BaseAllocator::align_alloc(kChunkSize, 4096);
     memcpy(data_, c.data_, kChunkSize);  

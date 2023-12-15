@@ -228,13 +228,14 @@ class ImmutableFile {
     int ra_fd = open_ra_file_.get_fd();
     FileBlockHandle index_bh, data_bh;
     size_t mgn;
-    auto ret = file_ptr_->read(ra_fd, size_ - sizeof(size_t), sizeof(size_t), (uint8_t*)(&mgn));
+    Chunk c;
+    c.allocate();
+    auto ret = file_ptr_->read(ra_fd, size_ - 4096, 4096, c.data());
+    mgn = *(size_t*)(c.data() + sizeof(FileBlockHandle) * 2);
+    index_bh = *(FileBlockHandle*)(c.data() + sizeof(FileBlockHandle));
+    data_bh = *(FileBlockHandle*)(c.data());
     assert(ret >= 0);
     assert(mgn == kMagicNumber);
-    ret = file_ptr_->read(ra_fd, size_ - sizeof(size_t) - sizeof(FileBlockHandle) * 2, sizeof(FileBlockHandle), (uint8_t*)(&index_bh));
-    assert(ret >= 0);
-    ret = file_ptr_->read(ra_fd, size_ - sizeof(size_t) - sizeof(FileBlockHandle), sizeof(FileBlockHandle), (uint8_t*)(&data_bh));
-    assert(ret >= 0);
     index_block_ = FileBlock<IndexKey, KeyCompT>(file_id, index_bh, file_ptr_.get(), file_index_cache, comp_);
     data_block_ = FileBlock<DataKey, KeyCompT>(file_id, data_bh, file_ptr_.get(), file_key_cache, comp_);
   }
@@ -250,10 +251,13 @@ class ImmutableFile {
   // seek the first key that >= key
   typename FileBlock<DataKey, KeyCompT>::EnumIterator seek(SKey key) const {
     if (comp_(range_.second.ref(), key) < 0) return {};
-    auto id = index_block_.get_block_id_from_index(key, open_ra_file_.get_fd()).get_offset();
-    if (id == -1) return data_block_.seek_with_id(0, open_ra_file_.get_fd());
-    id = data_block_.lower_key(key, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd());
-    return data_block_.seek_with_id(id, open_ra_file_.get_fd());
+    auto [vl, vr] = index_block_.get_block_id_pair_from_index(key, open_ra_file_.get_fd());
+    auto idl = vl.get_offset();
+    auto idr = vr.get_offset() - 1;
+    if (idl == -1) return data_block_.seek_with_id(0, open_ra_file_.get_fd());
+    assert(idr != -1);
+    // logger(idl, ", ", idr);
+    return data_block_.lower_key_and_get_enum_iter(key, idl, idr, open_ra_file_.get_fd());
   }
 
   
@@ -273,13 +277,15 @@ class ImmutableFile {
     else if (comp_(L, range_.first.ref()) < 0)
       retl = 0;
     else {
-      auto id = index_block_.get_block_id_from_index(L, open_ra_file_.get_fd()).get_offset();
-      if (id == -1) {
+      auto [vl, vr] = index_block_.get_block_id_pair_from_index(L, open_ra_file_.get_fd());
+      auto idl = vl.get_offset();
+      auto idr = vr.get_offset() - 1;
+      if (idl == -1) {
         retl = 0;
       } else {
         retl = !exclude_info.first 
-              ? data_block_.lower_key(L, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd())
-              : data_block_.upper_key(L, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd());
+              ? data_block_.lower_key(L, idl, idr, open_ra_file_.get_fd())
+              : data_block_.upper_key(L, idl, idr, open_ra_file_.get_fd());
       }
     }
     if (comp_(range_.second.ref(), R) <= 0)
@@ -287,13 +293,15 @@ class ImmutableFile {
     else if (comp_(R, range_.first.ref()) < 0)
       retr = 0;
     else {
-      auto id = index_block_.get_block_id_from_index(R, open_ra_file_.get_fd()).get_offset();
-      if (id == -1) {
+      auto [vl, vr] = index_block_.get_block_id_pair_from_index(R, open_ra_file_.get_fd());
+      auto idl = vl.get_offset();
+      auto idr = vr.get_offset() - 1;
+      if (idl == -1) {
         retr = 0;
       } else {
         retr = !exclude_info.second
-              ? data_block_.upper_key(R, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd())
-              : data_block_.lower_key(R, id, id + kIndexChunkCount - 1, open_ra_file_.get_fd());
+              ? data_block_.upper_key(R, idl, idr, open_ra_file_.get_fd())
+              : data_block_.lower_key(R, idl, idr, open_ra_file_.get_fd());
       }
     }
 
@@ -357,7 +365,7 @@ class SSTBuilder {
   void append(const DataKey& kv) {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
-    if (!offsets.size() || offsets.size() % kIndexChunkCount == 0) {
+    if (!offsets.size() || now_offset - offsets[index.back().second.get_offset()] >= kChunkSize) {
       // If it is the first element, then the second parameter (cumulative sum) should be empty.
       // Otherwise, we use the data of the last element.
       IndexDataT new_index_block(offsets.size(), index.size() ? index.back().second : IndexDataT());
@@ -395,8 +403,8 @@ class SSTBuilder {
   void make_index() {
     // append all the offsets in the data block
     make_offsets(offsets);
-    auto data_bh = FileBlockHandle(0, now_offset, offsets.size());
     _align();
+    auto data_bh = FileBlockHandle(0, now_offset, offsets.size());
     lst_offset = now_offset;
     std::vector<uint32_t> v;
     // append keys in the index block
@@ -409,15 +417,18 @@ class SSTBuilder {
     }
     // append all the offsets in the index block
     make_offsets(v);
+    _align();
+    auto index_bh = FileBlockHandle(lst_offset, now_offset - lst_offset, index.size());  
     // append two block handles.
     // write offset of index block
-    file_->append_other(FileBlockHandle(lst_offset, now_offset - lst_offset, index.size()));  
     file_->append_other(data_bh);
+    file_->append_other(index_bh);
     now_offset += sizeof(FileBlockHandle) * 2;
   }
   void finish() {
     file_->append_other(kMagicNumber);
     now_offset += sizeof(size_t);
+    _align();
     file_->flush();
   }
   void reset() {

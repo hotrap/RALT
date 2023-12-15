@@ -4,6 +4,7 @@
 
 #include <fstream>
 #include <set>
+#include <future>
 
 class DefaultComparator : public rocksdb::Comparator {
   public:
@@ -379,7 +380,7 @@ void test_cache_efficiency() {
 void test_stable_hot() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
-  size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  size_t N = 1e6, TH = 16, vlen = 10, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
@@ -394,7 +395,7 @@ void test_stable_hot() {
   {
     std::vector<std::future<void>> h;
     for (int i = 0; i < TH; i++) {
-      h.push_back(std::async([L = N / 10 * i, R = N / 10 * (i + 1), &data, &vc]() {
+      h.push_back(std::async([L = N / TH * i, R = N / TH * (i + 1), &data, &vc]() {
       for (int j = L; j < R; j++) {
         char a[30];
         DB_ASSERT(vc.IsStablyHot(convert_to_slice(a, data[j].first, data[j].second)));
@@ -407,7 +408,7 @@ void test_stable_hot() {
   {
     std::vector<std::future<void>> h;
     for (int i = 0; i < TH; i++) {
-      h.push_back(std::async([L = N / 10 * i, R = N / 10 * (i + 1), &data2, &vc]() {
+      h.push_back(std::async([L = N / TH * i, R = N / TH * (i + 1), &data2, &vc]() {
       for (int j = L; j < R; j++) {
         char a[30];
         DB_ASSERT(!vc.IsStablyHot(convert_to_slice(a, data2[j].first, data2[j].second)));
@@ -437,10 +438,10 @@ void test_lowerbound() {
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
-  test_decay_hit_rate();
+  // test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  // test_stable_hot();
+  test_stable_hot();
   // test_lowerbound();
 }

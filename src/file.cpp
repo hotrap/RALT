@@ -1,5 +1,6 @@
 #include "fileenv.hpp"
 #include "logging.hpp"
+#include "alloc.hpp"
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -18,28 +19,54 @@ size_t GetReadBytes() {
   return global_read_bytes.load();
 }
 
+constexpr static auto kPrefetchSize = 1 << 20;
+constexpr static auto kBeginPrefetchCnt = 16;
+
 class PosixSeqFile : public SeqFile {
  public:
   PosixSeqFile(int fd) : fd_(fd) {}
   
-  ~PosixSeqFile() { ::close(fd_); global_read_bytes.fetch_add(read_bytes_, std::memory_order_relaxed); }
+  ~PosixSeqFile() { 
+    ::close(fd_); 
+    global_read_bytes.fetch_add(read_bytes_, std::memory_order_relaxed); 
+    if (prefetch_data_) {
+      BaseAllocator::release(prefetch_data_);
+    }
+  }
 
   ssize_t read(size_t n, uint8_t* data) override {
-    ::ssize_t read_size;
-    read_bytes_ += n;
-    while (true) {
-      read_size = ::read(fd_, data, n);
-      if (read_size < 0) {
-        // Read error because some signals occurred during the system call, e.g. alarm()
-        if (errno == EINTR) continue;
-        return errno;
+    ssize_t read_size;
+    if (!check_prefetch(now_offset_ + n)) {
+      if (seq_cnts_ < kBeginPrefetchCnt) {
+        while (true) {
+          read_size = ::pread(fd_, data, n, now_offset_);
+          if (read_size < 0) {
+            // Read error because some signals occurred during the system call, e.g. alarm()
+            if (errno == EINTR) continue;
+            logger("Error: ", errno);
+            throw 1;
+            exit(-1);
+            return errno;
+          }
+          break;
+        }
+        read_bytes_ += read_size;
+      } else {
+        prefetch();
+        read_from_prefetch(now_offset_, data, n);
+        read_size = n;
       }
-      break;
+    } else {
+      read_from_prefetch(now_offset_, data, n);
+      read_size = n;
     }
-    return read_size;
+    seq_cnts_ += 1;
+    now_offset_ += read_size;
+    return n;
   }
   ssize_t seek(size_t offset) override {
-    if (auto ret = ::lseek(fd_, offset, SEEK_SET); ret < 0) return errno;
+    seq_cnts_ = 0;
+    now_offset_ = offset;
     return 0;
   }
 
@@ -48,8 +75,45 @@ class PosixSeqFile : public SeqFile {
   }
 
  private:
+  bool check_prefetch(size_t need) {
+    if (!prefetch_data_ || prefetch_offset_ + prefetch_size_ < need || prefetch_offset_ >= need) {
+      return false;
+    }
+    return true;
+  }
+  void prefetch() {
+    if (!prefetch_data_) {
+      prefetch_data_ = BaseAllocator::align_alloc(kPrefetchSize, 4096);
+    }
+    prefetch_offset_ = now_offset_;
+    ssize_t read_size;
+    while (true) {
+      read_size = ::pread(fd_, prefetch_data_, kPrefetchSize, prefetch_offset_);
+      if (read_size < 0) {
+        // Read error because some signals occurred during the system call, e.g. alarm()
+        if (errno == EINTR) continue;
+        logger("Error: ", errno);
+        throw 1;
+        exit(-1);
+      }
+      break;
+    }
+    read_bytes_ += read_size;
+    prefetch_size_ = read_size;
+  }
+  void read_from_prefetch(size_t offset, uint8_t* data, size_t n) {
+    std::memcpy(data, prefetch_data_ + offset - prefetch_offset_, n);
+  }
   int fd_;
   size_t read_bytes_{0};
+  size_t now_offset_{0};
+  uint8_t* prefetch_data_{nullptr};
+  size_t prefetch_offset_{0};
+  size_t prefetch_size_{0};
+  
+  // Used to check if we need prefetch.
+  size_t lst_offset_{INT64_MAX};
+  size_t seq_cnts_{0};
 };
 
 class PosixRandomAccessFile : public RandomAccessFile {
@@ -63,6 +127,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
     global_read_bytes.fetch_add(n, std::memory_order_relaxed);
     if (rd_n < 0) {
       logger("Error: ", errno);
+      throw 1;
       exit(-1);
     }
     return rd_n;
@@ -73,7 +138,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
   }
 
   int get_fd() const override {
-    int fd = ::open(fname_.c_str(), O_RDONLY);
+    int fd = ::open(fname_.c_str(), O_RDONLY|O_DIRECT);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_RANDOM);
     // logger(fd, ", ", fname_);
     if (fd < 0) {
@@ -88,7 +153,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
   }
 
   SeqFile* get_seqfile() const override {
-    auto fd = ::open(fname_.c_str(), O_RDONLY);
+    auto fd = ::open(fname_.c_str(), O_RDONLY|O_DIRECT);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) {
       logger("Error: ", errno);
@@ -133,7 +198,7 @@ class DefaultEnv : public Env {
  public:
   DefaultEnv() {}
   RandomAccessFile* openRAFile(std::string filename) override {
-    auto fd = ::open(filename.c_str(), O_RDONLY);
+    auto fd = ::open(filename.c_str(), O_RDONLY|O_DIRECT);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_RANDOM);
     if (fd < 0) return nullptr;
     auto result = new PosixRandomAccessFile(filename);
@@ -141,13 +206,13 @@ class DefaultEnv : public Env {
     return result;
   }
   SeqFile* openSeqFile(std::string filename) override {
-    auto fd = ::open(filename.c_str(), O_RDONLY);
+    auto fd = ::open(filename.c_str(), O_RDONLY|O_DIRECT);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) return nullptr;
     return new PosixSeqFile(fd);
   }
   AppendFile* openAppFile(std::string filename) override {
-    auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) return nullptr;
     return new PosixAppendFile(fd);

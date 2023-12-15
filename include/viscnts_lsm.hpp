@@ -47,7 +47,7 @@
  *
  * [Scan]
  *  Get the iterators on each level. It first seek on the Partitions by their ranges, then seek the ImmutableFile. First it seeks the index block.
- *  Then it seeks the data block. The index block typically stores the (kIndexChunkSize * i)-th key.
+ *  // Then it seeks the data block. The index block typically stores the (kIndexChunkSize * i)-th key. <-- I don't use this now.
  *
  * [Compact and Decay]
  *  See EstimateLSM::SuperVision::compact
@@ -1598,10 +1598,10 @@ class EstimateLSM {
       // Compact until there is no potential compaction.
       auto last_compacted_sv = new_sv;
       while (true) {
-        // auto new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
         SuperVersion* new_compacted_sv = nullptr;
         Timer sw;
-        new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
+        new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
+        // new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
         stat_compact_time_ += sw.GetTimeInNanos();
         if (new_compacted_sv == nullptr) {
           break;

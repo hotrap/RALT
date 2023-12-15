@@ -134,6 +134,9 @@ class RefChunk {
     }
     ~RefChunk() { if(ref_count_) ref_count_->fetch_sub(1, std::memory_order_relaxed); }
     const uint8_t* data(uint32_t offset = 0) const { return data_ + offset; }
+    Chunk copy() const {
+      return Chunk(data_);
+    }
 
   private:
     const uint8_t* data_{nullptr};

@@ -45,18 +45,25 @@ class FileBlock {     // process blocks in a file
   }
 
  public:
+  class EnumIterator;
   // Only seek, maintain two Chunks, one is of key(kv pairs), one is of value(offset).
   class SeekIterator {
    public:
     SeekIterator(FileBlock<KV, KVComp> block) : block_(block), current_value_id_(-1), current_key_id_(-1) {}
     void seek_and_read(uint32_t id, KV& key, int ra_fd) {
-      uint32_t _offset;
       // find offset
       auto [chunk_id, offset] = block_._pos_offset(id);
       if (current_value_id_ != chunk_id) block_.ra_acquire_with_cache(current_value_id_ = chunk_id, currenct_value_chunk_, current_value_chunk_ref_, ra_fd);
-      _offset = block_.read_value(offset, current_value_chunk_ref_);
+      offset_ = block_.read_value(offset, current_value_chunk_ref_);
       // read key
-      auto [chunk_key_id, key_offset] = block_._kv_offset(_offset);
+      auto [chunk_key_id, key_offset] = block_._kv_offset(offset_);
+      key_offset_ = key_offset;
+      if (current_key_id_ != chunk_key_id) block_.ra_acquire_with_cache(current_key_id_ = chunk_key_id, current_key_chunk_, current_key_chunk_ref_, ra_fd);
+      block_.read_key(key_offset, current_key_chunk_ref_, key);
+    }
+
+    void read(uint32_t offset, KV& key, int ra_fd) {
+      auto [chunk_key_id, key_offset] = block_._kv_offset(offset);
       if (current_key_id_ != chunk_key_id) block_.ra_acquire_with_cache(current_key_id_ = chunk_key_id, current_key_chunk_, current_key_chunk_ref_, ra_fd);
       block_.read_key(key_offset, current_key_chunk_ref_, key);
     }
@@ -74,6 +81,9 @@ class FileBlock {     // process blocks in a file
     RefChunk current_value_chunk_ref_, current_key_chunk_ref_;
     Chunk currenct_value_chunk_, current_key_chunk_;
     uint32_t current_value_id_, current_key_id_;
+    uint32_t offset_, key_offset_;
+
+    friend class EnumIterator;
   };
 /*
   // Do something like coroutine..
@@ -244,6 +254,15 @@ class FileBlock {     // process blocks in a file
       return (*this);
     }
 
+    EnumIterator(SeekIterator&& it, uint32_t id) {
+      block_ = it.block_;
+      current_key_chunk_ = it.current_key_chunk_ref_.copy();
+      current_key_id_ = it.current_key_id_;
+      offset_ = it.key_offset_;
+      id_ = id;
+      key_size_ = 0;
+    }
+
     void next() {
       // logger_printf("nextEI[%d, %d]", id_, block_.counts());
       assert(valid());
@@ -302,7 +321,7 @@ class FileBlock {     // process blocks in a file
   }
   explicit FileBlock(uint32_t file_id, FileBlockHandle handle, RandomAccessFile* file_ptr, FileChunkCache* file_cache, const KVComp& comp)
       : file_id_(file_id), handle_(handle), file_ptr_(file_ptr), file_cache_(file_cache), comp_(comp) {
-    offset_index_ = handle_.offset + handle_.size - handle_.counts * sizeof(uint32_t);
+    offset_index_ = handle_.offset + handle_.size - (handle_.counts * sizeof(uint32_t) + kChunkSize - 1) / kChunkSize * kChunkSize;
     assert(offset_index_ % kChunkSize == 0);
   }
 
@@ -405,6 +424,35 @@ class FileBlock {     // process blocks in a file
     }
     return ret;
   }
+  
+  // Find the biggest _key that _key <= key. Return the value.
+  std::pair<typename KV::ValueType, typename KV::ValueType> get_block_id_pair_from_index(SKey key, int ra_fd) const {
+    int l = 0, r = handle_.counts - 1, ans = -1;
+    typename KV::ValueType ret0{-1};
+    typename KV::ValueType ret1{-1};
+    SeekIterator it = SeekIterator(*this);
+    KV _key;
+    while (l <= r) {
+      auto mid = (l + r) >> 1;
+      it.seek_and_read(mid, _key, ra_fd);
+      // compare two keys
+      if (comp_(_key.key(), key) <= 0) {
+        l = mid + 1, ans = mid;
+      } else
+        r = mid - 1;
+    }
+    if (ans != -1) {
+      it.seek_and_read(ans, _key, ra_fd);
+      ret0 = _key.value();
+      // logger(ans, ", ", handle_.counts);
+      if (ans != handle_.counts - 1) {
+        it.seek_and_read(ans + 1, _key, ra_fd);  
+        ret1 = _key.value();
+      }
+    }
+    
+    return {ret0, ret1};
+  }
 
   // it calculates the smallest No. of the key that >= input key.
   uint32_t lower_key(SKey key, uint32_t L, uint32_t R, int ra_fd) const {
@@ -422,6 +470,26 @@ class FileBlock {     // process blocks in a file
         l = mid + 1;
     }
     return ret;
+  }
+
+  // it calculates the smallest No. of the key that >= input key.
+  // returns enum iterator.
+  EnumIterator lower_key_and_get_enum_iter(SKey key, uint32_t L, uint32_t R, int ra_fd) const {
+    int l = L, r = std::min(R, handle_.counts - 1);
+    uint32_t ret = r + 1;
+    SeekIterator it = SeekIterator(*this);
+    KV _key;
+    while (l <= r) {
+      auto mid = (l + r) >> 1;
+      it.seek_and_read(mid, _key, ra_fd);
+      // compare two keys
+      if (comp_(key, _key.key()) <= 0) {
+        r = mid - 1, ret = mid;
+      } else
+        l = mid + 1;
+    }
+    it.seek_and_read(ret, _key, ra_fd);
+    return EnumIterator(std::move(it), ret);
   }
 
   // it calculates the smallest No. of the key that > input key.
