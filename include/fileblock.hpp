@@ -254,13 +254,15 @@ class FileBlock {     // process blocks in a file
       return (*this);
     }
 
-    EnumIterator(SeekIterator&& it, uint32_t id) {
+    EnumIterator(SeekIterator&& it, std::unique_ptr<SeqFile> seqfile, uint32_t id)
+      : seqfile_(std::move(seqfile)) {
       block_ = it.block_;
       current_key_chunk_ = it.current_key_chunk_ref_.copy();
       current_key_id_ = it.current_key_id_;
       offset_ = it.key_offset_;
       id_ = id;
       key_size_ = 0;
+      seqfile_->seek((current_key_id_ + 1) * kChunkSize);
     }
 
     void next() {
@@ -488,8 +490,11 @@ class FileBlock {     // process blocks in a file
       } else
         l = mid + 1;
     }
+    if (ret >= handle_.counts) {
+      return EnumIterator();
+    }
     it.seek_and_read(ret, _key, ra_fd);
-    return EnumIterator(std::move(it), ret);
+    return EnumIterator(std::move(it), std::unique_ptr<SeqFile>(file_ptr_->get_seqfile()), ret);
   }
 
   // it calculates the smallest No. of the key that > input key.

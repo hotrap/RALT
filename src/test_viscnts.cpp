@@ -126,7 +126,7 @@ void clear() {
 void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
-  size_t N = 1e8, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  size_t N = 1e6, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
   auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
@@ -436,7 +436,7 @@ void test_lowerbound() {
 }
 
 int main() {
-  // test_store_and_scan();
+  test_store_and_scan();
   // test_decay_simple();
   // test_decay_hit_rate();
   // test_transfer_range();
