@@ -1600,8 +1600,8 @@ class EstimateLSM {
       while (true) {
         SuperVersion* new_compacted_sv = nullptr;
         Timer sw;
-        new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
-        // new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
+        // new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kTieredCompaction);
+        new_compacted_sv = last_compacted_sv->compact(*this, SuperVersion::JobType::kLeveledCompaction);
         stat_compact_time_ += sw.GetTimeInNanos();
         if (new_compacted_sv == nullptr) {
           break;
