@@ -6,6 +6,7 @@
 #include "fileblock.hpp"
 #include "alloc.hpp"
 #include "writebatch.hpp"
+#include "bloomfilter.hpp"
 
 namespace viscnts_lsm {
 
@@ -373,6 +374,7 @@ class SSTBuilder {
       if (offsets.size() == 0) first_key = kv.key();
     }
     offsets.push_back(now_offset);
+    keys_.emplace_back(kv.key(), kv.value().is_stable());
     index.back().second.add(kv.key(), kv.value());
     now_offset += kv.size();
     file_->append_key(kv);
@@ -438,6 +440,9 @@ class SSTBuilder {
     size_ = 0;
     index.clear();
     offsets.clear();
+    keys_.clear();
+    check_hot_buffer_.clear();
+    check_stably_hot_buffer_.clear();
   }
   void new_file(std::unique_ptr<WriteBatch>&& file) {
     file_ = std::move(file);
@@ -458,11 +463,34 @@ class SSTBuilder {
     return file_ ? file_->get_stat_flushed_size() : 0;
   }
 
+  IndSlice& get_check_hot_buffer() {
+    return check_hot_buffer_;
+  }
+
+  IndSlice& get_check_stably_hot_buffer() {
+    return check_stably_hot_buffer_;
+  }
+
+  void make_bloom() {
+    BloomFilter bf(kBloomFilterBitNum);
+    check_hot_buffer_ = bf.Create(keys_.size());
+    check_stably_hot_buffer_ = bf.Create(keys_.size());
+    for (auto& [k, is_stably_hot] : keys_) {
+      if (is_stably_hot) {
+        bf.Add(k.ref(), check_stably_hot_buffer_);
+      }
+      bf.Add(k.ref(), check_hot_buffer_);
+    }
+  }
+
  private:
   uint32_t now_offset, lst_offset, counts, size_;
   std::vector<std::pair<IndSKey, IndexDataT>> index;
+  std::vector<std::pair<IndSKey, int>> keys_;
   std::vector<uint32_t> offsets;
   IndSKey lst_key, first_key;
+  IndSlice check_hot_buffer_;
+  IndSlice check_stably_hot_buffer_;
 };
 
 }

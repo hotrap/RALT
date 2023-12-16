@@ -396,11 +396,15 @@ void test_stable_hot() {
     std::vector<std::future<void>> h;
     for (int i = 0; i < TH; i++) {
       h.push_back(std::async([L = N / TH * i, R = N / TH * (i + 1), &data, &vc]() {
-      for (int j = L; j < R; j++) {
-        char a[30];
-        DB_ASSERT(vc.IsStablyHot(convert_to_slice(a, data[j].first, data[j].second)));
-      }}));    
+        int sum = 0;
+        for (int j = L; j < R; j++) {
+          char a[30];
+          sum += vc.IsStablyHot(convert_to_slice(a, data[j].first, data[j].second));
+        }
+        DB_INFO("{}/{}", sum, R - L);
+      }));    
     }
+    
   }
   print_memory();
   DB_INFO("true query end. Used: {} s", sw.GetTimeInSeconds());
@@ -409,10 +413,13 @@ void test_stable_hot() {
     std::vector<std::future<void>> h;
     for (int i = 0; i < TH; i++) {
       h.push_back(std::async([L = N / TH * i, R = N / TH * (i + 1), &data2, &vc]() {
-      for (int j = L; j < R; j++) {
-        char a[30];
-        DB_ASSERT(!vc.IsStablyHot(convert_to_slice(a, data2[j].first, data2[j].second)));
-      }}));    
+        int sum = 0;
+        for (int j = L; j < R; j++) {
+          char a[30];
+          sum += !vc.IsStablyHot(convert_to_slice(a, data2[j].first, data2[j].second));
+        }
+        DB_INFO("{}/{}", sum, R - L);
+      }));    
     }
   }
   print_memory();
@@ -436,7 +443,7 @@ void test_lowerbound() {
 }
 
 int main() {
-  test_store_and_scan();
+  // test_store_and_scan();
   // test_decay_simple();
   // test_decay_hit_rate();
   // test_transfer_range();

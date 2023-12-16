@@ -20,6 +20,7 @@
 #include "deletedrange.hpp"
 #include "kthest.hpp"
 #include "compaction.hpp"
+#include "bloomfilter.hpp"
 
 /**
  * The viscnts.
@@ -209,13 +210,17 @@ class EstimateLSM {
     double avg_hot_size_;
     double global_hot_size_;
     std::string filename_;
+    IndSlice check_hot_buffer_;
+    IndSlice check_stably_hot_buffer_;
 
    public:
-    Partition(Env* env, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, KeyCompT comp, const typename Compaction<KeyCompT, ValueT, IndexDataT>::NewFileData& data)
+    Partition(Env* env, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, KeyCompT comp, typename Compaction<KeyCompT, ValueT, IndexDataT>::NewFileData&& data)
         : file_(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), data.range, file_index_cache, file_key_cache, comp),
           deleted_ranges_(),
           global_hot_size_(data.hot_size),
-          filename_(data.filename) {
+          filename_(data.filename),
+          check_hot_buffer_(std::move(data.check_hot_buffer)),
+          check_stably_hot_buffer_(std::move(data.check_stably_hot_buffer)) {
       global_range_counts_ = file_.counts();
       avg_hot_size_ = data.hot_size / (double) file_.counts();
     }
@@ -252,6 +257,14 @@ class EstimateLSM {
     double hot_size() const { return global_hot_size_; }
     const DeletedRange& deleted_ranges() const { return deleted_ranges_; }
     const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file() const { return file_; }
+    bool check_stably_hot(SKey key) const {
+      BloomFilter bf(kBloomFilterBitNum);
+      return bf.Find(key, check_stably_hot_buffer_.ref());
+    }
+    bool check_hot(SKey key) const {
+      BloomFilter bf(kBloomFilterBitNum);
+      return bf.Find(key, check_hot_buffer_.ref());
+    }
     // void update_hot_size_by_tick_threshold(TickFilter<ValueT> tick_filter) {
     //   double new_hot_size = 0;
     //   size_t new_counts = 0;
@@ -403,6 +416,40 @@ class EstimateLSM {
       if (where == -1) return LevelIterator();
       auto sst_iter = head_[where]->seek(key);
       return LevelIterator(head_, where, std::move(sst_iter), DeletedRange::Iterator(sst_iter.rank(), head_[where]->deleted_ranges()));
+    }
+    
+    bool check_hot(SKey key, KeyCompT comp) const {
+      if (head_.size() == 1 && head_[0]->range().first.data() == nullptr) {
+        assert(head_[0]->range().second.data() == nullptr);
+        return false;
+      }
+      int l = 0, r = head_.size() - 1, where = -1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(key, head_[mid]->range().second) <= 0)
+          where = mid, r = mid - 1;
+        else
+          l = mid + 1;
+      }
+      if (where == -1) return false;
+      return head_[where]->check_hot(key);
+    }
+    
+    bool check_stably_hot(SKey key, KeyCompT comp) const {
+      if (head_.size() == 1 && head_[0]->range().first.data() == nullptr) {
+        assert(head_[0]->range().second.data() == nullptr);
+        return false;
+      }
+      int l = 0, r = head_.size() - 1, where = -1;
+      while (l <= r) {
+        int mid = (l + r) >> 1;
+        if (comp(key, head_[mid]->range().second) <= 0)
+          where = mid, r = mid - 1;
+        else
+          l = mid + 1;
+      }
+      if (where == -1) return false;
+      return head_[where]->check_stably_hot(key);
     }
     // Get minimal overlapping SSTs.
     std::vector<atomic_shared_ptr<Partition>> get_min_overlap_pars(const Level& next_level, int cnt, KeyCompT comp) {
@@ -675,15 +722,27 @@ class EstimateLSM {
     bool is_stably_hot(SKey key) const {
       bool cnt = 0;
       for (int i = tree_.size() - 1; i >= 0; --i) {
-        auto iter = tree_[i]->seek(key, comp_);
-        if (!iter.valid()) continue;
-        BlockKey<SKey, ValueT> kv;
-        iter.read(kv);
-        if (comp_(kv.key(), key) == 0) {
-          if (kv.value().is_stable() || cnt) {
+        if (tree_[i]->check_stably_hot(key, comp_)) {
+          return true;
+        }
+        if (tree_[i]->check_hot(key, comp_)) {
+          // auto iter = tree_[i]->seek(key, comp_);
+          // if (!iter.valid()) continue;
+          // BlockKey<SKey, ValueT> kv;
+          // iter.read(kv);
+          // if (comp_(kv.key(), key) == 0) {
+          //   if (kv.value().is_stable() || cnt) {
+          //     return true;
+          //   }
+          //   cnt = 1;
+          // }
+          if (cnt == 1) {
             return true;
+          } else {
+            cnt += 1;
           }
-          cnt = 1;
+        } else {
+          // logger("fuck ", i, "/", tree_.size());
         }
       }
       return false;
@@ -790,7 +849,7 @@ class EstimateLSM {
         auto iter = std::make_unique<typename UnsortedBuffer<KeyCompT, ValueT>::Iterator>(*buf);
         auto [files, hot_size] = worker.flush(*iter);
         auto level = make_atomic_shared<Level>();
-        for (auto& a : files) level->append_par(make_atomic_shared<Partition>(lsm.get_env(), lsm.get_file_index_cache(), lsm.get_file_key_cache(), lsm.get_comp(), a));
+        for (auto& a : files) level->append_par(make_atomic_shared<Partition>(lsm.get_env(), lsm.get_file_index_cache(), lsm.get_file_key_cache(), lsm.get_comp(), std::move(a)));
         delete buf;
         lsm.update_write_bytes(worker.get_write_bytes());
         {
@@ -881,7 +940,7 @@ class EstimateLSM {
         
         auto level = make_atomic_shared<Level>();
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
           level->append_par(std::move(par));
         }   
         ret->tree_.push_back(std::move(level));
@@ -909,7 +968,7 @@ class EstimateLSM {
         
         auto level = make_atomic_shared<Level>();
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
           level->append_par(std::move(par));
         }   
         ret->tree_.push_back(std::move(level));
@@ -977,7 +1036,7 @@ class EstimateLSM {
           auto rest_iter = rest.begin();
           auto level = make_atomic_shared<Level>();
           for (auto& a : files) {
-            auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+            auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
             while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
               level->append_par(std::move(*rest_iter));
               rest_iter++;
@@ -1034,7 +1093,7 @@ class EstimateLSM {
 
         std::vector<atomic_shared_ptr<Partition>> pars;
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
           pars.push_back(std::move(par));
         }
         
@@ -1119,7 +1178,7 @@ class EstimateLSM {
         std::vector<atomic_shared_ptr<Partition>> last_ssts;
         last_ssts.clear();
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, a);
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
           if ((compact_r[0] < tree_[0]->pars_cnt() && comp(par->range().second, tree_[0]->get_pars()[compact_r[0]]->range().first) >= 0) || 
           (compact_l[0] >= 1 && comp(par->range().first, tree_[0]->get_pars()[compact_l[0] - 1]->range().second) <= 0)) {
             last_ssts.push_back(std::move(par));

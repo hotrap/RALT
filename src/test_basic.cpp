@@ -755,11 +755,34 @@ void test_scan_size() {
   
 }
 
+
+void test_bloom() {
+  using namespace viscnts_lsm;
+  std::vector<size_t> s;
+  std::mt19937_64 gen(0x20231216);
+  int N = 1e6;
+  for (int i = 0; i < N; i++) s.push_back(gen());
+  BloomFilter bf(kBloomFilterBitNum);
+  auto slice = bf.Create(N);
+  for (int i = 0; i < N; i++) bf.Add(SKey((uint8_t*)&s[i], 8), slice);
+  for (int i = 0; i < N; i++) {
+    DB_ASSERT(bf.Find(SKey((uint8_t*)&s[i], 8), slice.ref()) == 1);
+  }
+  int fp = 0;
+  for (int i = 0; i < N; i++) {
+    size_t x = gen();
+    if(bf.Find(SKey((uint8_t*)&x, 8), slice.ref()) == 1) {
+      fp += 1;
+    }
+  }
+  DB_INFO("{}/{}", fp, N);
+}
+
 int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  test_lsm_store_and_scan();
+  // test_lsm_store_and_scan();
   // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
@@ -767,4 +790,5 @@ int main() {
   // test_kthest();
   // test_lru_cache();
   // test_scan_size();
+  test_bloom();
 }

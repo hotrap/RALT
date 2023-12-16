@@ -5,6 +5,7 @@
 #include "fileenv.hpp"
 #include "writebatch.hpp"
 #include "tickfilter.hpp"
+#include "bloomfilter.hpp"
 #include <random>
 
 namespace viscnts_lsm {
@@ -46,11 +47,14 @@ class Compaction {
 
   void _end_new_file() {
     builder_.make_index();
+    builder_.make_bloom();
     builder_.finish();
     write_bytes_ += builder_.get_write_bytes();
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = std::move(builder_.range());
     vec_newfiles_.back().hot_size = hot_size_ - lst_hot_size_;
+    vec_newfiles_.back().check_hot_buffer = std::move(builder_.get_check_hot_buffer());
+    vec_newfiles_.back().check_stably_hot_buffer = std::move(builder_.get_check_stably_hot_buffer());
     lst_hot_size_ = hot_size_;
   }
 
@@ -61,6 +65,8 @@ class Compaction {
     size_t size;
     std::pair<IndSKey, IndSKey> range;
     double hot_size;
+    IndSlice check_hot_buffer;
+    IndSlice check_stably_hot_buffer;
   };
   Compaction(double current_tick, FileName* files, Env* env, KeyCompT comp) 
     : current_tick_(current_tick), files_(files), env_(env), flag_(false), rndgen_(std::random_device()()), comp_(comp) {

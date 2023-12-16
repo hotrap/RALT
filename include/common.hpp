@@ -77,6 +77,10 @@ class IndSlice {
     a_ = nullptr, len_ = a_len_ = 0;
     _read_from(a, len);
   }
+  explicit IndSlice(size_t len) {
+    len_ = a_len_ = len;
+    a_ = new uint8_t[len];
+  }
   IndSlice(IndSlice&& s) noexcept {
     // printf("IndSlice&&(%lld)!", a_);
     a_ = s.a_;
@@ -142,6 +146,11 @@ class IndSlice {
   static size_t read_size(uint8_t* from) {
     auto ret = *reinterpret_cast<decltype(len_)*>(from);
     return ret + sizeof(len_);
+  }
+  void clear() {
+    len_ = a_len_ = 0;
+    if (a_) delete[] a_;
+    a_ = nullptr;
   }
 };
 
