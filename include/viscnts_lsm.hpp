@@ -3,6 +3,7 @@
 
 #include <future>
 #include <memory>
+#include <pthread.h>
 #include <queue>
 
 #include "alloc.hpp"
@@ -1283,7 +1284,9 @@ class EstimateLSM {
   KeyCompT comp_;
   SuperVersion* sv_;
   std::thread compact_thread_;
+  Timer compact_thread_timer_;
   std::thread flush_thread_;
+  Timer flush_thread_timer_;
   std::atomic<bool> terminate_signal_;
   UnsortedBufferPtrs<KeyCompT, ValueT> bufs_;
   std::mutex sv_mutex_;
@@ -1348,7 +1351,16 @@ class EstimateLSM {
         physical_size_limit_(physical_size_limit),
         hot_size_limit_(hot_size_limit) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
+    clockid_t compact_thread_clock_id;
+    pthread_getcpuclockid(compact_thread_.native_handle(),
+                          &compact_thread_clock_id);
+    compact_thread_timer_ = Timer(compact_thread_clock_id);
+
     flush_thread_ = std::thread([this]() { flush_thread(); });
+    clockid_t flush_thread_clock_id;
+    pthread_getcpuclockid(flush_thread_.native_handle(),
+                          &flush_thread_clock_id);
+    flush_thread_timer_ = Timer(flush_thread_clock_id);
   }
   ~EstimateLSM() {
     {
@@ -1549,6 +1561,13 @@ class EstimateLSM {
     return stat_decay_write_time_;
   }
 
+  size_t get_compact_thread_time() const {
+    return compact_thread_timer_.GetTimeInNanos();
+  }
+  size_t get_flush_thread_time() const {
+    return flush_thread_timer_.GetTimeInNanos();
+  }
+
   void update_tick_threshold() {
     KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
     KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
@@ -1726,6 +1745,7 @@ class alignas(128) VisCnts {
   bool terminate_signal_{false};
   std::condition_variable decay_cv_;
   std::thread decay_thread_;
+  Timer decay_thread_timer_;
 
   bool is_first_tick_update_{true};
   size_t decay_count_{0};
@@ -1737,6 +1757,10 @@ class alignas(128) VisCnts {
     : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, hot_size, physical_size)},
       comp_(comp), hot_set_limit_(hot_size) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
+        clockid_t decay_cpu_clock_id;
+        pthread_getcpuclockid(decay_thread_.native_handle(),
+                              &decay_cpu_clock_id);
+        decay_thread_timer_ = Timer(decay_cpu_clock_id);
       }
   ~VisCnts() {
     terminate_signal_ = true;
@@ -1895,6 +1919,18 @@ class alignas(128) VisCnts {
   }
   bool HandleDecayWriteCPUNanos(uint64_t *value) {
     *value = tree->get_decay_write_time();
+    return true;
+  }
+  bool HandleCompactionThreadCPUNanos(uint64_t *value) {
+    *value = tree->get_compact_thread_time();
+    return true;
+  }
+  bool HandleFlushThreadCPUNanos(uint64_t *value) {
+    *value = tree->get_flush_thread_time();
+    return true;
+  }
+  bool HandleDecayThreadCPUNanos(uint64_t *value) {
+    *value = decay_thread_timer_.GetTimeInNanos();
     return true;
   }
 

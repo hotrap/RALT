@@ -152,6 +152,12 @@ const std::string VisCnts::Properties::kDecayScanCPUNanos =
     "viscnts.decay.scan.cpu.nanos";
 const std::string VisCnts::Properties::kDecayWriteCPUNanos =
     "viscnts.decay.write.cpu.nanos";
+const std::string VisCnts::Properties::kCompactionThreadCPUNanos =
+    "viscnts.compaction.thread.cpu.nanos";
+const std::string VisCnts::Properties::kFlushThreadCPUNanos =
+    "viscnts.flush.thread.cpu.nanos";
+const std::string VisCnts::Properties::kDecayThreadCPUNanos =
+    "viscnts.decay.thread.cpu.nanos";
 
 struct PropertyInfo {
   bool (VisCntsType::*handle_int)(uint64_t *value);
@@ -168,7 +174,14 @@ const std::unordered_map<std::string, PropertyInfo> ppt_name_to_info = {
     {VisCnts::Properties::kDecayScanCPUNanos,
      {.handle_int = &VisCntsType::HandleDecayScanCPUNanos}},
     {VisCnts::Properties::kDecayWriteCPUNanos,
-     {.handle_int = &VisCntsType::HandleDecayWriteCPUNanos}}};
+     {.handle_int = &VisCntsType::HandleDecayWriteCPUNanos}},
+    {VisCnts::Properties::kCompactionThreadCPUNanos,
+     {.handle_int = &VisCntsType::HandleCompactionThreadCPUNanos}},
+    {VisCnts::Properties::kFlushThreadCPUNanos,
+     {.handle_int = &VisCntsType::HandleFlushThreadCPUNanos}},
+    {VisCnts::Properties::kDecayThreadCPUNanos,
+     {.handle_int = &VisCntsType::HandleDecayThreadCPUNanos}},
+};
 bool VisCnts::GetIntProperty(std::string_view property, uint64_t *value) {
   std::string p(property);
   auto it = ppt_name_to_info.find(p);

@@ -40,6 +40,9 @@ public:
     static const std::string kFlushCPUNanos;
     static const std::string kDecayScanCPUNanos;
     static const std::string kDecayWriteCPUNanos;
+    static const std::string kCompactionThreadCPUNanos;
+    static const std::string kFlushThreadCPUNanos;
+    static const std::string kDecayThreadCPUNanos;
   };
 
   // If "property" is a valid integer property understood by this

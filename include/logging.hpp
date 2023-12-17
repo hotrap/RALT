@@ -1,13 +1,13 @@
 #ifndef VISCNTS_LOGGING_H__
 #define VISCNTS_LOGGING_H__
 
-#include <mutex>
-#include <iostream>
-#include <fmt/core.h>
-#include <fmt/format.h>
 #include <chrono>
 #include <ctime>
+#include <fmt/core.h>
+#include <fmt/format.h>
 #include <iomanip>
+#include <iostream>
+#include <mutex>
 
 #include <cassert>
 
@@ -116,20 +116,27 @@ class StopWatch {
 
 class Timer {
  public:
-  Timer() { start_ = get_ts(); }
-  size_t GetTimeInNanos() {
-    return get_ts() - start_;
-  }
-  void Reset() { start_ = get_ts(); }
+   Timer(const Timer &) = delete;
+   Timer &operator=(const Timer &) = delete;
+   Timer(Timer &&rhs) : clock_id_(rhs.clock_id_), start_(rhs.start_) {}
+   Timer &operator=(Timer &&rhs) {
+    clock_id_ = rhs.clock_id_;
+    start_ = rhs.start_;
+    return *this;
+   }
+   Timer(clockid_t clock_id = CLOCK_THREAD_CPUTIME_ID) : clock_id_(clock_id) {
+    start_ = get_ts();
+   }
+   size_t GetTimeInNanos() const { return get_ts() - start_; }
+   void Reset() { start_ = get_ts(); }
 
  private:
-  int64_t get_ts() {
+   int64_t get_ts() const {
     struct timespec currTime;
-    clockid_t threadClockId;
-    pthread_getcpuclockid(pthread_self(), &threadClockId);
-    clock_gettime(threadClockId, &currTime);
+    clock_gettime(clock_id_, &currTime);
     return int64_t(1e9) * currTime.tv_sec +  currTime.tv_nsec;
-  }
+   }
+  clockid_t clock_id_;
   int64_t start_;
 };
 
