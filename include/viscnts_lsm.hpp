@@ -1620,6 +1620,23 @@ class EstimateLSM {
     physical_size_limit_ = new_limit;
   }
 
+  void set_all_limit(size_t new_hs_limit, size_t new_phy_limit) {
+    hot_size_limit_ = new_hs_limit;
+    physical_size_limit_ = new_phy_limit;
+  }
+
+  size_t get_phy_limit() const {
+    return physical_size_limit_;
+  }
+
+  size_t get_hot_set_limit() const {
+    return hot_size_limit_;
+  }
+
+  void set_proper_phy_limit() {
+    physical_size_limit_ = std::max(10 * kSSTable, phy_size_);
+  }
+
 
  private:
   void flush_thread() {
@@ -1892,6 +1909,30 @@ class alignas(128) VisCnts {
     decay_m_.unlock();
     check_decay();
   }
+
+  void set_all_limit(size_t new_hs_limit, size_t new_phy_limit) {
+    decay_m_.lock();
+    tree->set_hot_set_limit(new_hs_limit);
+    tree->set_phy_limit(new_phy_limit);
+    is_first_tick_update_ = true;
+    decay_count_ = 0;
+    decay_m_.unlock();
+    check_decay();
+  }
+
+  size_t get_phy_limit() const {
+    return tree->get_phy_limit();
+  }
+  
+  size_t get_hot_set_limit() const {
+    return tree->get_hot_set_limit();
+  }
+
+
+  void set_proper_phy_limit() {
+    tree->set_proper_phy_limit();
+  }
+
 
   size_t decay_count() {
     return decay_count_;

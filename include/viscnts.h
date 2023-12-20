@@ -31,6 +31,10 @@ public:
 
   void SetHotSetSizeLimit(size_t new_limit);
   void SetPhysicalSizeLimit(size_t new_limit);
+  void SetAllSizeLimit(size_t new_hs_limit, size_t new_phy_limit);
+  void SetProperPhysicalSizeLimit();
+  size_t GetPhySizeLimit();
+  size_t GetHotSetSizeLimit();
   size_t DecayCount();
 
   struct Properties {

@@ -203,6 +203,26 @@ void VisCnts::SetPhysicalSizeLimit(size_t new_limit) {
   vc->set_new_phy_limit(new_limit);
 }
 
+void VisCnts::SetAllSizeLimit(size_t new_hs_limit, size_t new_phy_limit) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  vc->set_all_limit(new_hs_limit, new_phy_limit);
+}
+
+size_t VisCnts::GetPhySizeLimit() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->get_phy_limit();
+}
+
+size_t VisCnts::GetHotSetSizeLimit() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->get_hot_set_limit();
+}
+
+void VisCnts::SetProperPhysicalSizeLimit() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  vc->set_proper_phy_limit();
+}
+
 size_t VisCnts::DecayCount() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->decay_count();
