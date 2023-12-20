@@ -9,7 +9,7 @@
 
 namespace viscnts_lsm {
 
-static uint32_t BloomHash(SKey key) { return Hash(reinterpret_cast<const char*>(key.data()), key.len(), 0xbc9f1d34); }
+
 
 constexpr auto kBloomFilterBitNum = 10;
 
@@ -19,6 +19,7 @@ class BloomFilter {
   size_t k_;
 
  public:
+  static size_t BloomHash(SKey key) { return Hash(reinterpret_cast<const char*>(key.data()), key.len(), 0xbc9f1d34); }
   explicit BloomFilter(int bits_per_key) : bits_per_key_(bits_per_key) {
     k_ = static_cast<size_t>(bits_per_key * 0.69); // 0.69 ~ ln(2)
     k_ = std::max<size_t>(std::min<size_t>(30, k_), 1);
@@ -34,23 +35,37 @@ class BloomFilter {
   void Add(const SKey& key, IndSlice& slice) {
     size_t bits = slice.len() * 8;
     uint8_t* array = slice.data();
-    uint32_t h = BloomHash(key);
+    size_t h = BloomHash(key);
     // use the double-hashing in leveldb, i.e. h1 + i * h2
-    const uint32_t delta = (h >> 17) | (h << 15);
-    uint32_t bitpos = h % bits, dpos = delta % bits;
+    const size_t delta = Hash8(h, 0x202312201805);
+    size_t bitpos = h % bits, dpos = delta % bits;
     for (size_t j = 0; j < k_; j++) {
       array[bitpos / 8] |= (1 << (bitpos & 7));
       bitpos += dpos, bitpos >= bits ? bitpos -= bits : 0;
     }
   }
+  
+  void Add(size_t hash1, IndSlice& slice) {
+    size_t bits = slice.len() * 8;
+    uint8_t* array = slice.data();
+    size_t h = hash1;
+    // use the double-hashing in leveldb, i.e. h1 + i * h2
+    const size_t delta = Hash8(h, 0x202312201805);
+    size_t bitpos = h % bits, dpos = delta % bits;
+    for (size_t j = 0; j < k_; j++) {
+      array[bitpos / 8] |= (1 << (bitpos & 7));
+      bitpos += dpos, bitpos >= bits ? bitpos -= bits : 0;
+    }
+  }
+
   bool Find(SKey key, const Slice& bloom_bits) {
     if (bloom_bits.len() * 8 < 64) return true;
     size_t bits = bloom_bits.len() * 8;
     const uint8_t* array = bloom_bits.data();
-    uint32_t h = BloomHash(key);
+    size_t h = BloomHash(key);
     // use the double-hashing in leveldb, i.e. h_k = h1 + k * h2
-    const uint32_t delta = (h >> 17) | (h << 15);
-    uint32_t bitpos = h % bits, dpos = delta % bits;
+    const size_t delta = Hash8(h, 0x202312201805);
+    size_t bitpos = h % bits, dpos = delta % bits;
     for (size_t j = 0; j < k_; j++) {
       if (!(array[bitpos / 8] & (1 << (bitpos & 7)))) return false;
       bitpos += dpos, bitpos >= bits ? bitpos -= bits : 0;

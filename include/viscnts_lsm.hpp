@@ -1303,7 +1303,7 @@ class EstimateLSM {
   uint8_t compact_thread_state_{0};
   size_t physical_size_limit_{0};
   size_t hot_size_limit_{0};
-  size_t phy_size_;
+  size_t phy_size_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1634,6 +1634,9 @@ class EstimateLSM {
   }
 
   void set_proper_phy_limit() {
+    if (phy_size_ == 0) {
+      return;
+    }
     physical_size_limit_ = std::max(10 * kSSTable, phy_size_);
   }
 

@@ -1,57 +1,81 @@
 #include "hash.hpp"
 namespace viscnts_lsm {
 
-// copy from leveldb
-uint32_t Hash(const char* data, size_t n, uint32_t seed) {
-  // Similar to murmur hash
-  const uint32_t m = 0xc6a4a793;
-  const uint32_t r = 24;
-  const char* limit = data + n;
-  uint32_t h = seed ^ (n * m);
+// https://github.com/hhrhhr/MurmurHash-for-Lua/blob/master/MurmurHash64A.c
+size_t Hash(const char* _data, size_t n, size_t seed) {
+  const uint64_t m = 0xc6a4a7935bd1e995LLU;
+  const int r = 47;
 
-  // Pick up four bytes at a time
-  while (data + 4 <= limit) {
-    uint32_t w = *reinterpret_cast<const uint32_t*>(data);
-    data += 4;
-    h += w;
+  uint64_t h = seed ^ (n * m);
+
+  const uint64_t* data = (const uint64_t*)_data;
+  const uint64_t* end = (n >> 3) + data;
+
+  while (data != end) {
+    uint64_t k = *data++;
+
+    k *= m;
+    k ^= k >> r;
+    k *= m;
+
+    h ^= k;
     h *= m;
-    h ^= (h >> 16);
   }
 
-  // Pick up remaining bytes
-  switch (limit - data) {
+  const unsigned char* data2 = (const unsigned char*)data;
+
+  switch (n & 7) {
+    case 7:
+      h ^= (uint64_t)(data2[6]) << 48;
+    case 6:
+      h ^= (uint64_t)(data2[5]) << 40;
+    case 5:
+      h ^= (uint64_t)(data2[4]) << 32;
+    case 4:
+      h ^= (uint64_t)(data2[3]) << 24;
     case 3:
-      h += static_cast<unsigned char>(data[2]) << 16;
+      h ^= (uint64_t)(data2[2]) << 16;
     case 2:
-      h += static_cast<unsigned char>(data[1]) << 8;
+      h ^= (uint64_t)(data2[1]) << 8;
     case 1:
-      h += static_cast<unsigned char>(data[0]);
+      h ^= (uint64_t)(data2[0]);
       h *= m;
-      h ^= (h >> r);
-      break;
-  }
+  };
+
+  h ^= h >> r;
+  h *= m;
+  h ^= h >> r;
+
   return h;
 }
 
-// copy from leveldb
-uint32_t Hash8(const char* data, uint32_t seed) {
-  // Similar to murmur hash
-  const uint32_t m = 0xc6a4a793;
-  const uint32_t r = 24;
-  uint32_t h = seed ^ (8 * m);
-  uint32_t w = *reinterpret_cast<const uint32_t*>(data);
-  uint32_t w2 = *reinterpret_cast<const uint32_t*>(data + 4);
-  h += w;
+size_t Hash(std::string_view str, size_t seed) {
+  return Hash(str.data(), str.length(), seed);
+}
+
+size_t Hash8(const void* _data, size_t seed) {
+  const uint64_t m = 0xc6a4a7935bd1e995LLU;
+  const int r = 47;
+
+  uint64_t h = seed ^ m;
+
+  const uint64_t* data = (const uint64_t*)_data;
+  uint64_t k = *data;
+
+  k *= m;
+  k ^= k >> r;
+  k *= m;
+
+  h ^= k;
   h *= m;
-  h ^= (h >> 16);
-  h += w2;
+
+  h ^= h >> r;
   h *= m;
-  h ^= (h >> 16);
+  h ^= h >> r;
+
   return h;
 }
 
-uint32_t Hash8(const char* data) {
-  return Hash8(data, 0x114514);
-}
+size_t Hash8(size_t data, size_t seed) { return Hash8(&data, seed); }
 
 }  // namespace viscnts_lsm

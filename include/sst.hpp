@@ -374,7 +374,8 @@ class SSTBuilder {
       if (offsets.size() == 0) first_key = kv.key();
     }
     offsets.push_back(now_offset);
-    keys_.emplace_back(kv.key(), kv.value().is_stable());
+    keys_.emplace_back(BloomFilter::BloomHash(kv.key()), kv.value().is_stable());
+    stable_cnt_ += kv.value().is_stable();
     index.back().second.add(kv.key(), kv.value());
     now_offset += kv.size();
     file_->append_key(kv);
@@ -438,6 +439,7 @@ class SSTBuilder {
     lst_offset = 0;
     counts = 0;
     size_ = 0;
+    stable_cnt_ = 0;
     index.clear();
     offsets.clear();
     keys_.clear();
@@ -473,24 +475,27 @@ class SSTBuilder {
 
   void make_bloom() {
     BloomFilter bf(kBloomFilterBitNum);
-    check_hot_buffer_ = bf.Create(keys_.size());
-    check_stably_hot_buffer_ = bf.Create(keys_.size());
+    // * 2 so that the correct rate 0.7 --> 0.9 in test_stable_hot in test_viscnts.cpp
+    check_hot_buffer_ = bf.Create((keys_.size() - stable_cnt_) * 2);
+    check_stably_hot_buffer_ = bf.Create(stable_cnt_ * 2);
     for (auto& [k, is_stably_hot] : keys_) {
       if (is_stably_hot) {
-        bf.Add(k.ref(), check_stably_hot_buffer_);
+        bf.Add(k, check_stably_hot_buffer_);
+      } else {
+        bf.Add(k, check_hot_buffer_);
       }
-      bf.Add(k.ref(), check_hot_buffer_);
     }
   }
 
  private:
   uint32_t now_offset, lst_offset, counts, size_;
   std::vector<std::pair<IndSKey, IndexDataT>> index;
-  std::vector<std::pair<IndSKey, int>> keys_;
+  std::vector<std::pair<size_t, int>> keys_;
   std::vector<uint32_t> offsets;
   IndSKey lst_key, first_key;
   IndSlice check_hot_buffer_;
   IndSlice check_stably_hot_buffer_;
+  size_t stable_cnt_{0};
 };
 
 }
