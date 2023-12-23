@@ -1,4 +1,6 @@
 #include "hash.hpp"
+#include <string_view>
+
 namespace viscnts_lsm {
 
 // https://github.com/hhrhhr/MurmurHash-for-Lua/blob/master/MurmurHash64A.c
