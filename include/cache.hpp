@@ -5,6 +5,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <unordered_map>
 
 #include "alloc.hpp"
 #include "common.hpp"

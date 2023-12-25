@@ -2,6 +2,7 @@
 #ifndef __KEY_H__
 #define __KEY_H__
 #include "common.hpp"
+#include <array>
 #include <random>
 
 namespace viscnts_lsm {
