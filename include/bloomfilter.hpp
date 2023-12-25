@@ -11,7 +11,7 @@ namespace viscnts_lsm {
 
 
 
-constexpr auto kBloomFilterBitNum = 10;
+constexpr auto kBloomFilterBitNum = 20;
 
 class BloomFilter {
  private:

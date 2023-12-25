@@ -722,7 +722,7 @@ class EstimateLSM {
     // then we don't need to seek other levels. 
     bool is_stably_hot(SKey key) const {
       bool cnt = 0;
-      for (int i = tree_.size() - 1; i >= 0; --i) {
+      for (int i = 0; i < tree_.size(); i++) {
         if (tree_[i]->check_stably_hot(key, comp_)) {
           return true;
         }

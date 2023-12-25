@@ -476,8 +476,8 @@ class SSTBuilder {
   void make_bloom() {
     BloomFilter bf(kBloomFilterBitNum);
     // * 2 so that the correct rate 0.7 --> 0.9 in test_stable_hot in test_viscnts.cpp
-    check_hot_buffer_ = bf.Create((keys_.size() - stable_cnt_) * 2);
-    check_stably_hot_buffer_ = bf.Create(stable_cnt_ * 2);
+    check_hot_buffer_ = bf.Create((keys_.size() - stable_cnt_));
+    check_stably_hot_buffer_ = bf.Create(stable_cnt_);
     for (auto& [k, is_stably_hot] : keys_) {
       if (is_stably_hot) {
         bf.Add(k, check_stably_hot_buffer_);
