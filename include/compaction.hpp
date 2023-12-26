@@ -10,7 +10,6 @@
 
 namespace viscnts_lsm {
 
-constexpr size_t kSSTable = 1ull << 24;
 template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class Compaction {
   // builder_ is used to build one file

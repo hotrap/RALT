@@ -13,6 +13,7 @@ namespace viscnts_lsm {
 
 const static size_t kMagicNumber = 0x25a65facc3a23559;  // echo viscnts | sha1sum
 const static size_t kPageSize = 1 << 12;
+constexpr size_t kSSTable = 1ull << 24;
 
 template <typename KeyCompT, typename ValueT>
 class SSTIterator {
@@ -476,7 +477,7 @@ class SSTBuilder {
   void make_bloom() {
     BloomFilter bf(kBloomFilterBitNum);
     // * 2 so that the correct rate 0.7 --> 0.9 in test_stable_hot in test_viscnts.cpp
-    check_hot_buffer_ = bf.Create((keys_.size() - stable_cnt_));
+    check_hot_buffer_ = bf.Create(keys_.size() - stable_cnt_);
     check_stably_hot_buffer_ = bf.Create(stable_cnt_);
     for (auto& [k, is_stably_hot] : keys_) {
       if (is_stably_hot) {

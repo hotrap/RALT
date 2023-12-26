@@ -721,7 +721,7 @@ class EstimateLSM {
     // Because it may have stably hot tag in the largest level
     // then we don't need to seek other levels. 
     bool is_stably_hot(SKey key) const {
-      bool cnt = 0;
+      int cnt = 0;
       for (int i = 0; i < tree_.size(); i++) {
         if (tree_[i]->check_stably_hot(key, comp_)) {
           return true;

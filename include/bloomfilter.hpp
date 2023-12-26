@@ -29,6 +29,7 @@ class BloomFilter {
     bits = std::max<size_t>(64, bits);
     size_t bytes = (bits + 7) / 8;
     IndSlice out(bytes);
+    std::memset(out.data(), 0, bytes);
     return out;
   }
 
@@ -59,7 +60,7 @@ class BloomFilter {
   }
 
   bool Find(SKey key, const Slice& bloom_bits) {
-    if (bloom_bits.len() * 8 < 64) return true;
+    if (bloom_bits.len() * 8 < 64) return false;
     size_t bits = bloom_bits.len() * 8;
     const uint8_t* array = bloom_bits.data();
     size_t h = BloomHash(key);

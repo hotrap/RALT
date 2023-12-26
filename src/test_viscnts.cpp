@@ -385,6 +385,7 @@ void test_stable_hot() {
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
+  auto data3 = gen_testdata(N, gen);
   StopWatch sw;
   input_all(vc, data, TH, vlen);
   input_all(vc, data2, TH, vlen);
@@ -417,6 +418,22 @@ void test_stable_hot() {
         for (int j = L; j < R; j++) {
           char a[30];
           sum += !vc.IsStablyHot(convert_to_slice(a, data2[j].first, data2[j].second));
+        }
+        DB_INFO("{}/{}", sum, R - L);
+      }));    
+    }
+  }
+  print_memory();
+  DB_INFO("false query end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();
+  {
+    std::vector<std::future<void>> h;
+    for (int i = 0; i < TH; i++) {
+      h.push_back(std::async([L = N / TH * i, R = N / TH * (i + 1), &data3, &vc]() {
+        int sum = 0;
+        for (int j = L; j < R; j++) {
+          char a[30];
+          sum += !vc.IsStablyHot(convert_to_slice(a, data3[j].first, data3[j].second));
         }
         DB_INFO("{}/{}", sum, R - L);
       }));    
