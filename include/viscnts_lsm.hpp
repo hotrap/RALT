@@ -1304,6 +1304,7 @@ class EstimateLSM {
   size_t physical_size_limit_{0};
   size_t hot_size_limit_{0};
   size_t phy_size_{0};
+  size_t real_hot_size_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1529,6 +1530,7 @@ class EstimateLSM {
         break;
       }
     }
+    real_hot_size_ = sv_->get_current_hot_size();
     sv_modify_mutex_.unlock();
   }
 
@@ -1638,6 +1640,14 @@ class EstimateLSM {
       return;
     }
     physical_size_limit_ = std::max(10 * kSSTable, phy_size_);
+  }
+
+  size_t get_real_hs_size() const {
+    return real_hot_size_;
+  }
+
+  size_t get_real_phy_size() const {
+    return phy_size_;
   }
 
 
@@ -1934,6 +1944,14 @@ class alignas(128) VisCnts {
 
   void set_proper_phy_limit() {
     tree->set_proper_phy_limit();
+  }
+
+  size_t get_real_hs_size() const {
+    return tree->get_real_hs_size();
+  }
+
+  size_t get_real_phy_size() const {
+    return tree->get_real_phy_size();
   }
 
 

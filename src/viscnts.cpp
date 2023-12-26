@@ -227,3 +227,15 @@ size_t VisCnts::DecayCount() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->decay_count();
 }
+
+
+size_t VisCnts::GetRealHotSetSize() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->get_real_hs_size();
+}
+
+
+size_t VisCnts::GetRealPhySize() {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  return vc->get_real_phy_size();
+}

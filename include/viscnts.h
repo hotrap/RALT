@@ -36,6 +36,8 @@ public:
   size_t GetPhySizeLimit();
   size_t GetHotSetSizeLimit();
   size_t DecayCount();
+  size_t GetRealHotSetSize();
+  size_t GetRealPhySize();
 
   struct Properties {
     static const std::string kReadBytes;
