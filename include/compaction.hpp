@@ -52,6 +52,7 @@ class Compaction {
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = std::move(builder_.range());
     vec_newfiles_.back().hot_size = hot_size_ - lst_hot_size_;
+    vec_newfiles_.back().key_n = builder_.get_key_n();
     vec_newfiles_.back().check_hot_buffer = std::move(builder_.get_check_hot_buffer());
     vec_newfiles_.back().check_stably_hot_buffer = std::move(builder_.get_check_stably_hot_buffer());
     lst_hot_size_ = hot_size_;
@@ -62,6 +63,7 @@ class Compaction {
     std::string filename;
     size_t file_id;
     size_t size;
+    size_t key_n;
     std::pair<IndSKey, IndSKey> range;
     double hot_size;
     IndSlice check_hot_buffer;

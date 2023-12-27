@@ -93,6 +93,9 @@ class TickValue {
   void set_stable(bool x) {
     vlen_ = (vlen_ >> 1) << 1 | x;
   }
+  size_t get_count() const {
+    return 1;
+  }
 };
 
 class LRUTickValue {
@@ -123,6 +126,9 @@ class LRUTickValue {
   void set_stable(bool x) {
     vlen_ = (vlen_ >> 1) << 1 | x;
   }
+  size_t get_count() const {
+    return 1;
+  }
 };
 
 
@@ -130,9 +136,10 @@ class ExpTickValue {
   double tick_{0};
   double score_{0};
   size_t vlen_{0};
+  size_t count_{0};
  public:
   ExpTickValue() {}
-  ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 1) {}
+  ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 4), count_(1) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     if (tick_ < v.tick_) {
       score_ = pow(0.9999999, v.tick_ - tick_) * score_ + v.score_;
@@ -140,10 +147,11 @@ class ExpTickValue {
     } else {
       score_ = pow(0.9999999, tick_ - v.tick_) * v.score_ + score_;
     }
-    set_stable(1);
+    count_ += v.count_;
+    set_stable(10);
   }
   size_t get_hot_size() const {
-    return vlen_ >> 1;
+    return vlen_ >> 4;
   }
   double get_tick() const {
     return log(score_) + log(0.9999999) * (-tick_);
@@ -155,10 +163,16 @@ class ExpTickValue {
     return 0;
   }
   bool is_stable() const {
-    return vlen_ & 1;
+    return (vlen_ & 15) != 0;
   }
-  void set_stable(bool x) {
-    vlen_ = (vlen_ >> 1) << 1 | x;
+  void set_stable(int x) {
+    vlen_ = (vlen_ >> 4) << 4 | x;
+  }
+  size_t get_count() const {
+    return count_;
+  }
+  void decrease_stable() {
+    set_stable(std::max<int>((vlen_ & 15) - 1, 0));
   }
 };
 
@@ -266,6 +280,7 @@ class IndexData {
       return offset_;
     }
 };
+#pragma pack()
 
 // using DataKey = BlockKey<SKey, SValue>;
 // using IndexKey = BlockKey<SKey, uint32_t>;

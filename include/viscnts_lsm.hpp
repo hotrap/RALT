@@ -210,6 +210,7 @@ class EstimateLSM {
     int global_range_counts_;
     double avg_hot_size_;
     double global_hot_size_;
+    size_t key_n_;
     std::string filename_;
     IndSlice check_hot_buffer_;
     IndSlice check_stably_hot_buffer_;
@@ -219,6 +220,7 @@ class EstimateLSM {
         : file_(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), data.range, file_index_cache, file_key_cache, comp),
           deleted_ranges_(),
           global_hot_size_(data.hot_size),
+          key_n_(data.key_n),
           filename_(data.filename),
           check_hot_buffer_(std::move(data.check_hot_buffer)),
           check_stably_hot_buffer_(std::move(data.check_stably_hot_buffer)) {
@@ -266,6 +268,9 @@ class EstimateLSM {
       BloomFilter bf(kBloomFilterBitNum);
       return bf.Find(key, check_hot_buffer_.ref());
     }
+    size_t get_key_n() const {
+      return key_n_;
+    }
     // void update_hot_size_by_tick_threshold(TickFilter<ValueT> tick_filter) {
     //   double new_hot_size = 0;
     //   size_t new_counts = 0;
@@ -289,6 +294,7 @@ class EstimateLSM {
     size_t size_{0};
     size_t data_size_{0};
     double hot_size_{0};
+    size_t key_n_{0};
   public:
     // iterator for level
     class LevelIterator {
@@ -468,6 +474,7 @@ class EstimateLSM {
         size_ -= par->size();
         data_size_ -= par->data_size();
         hot_size_ -= par->hot_size();
+        key_n_ -= par->get_key_n();
       }
       head_.erase(head_.begin() + mni, head_.begin() + std::min<size_t>(mni + cnt, head_.size()));
       return ret;
@@ -490,6 +497,7 @@ class EstimateLSM {
         size_ -= par->size();
         data_size_ -= par->data_size();
         hot_size_ -= par->hot_size();
+        key_n_ -= par->get_key_n();
       }
       head_.erase(head_.begin() + l, head_.begin() + r + 1);
       return ret;
@@ -504,6 +512,7 @@ class EstimateLSM {
         size_ -= par->size();
         data_size_ -= par->data_size();
         hot_size_ -= par->hot_size();
+        key_n_ -= par->get_key_n();
       }
       head_.erase(head_.begin() + l, head_.begin() + r);
       return ret;
@@ -517,6 +526,7 @@ class EstimateLSM {
         size_ += par->size();
         data_size_ += par->data_size();
         hot_size_ += par->hot_size();
+        key_n_ += par->get_key_n();
       }
       int pos = head_.size();
       for (int i = 0; i < head_.size(); i++) {
@@ -560,6 +570,7 @@ class EstimateLSM {
       size_ += par->size();
       data_size_ += par->data_size();
       hot_size_ += par->hot_size();
+      key_n_ += par->get_key_n();
       head_.push_back(std::move(par));
     }
 
@@ -623,6 +634,10 @@ class EstimateLSM {
       return head_.size();
     }
 
+    size_t get_key_n() const {
+      return key_n_;
+    }
+
     // void update_hot_size_by_tick_threshold(TickFilter<ValueT> tick_filter) {
     //   double new_hot_size = 0;
     //   for (auto& a : head_) {
@@ -663,6 +678,7 @@ class EstimateLSM {
     std::vector<atomic_shared_ptr<Level>> tree_;
     std::atomic<uint32_t> ref_;
     double hot_size_overestimate_{0}, size_{0};
+    size_t key_n_{0};
     KeyCompT comp_;
     size_t decay_step_{0};
 
@@ -672,7 +688,7 @@ class EstimateLSM {
     SuperVersion(KeyCompT comp)
         : ref_(1), comp_(comp) {}
     SuperVersion(const SuperVersion& sv)
-        : ref_(1), hot_size_overestimate_(sv.hot_size_overestimate_), size_(sv.size_), comp_(sv.comp_), decay_step_(sv.decay_step_) {
+        : ref_(1), hot_size_overestimate_(sv.hot_size_overestimate_), size_(sv.size_), key_n_(sv.key_n_), comp_(sv.comp_), decay_step_(sv.decay_step_) {
           for (auto& level : sv.tree_) {
             tree_.push_back(make_atomic_shared<Level>(*level));
           }
@@ -693,7 +709,7 @@ class EstimateLSM {
       for (auto& a : tree_) {
         str += "(" + std::to_string(a->pars_cnt()) + ", " + std::to_string(a->size() / (double)kSSTable) + "), ";
       }
-      str += "], step: " + std::to_string(decay_step_) + ", hot_size: " + std::to_string(hot_size_overestimate_) + ", size: " + std::to_string(size_);
+      str += "], step: " + std::to_string(decay_step_) + ", hot_size: " + std::to_string(hot_size_overestimate_) + ", size: " + std::to_string(size_), ", key n: " + std::to_string(key_n_);
       return str;
     }
 
@@ -1253,9 +1269,12 @@ class EstimateLSM {
 
     double get_size() const { return size_; }
 
+    size_t get_key_n() const { return key_n_; }
+
     void recalc_stats() {
       hot_size_overestimate_ = _calc_current_hot_size();
       size_ = _calc_current_size();
+      key_n_ = _calc_key_n();
     }
 
    private:
@@ -1267,6 +1286,11 @@ class EstimateLSM {
     double _calc_current_size() {
       double ret = 0;
       for (auto& a : tree_) ret += a->size();
+      return ret;
+    }
+    size_t _calc_key_n() {
+      size_t ret = 0;
+      for (auto& a : tree_) ret += a->get_key_n();
       return ret;
     }
     // Sort levels by size and remove empty levels.
@@ -1303,8 +1327,11 @@ class EstimateLSM {
   uint8_t compact_thread_state_{0};
   size_t physical_size_limit_{0};
   size_t hot_size_limit_{0};
+  size_t max_hot_size_limit_{0};
+  size_t min_hot_size_limit_{0};
   size_t phy_size_{0};
   size_t real_hot_size_{0};
+  size_t key_n_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1340,7 +1367,7 @@ class EstimateLSM {
     auto next() { return iter_.next(); }
   };
   EstimateLSM(Env* env, size_t file_cache_size, std::unique_ptr<FileName>&& filename,
-              KeyCompT comp, std::atomic<size_t>& current_tick, size_t hot_size_limit, size_t physical_size_limit)
+              KeyCompT comp, std::atomic<size_t>& current_tick, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size_limit)
       : env_(env),
         filename_(std::move(filename)),
         comp_(comp),
@@ -1350,7 +1377,9 @@ class EstimateLSM {
         file_cache_(std::make_unique<FileChunkCache>(file_cache_size)),
         current_tick_(current_tick),
         physical_size_limit_(physical_size_limit),
-        hot_size_limit_(hot_size_limit) {
+        hot_size_limit_(initial_hot_size),
+        max_hot_size_limit_(max_hot_size),
+        min_hot_size_limit_(min_hot_size) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
     clockid_t compact_thread_clock_id;
     pthread_getcpuclockid(compact_thread_.native_handle(),
@@ -1465,6 +1494,10 @@ class EstimateLSM {
     return hot_size_overestimate_;
   }
 
+  size_t get_key_n() {
+    return key_n_;
+  }
+
   
   double get_current_phy_size() {
     return phy_size_;
@@ -1510,7 +1543,9 @@ class EstimateLSM {
     logger("[tick threshold for hot]: ", tick_threshold_.load(), ", [for phy]: ", decay_tick_threshold_.load());
     while(true) {
       Timer sw;
-      auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay);
+      auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay, [](auto& key, auto& value) {
+        value.decrease_stable();
+      });
       stat_decay_write_time_ += sw.GetTimeInNanos();
 
       if (new_sv == nullptr) {
@@ -1573,20 +1608,47 @@ class EstimateLSM {
   void update_tick_threshold() {
     KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
     KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
+    KthEst<double> est_cnt(kEstPointNum, key_n_ * 0.9);
     est_hot.pre_scan1(get_current_hot_size());
     est_phy.pre_scan1(get_current_phy_size());
+    est_cnt.pre_scan1(key_n_);
     auto hot_tick_filter = get_tick_filter();
     size_t total_hot_size = 0;
+    size_t total_n = 0, total_cnt = 0, stable_n = 0, stable_hot_size = 0;
     auto sv = get_current_sv();
     logger(sv->to_string());
     Timer sw;
     sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
       est_phy.scan1(-tick, phy_size);
       est_hot.scan1(-tick, hot_size);
+      est_cnt.scan1(-tick, 1);
       total_hot_size += hot_size;
+      total_n += 1;
+      total_cnt += value.get_count();
+      if (value.is_stable()) {
+        stable_n += 1;
+        stable_hot_size += hot_size;
+      }
+    });
+    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::max<size_t>(0.5 * hot_size_limit_, std::min<size_t>(std::min<size_t>(1.5 * hot_size_limit_, max_hot_size_limit_), stable_hot_size * 1.1)));
+    est_cnt.sort();
+    std::vector<double> thrs;
+    for (int i = 1; i <= 19; i++) thrs.push_back(-est_cnt.get_from_points(total_n * 0.05 * i));
+    std::vector<size_t> firstx0_n(thrs.size()), firstx0_cnt(thrs.size());
+    // auto cnt_tick_threshold = -est_cnt.get_from_points(total_n * 0.9);
+    sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
+      for (int i = 0; i < thrs.size(); i++)
+        if (TickFilter<ValueT>(thrs[i]).check(value)) {
+          firstx0_n[i] += 1;
+          firstx0_cnt[i] += value.get_count();
+        }
     });
     sv->unref();
-    logger("total_hot_size: ", total_hot_size);
+    logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size);
+    logger("total_cnt: ", total_cnt, ", total_n: ", total_n);
+    for (int i = 0; i < thrs.size(); i++) {
+      logger(0.05 * i, ": first90_n: ", firstx0_n[i], ", first90_cnt: ", firstx0_cnt[i]);
+    }
     est_hot.sort();
     est_phy.sort();
     tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
@@ -1737,6 +1799,7 @@ class EstimateLSM {
       auto old_sv = sv_;
       sv_ = new_sv;
       hot_size_overestimate_ = new_sv->get_current_hot_size();
+      key_n_ = new_sv->get_key_n();
       phy_size_ = new_sv->get_size();
       sv_tick_++;
       sv_load_mutex_.unlock();
@@ -1769,7 +1832,6 @@ class alignas(128) VisCnts {
   std::atomic<size_t> current_tick_{0};
   std::atomic<size_t> stat_input_bytes_{0};
   KeyCompT comp_;
-  size_t hot_set_limit_;
   std::mutex decay_m_;
   std::atomic<bool> is_updating_tick_threshold_{false};
   bool terminate_signal_{false};
@@ -1783,9 +1845,9 @@ class alignas(128) VisCnts {
  public:
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
   // Use different file path for two trees.
-  VisCnts(KeyCompT comp, const std::string& path, size_t hot_size, size_t physical_size)
-    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, hot_size, physical_size)},
-      comp_(comp), hot_set_limit_(hot_size) {
+  VisCnts(KeyCompT comp, const std::string& path, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size)
+    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, initial_hot_size, max_hot_size, min_hot_size, physical_size)},
+      comp_(comp) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
         clockid_t decay_cpu_clock_id;
         pthread_getcpuclockid(decay_thread_.native_handle(),
@@ -1837,12 +1899,12 @@ class alignas(128) VisCnts {
   /* check if hot size exceeds the limit. If so, trigger decay.*/
   void check_decay() {
     if (cache_policy == CachePolicyT::kUseDecay) {
-      if (weight_sum() > hot_set_limit_) {
-        std::unique_lock lck(decay_m_);
-        if (weight_sum() > hot_set_limit_) {
-          tree->trigger_decay();
-        }
-      }  
+      // if (weight_sum() > hot_set_limit_) {
+      //   std::unique_lock lck(decay_m_);
+      //   if (weight_sum() > hot_set_limit_) {
+      //     tree->trigger_decay();
+      //   }
+      // }  
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       if (tree->check_decay_condition() && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
         decay_cv_.notify_one(); 
@@ -1853,7 +1915,7 @@ class alignas(128) VisCnts {
     std::unique_lock lck(decay_m_);
     tree->all_flush();
     if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
-      if (weight_sum() > hot_set_limit_ * (1 + kHotSetExceedLimit)) {
+      if (tree->check_decay_condition()) {
         update_tick_threshold();
       }
     }
@@ -1865,30 +1927,30 @@ class alignas(128) VisCnts {
   void update_tick_threshold() {
     decay_count_ += 1;
     if (cache_policy == CachePolicyT::kUseTick) {
-      auto hot_size = weight_sum();
-      KthEst<double> est(kEstPointNum, hot_set_limit_);
-      est.pre_scan1(hot_size);
-      auto append_all_to = [&](auto&& iter, auto&& scan_f) {
-        for(; iter->valid(); iter->next()) {
-          auto L = iter->read();
-          // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
-          // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
-          scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
-        }
-      };
-      StopWatch sw;
-      logger("first scan");
-      append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-      // logger("first scan end");
-      est.pre_scan2();
-      // logger("second scan");
-      append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-      // logger("second scan end");
-      double new_tick_threshold = est.get_interplot_kth();
-      tree->set_tick_threshold(-new_tick_threshold);
-      tree->set_decay_tick_threshold(-new_tick_threshold);
-      tree->update_tick_threshold();
-      logger("threshold: ", -new_tick_threshold, ", weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
+      // auto hot_size = weight_sum();
+      // KthEst<double> est(kEstPointNum, hot_set_limit_);
+      // est.pre_scan1(hot_size);
+      // auto append_all_to = [&](auto&& iter, auto&& scan_f) {
+      //   for(; iter->valid(); iter->next()) {
+      //     auto L = iter->read();
+      //     // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
+      //     // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
+      //     scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+      //   }
+      // };
+      // StopWatch sw;
+      // logger("first scan");
+      // append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
+      // // logger("first scan end");
+      // est.pre_scan2();
+      // // logger("second scan");
+      // append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
+      // // logger("second scan end");
+      // double new_tick_threshold = est.get_interplot_kth();
+      // tree->set_tick_threshold(-new_tick_threshold);
+      // tree->set_decay_tick_threshold(-new_tick_threshold);
+      // tree->update_tick_threshold();
+      // logger("threshold: ", -new_tick_threshold, ", weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
     } else if (cache_policy == CachePolicyT::kUseFasterTick) {
       // We sample some points and find the oldest 10% * SIZE records. These records are removed in major compaction (update_tick_threshold_and_update_est).
       // We sample points when we are doing compaction, and we get threshold from those points. 
@@ -1905,31 +1967,24 @@ class alignas(128) VisCnts {
   }
 
   void set_new_hot_limit(size_t new_limit) {
-    decay_m_.lock();
-    hot_set_limit_ = new_limit;
     tree->set_hot_set_limit(new_limit);
     is_first_tick_update_ = true;
     decay_count_ = 0;
-    decay_m_.unlock();
     check_decay();
   }
 
   void set_new_phy_limit(size_t new_limit) {
-    decay_m_.lock();
     tree->set_phy_limit(new_limit);
     is_first_tick_update_ = true;
     decay_count_ = 0;
-    decay_m_.unlock();
     check_decay();
   }
 
   void set_all_limit(size_t new_hs_limit, size_t new_phy_limit) {
-    decay_m_.lock();
     tree->set_hot_set_limit(new_hs_limit);
     tree->set_phy_limit(new_phy_limit);
     is_first_tick_update_ = true;
     decay_count_ = 0;
-    decay_m_.unlock();
     check_decay();
   }
 
@@ -2000,7 +2055,7 @@ class alignas(128) VisCnts {
     void decay_thread() {
       while(!terminate_signal_) {
         std::unique_lock lck(decay_m_);
-        decay_cv_.wait(lck, [&](){ return terminate_signal_ || weight_sum() > hot_set_limit_ * (1 + kHotSetExceedLimit); });
+        decay_cv_.wait(lck, [&](){ return terminate_signal_ || tree->check_decay_condition(); });
         is_updating_tick_threshold_ = true;
         if (terminate_signal_) {
           return;

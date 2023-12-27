@@ -381,6 +381,7 @@ class SSTBuilder {
     now_offset += kv.size();
     file_->append_key(kv);
     size_ += kv.size();
+    key_n_ += 1;
   }
   template <typename Value>
   void append(const std::pair<SKey, Value>& kv) {
@@ -441,6 +442,7 @@ class SSTBuilder {
     counts = 0;
     size_ = 0;
     stable_cnt_ = 0;
+    key_n_ = 0;
     index.clear();
     offsets.clear();
     keys_.clear();
@@ -454,6 +456,9 @@ class SSTBuilder {
 
   size_t size() { return now_offset; }
   size_t kv_size() { return size_; }
+  size_t get_key_n() const {
+    return key_n_;
+  }
 
   std::pair<IndSKey, IndSKey> range() {
     if (index.size())
@@ -497,6 +502,7 @@ class SSTBuilder {
   IndSlice check_hot_buffer_;
   IndSlice check_stably_hot_buffer_;
   size_t stable_cnt_{0};
+  size_t key_n_{0};
 };
 
 }

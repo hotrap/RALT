@@ -127,7 +127,7 @@ void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e6, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   DB_INFO("gen_testdata end.");
@@ -211,7 +211,7 @@ void test_decay_simple() {
   size_t max_hot_set_size = 1e9;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 100, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
@@ -246,8 +246,8 @@ void test_decay_hit_rate() {
   size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
   size_t max_hot_set_cnt = N * 0.05;
   size_t max_hot_set_size = max_hot_set_cnt * vlen;
-  size_t max_physical_size = 60 * max_hot_set_cnt;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size * 1.1, max_physical_size);
+  size_t max_physical_size = 200 * max_hot_set_cnt;
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", N * 0.07 * vlen, N * 0.01 * vlen, N * 0.07 * vlen, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
   auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_cnt);
@@ -256,9 +256,9 @@ void test_decay_hit_rate() {
   auto cold_data = decltype(data)(data.begin() + max_hot_set_cnt, data.end());
   StopWatch sw;
   auto real_data = decltype(data)();
-  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N / 5; i++) {
+  for (int i = 0, cnt0 = 0, cnt1 = 0; i < N; i++) {
     std::uniform_real_distribution<> dis(0, 1);
-    if (dis(gen) < 0.95) {
+    if (dis(gen) < 0.8) {
       std::uniform_int_distribution<> dis2(0, hot_data.size() - 1);
       real_data.push_back(hot_data[i % max_hot_set_cnt]);
     } else {
@@ -307,7 +307,7 @@ void test_parallel() {
   size_t max_hot_set_size = 1e9;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, NBLOCK = 1e5, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
     handles.push_back(std::async([&, i]() {
@@ -340,7 +340,7 @@ void test_ishot_simple() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
@@ -381,7 +381,7 @@ void test_stable_hot() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e6, TH = 16, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
@@ -447,7 +447,7 @@ void test_lowerbound() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202309252052);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
@@ -462,10 +462,10 @@ void test_lowerbound() {
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
-  // test_decay_hit_rate();
+  test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  test_stable_hot();
+  // test_stable_hot();
   // test_lowerbound();
 }

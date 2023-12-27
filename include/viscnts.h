@@ -17,7 +17,7 @@ public:
   VisCnts(const VisCnts &) = delete;
   ~VisCnts();
   static VisCnts New(const rocksdb::Comparator *ucmp, const char *dir,
-                     size_t max_hot_set_size, size_t max_physical_size);
+                     size_t init_hot_set_size, size_t max_hot_set_size, size_t min_hot_set_size, size_t max_physical_size);
   size_t TierNum();
   void Access(rocksdb::Slice key, size_t vlen);
   bool IsHot(rocksdb::Slice key);

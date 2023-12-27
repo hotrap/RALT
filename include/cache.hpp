@@ -147,7 +147,9 @@ class RefChunk {
 template<typename KeyT>
 class LRUChunkCache {
   public:
-    LRUChunkCache(size_t size_limit) : size_limit_(size_limit), hand_(lru_list_.tail()) {}
+    LRUChunkCache(size_t size_limit) : size_limit_(size_limit) {
+      hand_ = lru_list_.tail();
+    }
     std::optional<RefChunk> try_get_cache(KeyT key) {
       std::shared_lock lck(m_);
       auto hash_it = chunks_.find(key);
