@@ -211,6 +211,7 @@ class EstimateLSM {
     double avg_hot_size_;
     double global_hot_size_;
     size_t key_n_;
+    size_t real_phy_size_{0};
     std::string filename_;
     IndSlice check_hot_buffer_;
     IndSlice check_stably_hot_buffer_;
@@ -221,6 +222,7 @@ class EstimateLSM {
           deleted_ranges_(),
           global_hot_size_(data.hot_size),
           key_n_(data.key_n),
+          real_phy_size_(data.real_phy_size),
           filename_(data.filename),
           check_hot_buffer_(std::move(data.check_hot_buffer)),
           check_stably_hot_buffer_(std::move(data.check_stably_hot_buffer)) {
@@ -271,6 +273,9 @@ class EstimateLSM {
     size_t get_key_n() const {
       return key_n_;
     }
+    size_t get_real_phy_size() const {
+      return real_phy_size_;
+    }
     // void update_hot_size_by_tick_threshold(TickFilter<ValueT> tick_filter) {
     //   double new_hot_size = 0;
     //   size_t new_counts = 0;
@@ -295,6 +300,7 @@ class EstimateLSM {
     size_t data_size_{0};
     double hot_size_{0};
     size_t key_n_{0};
+    size_t real_phy_size_{0};
   public:
     // iterator for level
     class LevelIterator {
@@ -458,6 +464,9 @@ class EstimateLSM {
       if (where == -1) return false;
       return head_[where]->check_stably_hot(key);
     }
+    size_t get_real_phy_size() const {
+      return real_phy_size_;
+    }
     // Get minimal overlapping SSTs.
     std::vector<atomic_shared_ptr<Partition>> get_min_overlap_pars(const Level& next_level, int cnt, KeyCompT comp) {
       int lp = 0, rp = 0, mn = 1e9, mni = 0;
@@ -475,6 +484,7 @@ class EstimateLSM {
         data_size_ -= par->data_size();
         hot_size_ -= par->hot_size();
         key_n_ -= par->get_key_n();
+        real_phy_size_ -= par->get_real_phy_size();
       }
       head_.erase(head_.begin() + mni, head_.begin() + std::min<size_t>(mni + cnt, head_.size()));
       return ret;
@@ -498,6 +508,7 @@ class EstimateLSM {
         data_size_ -= par->data_size();
         hot_size_ -= par->hot_size();
         key_n_ -= par->get_key_n();
+        real_phy_size_ -= par->get_real_phy_size();
       }
       head_.erase(head_.begin() + l, head_.begin() + r + 1);
       return ret;
@@ -513,6 +524,7 @@ class EstimateLSM {
         data_size_ -= par->data_size();
         hot_size_ -= par->hot_size();
         key_n_ -= par->get_key_n();
+        real_phy_size_ -= par->get_real_phy_size();
       }
       head_.erase(head_.begin() + l, head_.begin() + r);
       return ret;
@@ -527,6 +539,7 @@ class EstimateLSM {
         data_size_ += par->data_size();
         hot_size_ += par->hot_size();
         key_n_ += par->get_key_n();
+        real_phy_size_ += par->get_real_phy_size();
       }
       int pos = head_.size();
       for (int i = 0; i < head_.size(); i++) {
@@ -571,6 +584,7 @@ class EstimateLSM {
       data_size_ += par->data_size();
       hot_size_ += par->hot_size();
       key_n_ += par->get_key_n();
+      real_phy_size_ += par->get_real_phy_size();
       head_.push_back(std::move(par));
     }
 
@@ -606,6 +620,7 @@ class EstimateLSM {
       }
     }
 
+    // Dedicated
     void delete_range(const std::pair<SKey, SKey>& range, KeyCompT comp, std::pair<bool, bool> exclude_info) {
       auto [where_l, where_r] = _get_range_in_head(range, comp);
       if (where_l == -1 || where_r == -1 || where_l > where_r) return;
@@ -681,6 +696,7 @@ class EstimateLSM {
     size_t key_n_{0};
     KeyCompT comp_;
     size_t decay_step_{0};
+    size_t real_phy_size_{0};
 
     using LevelIteratorSetT = SeqIteratorSet<typename Level::LevelIterator, KeyCompT, ValueT>;
 
@@ -688,7 +704,7 @@ class EstimateLSM {
     SuperVersion(KeyCompT comp)
         : ref_(1), comp_(comp) {}
     SuperVersion(const SuperVersion& sv)
-        : ref_(1), hot_size_overestimate_(sv.hot_size_overestimate_), size_(sv.size_), key_n_(sv.key_n_), comp_(sv.comp_), decay_step_(sv.decay_step_) {
+        : ref_(1), hot_size_overestimate_(sv.hot_size_overestimate_), size_(sv.size_), key_n_(sv.key_n_), comp_(sv.comp_), decay_step_(sv.decay_step_), real_phy_size_(sv.real_phy_size_) {
           for (auto& level : sv.tree_) {
             tree_.push_back(make_atomic_shared<Level>(*level));
           }
@@ -709,7 +725,7 @@ class EstimateLSM {
       for (auto& a : tree_) {
         str += "(" + std::to_string(a->pars_cnt()) + ", " + std::to_string(a->size() / (double)kSSTable) + "), ";
       }
-      str += "], step: " + std::to_string(decay_step_) + ", hot_size: " + std::to_string(hot_size_overestimate_) + ", size: " + std::to_string(size_), ", key n: " + std::to_string(key_n_);
+      str += "], step: " + std::to_string(decay_step_) + ", hot_size: " + std::to_string(hot_size_overestimate_) + ", size: " + std::to_string(size_) + ", key n: " + std::to_string(key_n_) + ", real phy size: " + std::to_string(real_phy_size_);
       return str;
     }
 
@@ -1267,6 +1283,10 @@ class EstimateLSM {
 
     double get_current_hot_size() const { return hot_size_overestimate_; }
 
+    size_t get_current_real_phy_size() const {
+      return real_phy_size_;
+    }
+
     double get_size() const { return size_; }
 
     size_t get_key_n() const { return key_n_; }
@@ -1275,6 +1295,7 @@ class EstimateLSM {
       hot_size_overestimate_ = _calc_current_hot_size();
       size_ = _calc_current_size();
       key_n_ = _calc_key_n();
+      real_phy_size_ = _calc_real_phy_size();
     }
 
    private:
@@ -1291,6 +1312,11 @@ class EstimateLSM {
     size_t _calc_key_n() {
       size_t ret = 0;
       for (auto& a : tree_) ret += a->get_key_n();
+      return ret;
+    }
+    size_t _calc_real_phy_size() {
+      size_t ret = 0;
+      for (auto& a : tree_) ret += a->get_real_phy_size();
       return ret;
     }
     // Sort levels by size and remove empty levels.
@@ -1331,6 +1357,7 @@ class EstimateLSM {
   size_t min_hot_size_limit_{0};
   size_t phy_size_{0};
   size_t real_hot_size_{0};
+  size_t real_phy_size_{0};
   size_t key_n_{0};
 
   // Used for tick
@@ -1566,6 +1593,7 @@ class EstimateLSM {
       }
     }
     real_hot_size_ = sv_->get_current_hot_size();
+    real_phy_size_ = sv_->get_current_real_phy_size();
     sv_modify_mutex_.unlock();
   }
 
@@ -1614,7 +1642,7 @@ class EstimateLSM {
     est_cnt.pre_scan1(key_n_);
     auto hot_tick_filter = get_tick_filter();
     size_t total_hot_size = 0;
-    size_t total_n = 0, total_cnt = 0, stable_n = 0, stable_hot_size = 0;
+    size_t total_n = 0, stable_n = 0, stable_hot_size = 0;
     auto sv = get_current_sv();
     logger(sv->to_string());
     Timer sw;
@@ -1624,31 +1652,14 @@ class EstimateLSM {
       est_cnt.scan1(-tick, 1);
       total_hot_size += hot_size;
       total_n += 1;
-      total_cnt += value.get_count();
       if (value.is_stable()) {
         stable_n += 1;
         stable_hot_size += hot_size;
       }
     });
     hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::max<size_t>(0.5 * hot_size_limit_, std::min<size_t>(std::min<size_t>(1.5 * hot_size_limit_, max_hot_size_limit_), stable_hot_size * 1.1)));
-    est_cnt.sort();
-    std::vector<double> thrs;
-    for (int i = 1; i <= 19; i++) thrs.push_back(-est_cnt.get_from_points(total_n * 0.05 * i));
-    std::vector<size_t> firstx0_n(thrs.size()), firstx0_cnt(thrs.size());
-    // auto cnt_tick_threshold = -est_cnt.get_from_points(total_n * 0.9);
-    sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
-      for (int i = 0; i < thrs.size(); i++)
-        if (TickFilter<ValueT>(thrs[i]).check(value)) {
-          firstx0_n[i] += 1;
-          firstx0_cnt[i] += value.get_count();
-        }
-    });
-    sv->unref();
     logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size);
-    logger("total_cnt: ", total_cnt, ", total_n: ", total_n);
-    for (int i = 0; i < thrs.size(); i++) {
-      logger(0.05 * i, ": first90_n: ", firstx0_n[i], ", first90_cnt: ", firstx0_cnt[i]);
-    }
+    sv->unref();
     est_hot.sort();
     est_phy.sort();
     tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
@@ -1701,7 +1712,7 @@ class EstimateLSM {
     if (phy_size_ == 0) {
       return;
     }
-    physical_size_limit_ = std::max(10 * kSSTable, phy_size_);
+    physical_size_limit_ = std::max(10 * kSSTable, real_phy_size_);
   }
 
   size_t get_real_hs_size() const {
@@ -1709,7 +1720,7 @@ class EstimateLSM {
   }
 
   size_t get_real_phy_size() const {
-    return phy_size_;
+    return real_phy_size_;
   }
 
 

@@ -32,6 +32,8 @@ class Compaction {
   KeyCompT comp_;
   double hot_size_;
   double lst_hot_size_;
+  size_t lst_real_phy_size_;
+  size_t real_phy_size_;
   double decay_prob_;  // = 0.5 on default
   size_t write_bytes_{0};
 
@@ -52,10 +54,12 @@ class Compaction {
     vec_newfiles_.back().size = builder_.size();
     vec_newfiles_.back().range = std::move(builder_.range());
     vec_newfiles_.back().hot_size = hot_size_ - lst_hot_size_;
+    vec_newfiles_.back().real_phy_size = real_phy_size_ - lst_real_phy_size_;
     vec_newfiles_.back().key_n = builder_.get_key_n();
     vec_newfiles_.back().check_hot_buffer = std::move(builder_.get_check_hot_buffer());
     vec_newfiles_.back().check_stably_hot_buffer = std::move(builder_.get_check_stably_hot_buffer());
     lst_hot_size_ = hot_size_;
+    lst_real_phy_size_ = real_phy_size_;
   }
 
  public:
@@ -63,6 +67,7 @@ class Compaction {
     std::string filename;
     size_t file_id;
     size_t size;
+    size_t real_phy_size;
     size_t key_n;
     std::pair<IndSKey, IndSKey> range;
     double hot_size;
@@ -85,6 +90,8 @@ class Compaction {
     flag_ = false;
     hot_size_ = 0;
     lst_hot_size_ = 0;
+    real_phy_size_ = 0;
+    lst_real_phy_size_ = 0;
     int CNT = 0;
     // read first kv.
     {
@@ -105,6 +112,7 @@ class Compaction {
           other_func(lst_value_.first, lst_value_.second);
           if (hot_filter_func(lst_value_)) {
             hot_size_ += _calc_hot_size(lst_value_);
+            real_phy_size_ += lst_value_.first.size() + sizeof(ValueT);
           }
           builder_.append(lst_value_);
           _divide_file(L.first.size() + L.second.get_hot_size());
