@@ -114,6 +114,7 @@ constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
+constexpr auto kPeriodAccessMultiplier = 3;
 
 constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
@@ -1244,7 +1245,7 @@ class EstimateLSM {
         for (; iter.valid(); iter.next()) {
           BlockKey<SKey, ValueT> L;
           iter.read(L);
-          func(L.value().get_tick(), L.key().size() + sizeof(ValueT), L.value().get_hot_size() + L.key().len(), L.value());
+          func(L.value().get_tick(), L.key().size() + sizeof(ValueT) + 4, L.value().get_hot_size() + L.key().len(), L.value());
         }
       }
     }
@@ -1258,7 +1259,8 @@ class EstimateLSM {
       iter.build();
       for (; iter.valid(); iter.next()) {
         auto L = iter.read();
-        func(L.second.get_tick(), L.first.size() + sizeof(ValueT), L.second.get_hot_size() + L.first.len(), L.second);
+        // +4 for the offset bytes. in SST.
+        func(L.second.get_tick(), L.first.size() + sizeof(ValueT) + 4, L.second.get_hot_size() + L.first.len(), L.second);
       }
     }
 
@@ -1359,11 +1361,14 @@ class EstimateLSM {
   size_t real_hot_size_{0};
   size_t real_phy_size_{0};
   size_t key_n_{0};
+  size_t period_{0};
+  size_t lst_decay_period_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
   std::atomic<double> tick_threshold_{-114514};
   std::atomic<double> decay_tick_threshold_{-1919810};
+  std::atomic<size_t> current_access_bytes_;
 
   // default cache
   std::unique_ptr<FileChunkCache> file_cache_;
@@ -1432,7 +1437,12 @@ class EstimateLSM {
     flush_thread_.join();
     sv_->unref();
   }
-  void append(SKey key, ValueT value) { 
+  void append(SKey key, ValueT value) {
+    auto read_size = key.len() + value.get_hot_size();
+    auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
+    if (access_bytes % (kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > kPeriodAccessMultiplier * max_hot_size_limit_) {
+      period_ += 1;
+    }
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1566,12 +1576,16 @@ class EstimateLSM {
 
   /* used for fast decay. */
   void faster_decay() {
+    bool is_set_unstable = lst_decay_period_ != period_;
+    lst_decay_period_ = period_;
     sv_modify_mutex_.lock();
     logger("[tick threshold for hot]: ", tick_threshold_.load(), ", [for phy]: ", decay_tick_threshold_.load());
     while(true) {
       Timer sw;
-      auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay, [](auto& key, auto& value) {
-        value.decrease_stable();
+      auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay, [is_set_unstable](auto& key, auto& value) {
+        if (is_set_unstable) {
+          value.decrease_stable();
+        }
       });
       stat_decay_write_time_ += sw.GetTimeInNanos();
 

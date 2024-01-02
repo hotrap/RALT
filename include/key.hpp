@@ -141,18 +141,18 @@ class ExpTickValue {
   ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 15) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     if (tick_ < v.tick_) {
-      score_ = pow(0.9999999, v.tick_ - tick_) * score_ + v.score_;
+      score_ = pow(0.99999999, v.tick_ - tick_) * score_ + v.score_;
       tick_ = v.tick_;
     } else {
-      score_ = pow(0.9999999, tick_ - v.tick_) * v.score_ + score_;
+      score_ = pow(0.99999999, tick_ - v.tick_) * v.score_ + score_;
     }
-    set_stable(30);
+    set_stable(2);
   }
   size_t get_hot_size() const {
     return vlen_ >> 15;
   }
   double get_tick() const {
-    return log(score_) + log(0.9999999) * (-tick_);
+    return log(score_) + log(0.99999999) * (-tick_);
   }
   bool decay(double, std::mt19937_64&) {
     return true;
