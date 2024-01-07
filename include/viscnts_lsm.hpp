@@ -114,7 +114,7 @@ constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
-constexpr auto kPeriodAccessMultiplier = 3;
+constexpr auto kPeriodAccessMultiplier = 1;
 
 constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
@@ -1671,12 +1671,13 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
-    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::max<size_t>(0.5 * hot_size_limit_, std::min<size_t>(std::min<size_t>(1.5 * hot_size_limit_, max_hot_size_limit_), stable_hot_size * 1.1)));
-    logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size);
+    double hs_step = (max_hot_size_limit_ - min_hot_size_limit_) / 20.0;
+    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, stable_hot_size + hs_step));
+    logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size, ", period: ", period_, ", lst_decay_period: ", lst_decay_period_);
     sv->unref();
     est_hot.sort();
     est_phy.sort();
-    tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
+    tick_threshold_ = -est_hot.get_from_points(hot_size_limit_ - hs_step);
     decay_tick_threshold_ = std::max(-est_phy.get_from_points(physical_size_limit_), -est_hot.get_from_points(hot_size_limit_ * 2));
     stat_decay_scan_time_ += sw.GetTimeInNanos();
   }
@@ -1697,7 +1698,7 @@ class EstimateLSM {
   }
 
   bool check_decay_condition() {
-    return hot_size_overestimate_ > hot_size_limit_ * (kHotSetExceedLimit + 1) ||
+    return hot_size_overestimate_ > hot_size_limit_ ||
         phy_size_ > physical_size_limit_ * (kHotSetExceedLimit + 1);
   }
 
@@ -1901,7 +1902,8 @@ class alignas(128) VisCnts {
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
       auto tick = current_tick_.fetch_add(1, std::memory_order_relaxed);
       stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT), std::memory_order_relaxed);
-      tree->append(key, ValueT(tick, vlen));
+      ValueT value(tick, vlen);
+      tree->append(key, value);
     }
     check_decay(); 
   }

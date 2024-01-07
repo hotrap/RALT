@@ -112,7 +112,7 @@ class Compaction {
           other_func(lst_value_.first, lst_value_.second);
           if (hot_filter_func(lst_value_)) {
             hot_size_ += _calc_hot_size(lst_value_);
-            real_phy_size_ += lst_value_.first.size() + sizeof(ValueT);
+            real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
           }
           builder_.append(lst_value_);
           _divide_file(L.first.size() + L.second.get_hot_size());
@@ -130,6 +130,7 @@ class Compaction {
         builder_.append(lst_value_);
         if (hot_filter_func(lst_value_)) {
           hot_size_ += _calc_hot_size(lst_value_);
+          real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
         }
       } 
     }

@@ -146,7 +146,7 @@ class ExpTickValue {
     } else {
       score_ = pow(0.99999999, tick_ - v.tick_) * v.score_ + score_;
     }
-    set_stable(2);
+    set_stable(5);
   }
   size_t get_hot_size() const {
     return vlen_ >> 15;
