@@ -37,7 +37,7 @@ class SValue {
   size_t get_hot_size() const {
     return vlen_ >> 1;
   }
-  double get_tick() const {
+  double get_score() const {
     return counts_;
   }
   double get_counts() const {
@@ -78,7 +78,7 @@ class TickValue {
   size_t get_hot_size() const {
     return vlen_ >> 1;
   }
-  double get_tick() const {
+  double get_score() const {
     return tick_;
   }
   bool decay(double, std::mt19937_64&) {
@@ -111,7 +111,7 @@ class LRUTickValue {
   size_t get_hot_size() const {
     return vlen_ >> 1;
   }
-  double get_tick() const {
+  double get_score() const {
     return tick_;
   }
   bool decay(double, std::mt19937_64&) {
@@ -141,18 +141,18 @@ class ExpTickValue {
   ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 15) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     if (tick_ < v.tick_) {
-      score_ = pow(0.99999999, v.tick_ - tick_) * score_ + v.score_;
+      score_ = pow(0.99, v.tick_ - tick_) * score_ + v.score_;
       tick_ = v.tick_;
-    } else {
-      score_ = pow(0.99999999, tick_ - v.tick_) * v.score_ + score_;
+    } else if (tick_ > v.tick_) {
+      score_ = pow(0.99, tick_ - v.tick_) * v.score_ + score_;
     }
     set_stable(5);
   }
   size_t get_hot_size() const {
     return vlen_ >> 15;
   }
-  double get_tick() const {
-    return log(score_) + log(0.99999999) * (-tick_);
+  double get_score() const {
+    return log(score_) + log(0.99) * (-tick_);
   }
   bool decay(double, std::mt19937_64&) {
     return true;
@@ -192,7 +192,7 @@ class ExpTickValue {
 //   size_t get_hot_size() const {
 //     return vlen_ & ((1ull << 63) - 1);
 //   }
-//   double get_tick() const {
+//   double get_score() const {
 //     return tick_;
 //   }
 //   bool decay(double, std::mt19937_64&) {

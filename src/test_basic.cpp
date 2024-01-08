@@ -747,7 +747,7 @@ void test_scan_size() {
     for(; iter->valid(); iter->next()) {
       auto L = iter->read();
       sum += L.first.len() + L.second.get_hot_size();
-      est.scan1(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+      est.scan1(-L.second.get_score(), L.second.get_hot_size() + L.first.len());
     }
     est.pre_scan2();
     DB_INFO("{}, {}", sum, tree.get_current_hot_size());

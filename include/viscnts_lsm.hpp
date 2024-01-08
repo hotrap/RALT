@@ -115,6 +115,7 @@ constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
 constexpr auto kPeriodAccessMultiplier = 1;
+constexpr auto kExpPeriodMultiplier = 0.01;
 
 constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
@@ -760,6 +761,7 @@ class EstimateLSM {
           return true;
         }
         if (tree_[i]->check_hot(key, comp_)) {
+          return true;
           // auto iter = tree_[i]->seek(key, comp_);
           // if (!iter.valid()) continue;
           // BlockKey<SKey, ValueT> kv;
@@ -1245,7 +1247,7 @@ class EstimateLSM {
         for (; iter.valid(); iter.next()) {
           BlockKey<SKey, ValueT> L;
           iter.read(L);
-          func(L.value().get_tick(), L.key().size() + sizeof(ValueT) + 4, L.value().get_hot_size() + L.key().len(), L.value());
+          func(L.value().get_score(), L.key().size() + sizeof(ValueT) + 4, L.value().get_hot_size() + L.key().len(), L.value());
         }
       }
     }
@@ -1260,7 +1262,7 @@ class EstimateLSM {
       for (; iter.valid(); iter.next()) {
         auto L = iter.read();
         // +4 for the offset bytes. in SST.
-        func(L.second.get_tick(), L.first.size() + sizeof(ValueT) + 4, L.second.get_hot_size() + L.first.len(), L.second);
+        func(L.second.get_score(), L.first.size() + sizeof(ValueT) + 4, L.second.get_hot_size() + L.first.len(), L.second);
       }
     }
 
@@ -1363,6 +1365,7 @@ class EstimateLSM {
   size_t key_n_{0};
   size_t period_{0};
   size_t lst_decay_period_{0};
+  size_t exp_tick_period_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1437,12 +1440,29 @@ class EstimateLSM {
     flush_thread_.join();
     sv_->unref();
   }
-  void append(SKey key, ValueT value) {
-    auto read_size = key.len() + value.get_hot_size();
+  
+  void append(SKey key, ValueT _value) {
+    auto read_size = key.len() + _value.get_hot_size();
     auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
     if (access_bytes % (kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > kPeriodAccessMultiplier * max_hot_size_limit_) {
       period_ += 1;
     }
+    if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
+      exp_tick_period_ += 1;
+    }
+    ValueT value(exp_tick_period_, value.get_hot_size());
+    bufs_.append_and_notify(key, value);
+  }
+  void append(SKey key, size_t vlen) {
+    auto read_size = key.len() + vlen;
+    auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
+    if (access_bytes % (kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > kPeriodAccessMultiplier * max_hot_size_limit_) {
+      period_ += 1;
+    }
+    if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
+      exp_tick_period_ += 1;
+    }
+    ValueT value(exp_tick_period_, vlen);
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1898,12 +1918,10 @@ class alignas(128) VisCnts {
   }
   void access(SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
-      tree->append(key, ValueT(1, vlen));
+      // tree->append(key, ValueT(1, vlen));
     } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
-      auto tick = current_tick_.fetch_add(1, std::memory_order_relaxed);
       stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT), std::memory_order_relaxed);
-      ValueT value(tick, vlen);
-      tree->append(key, value);
+      tree->append(key, vlen);
     }
     check_decay(); 
   }
@@ -1960,9 +1978,9 @@ class alignas(128) VisCnts {
       // auto append_all_to = [&](auto&& iter, auto&& scan_f) {
       //   for(; iter->valid(); iter->next()) {
       //     auto L = iter->read();
-      //     // logger(L.second.get_tick(), ", ", L.second.get_hot_size() + L.first.len());
+      //     // logger(L.second.get_score(), ", ", L.second.get_hot_size() + L.first.len());
       //     // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
-      //     scan_f(-L.second.get_tick(), L.second.get_hot_size() + L.first.len());
+      //     scan_f(-L.second.get_score(), L.second.get_hot_size() + L.first.len());
       //   }
       // };
       // StopWatch sw;
