@@ -1697,7 +1697,7 @@ class EstimateLSM {
     sv->unref();
     est_hot.sort();
     est_phy.sort();
-    tick_threshold_ = -est_hot.get_from_points(hot_size_limit_ - hs_step);
+    tick_threshold_ = -est_hot.get_from_points(std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, hot_size_limit_ - hs_step)));
     decay_tick_threshold_ = std::max(-est_phy.get_from_points(physical_size_limit_), -est_hot.get_from_points(hot_size_limit_ * 2));
     stat_decay_scan_time_ += sw.GetTimeInNanos();
   }
