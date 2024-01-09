@@ -461,11 +461,11 @@ void test_lowerbound() {
 
 int main() {
   // test_store_and_scan();
-  test_decay_simple();
+  // test_decay_simple();
   // test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  // test_stable_hot();
+  test_stable_hot();
   // test_lowerbound();
 }

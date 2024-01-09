@@ -28,7 +28,7 @@ void test_files() {
 
   for (int i = 0; i < L; i++) {
     for (int j = 0; j < 12; j++) a[j] = i >> (j % 4) * 8 & 255;
-    builders[abs(rand()) % FS].append({SKey(a, 12), SValue()});
+    builders[abs(rand()) % FS].append({SKey(a, 12), SValue()}, true);
   }
   int sum = 0;
   for (int i = 0; i < FS; ++i) sum += builders[i].size();

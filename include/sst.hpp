@@ -364,7 +364,7 @@ class SSTBuilder {
  public:
   SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : 
     file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0) {}
-  void append(const DataKey& kv) {
+  void append(const DataKey& kv, bool is_hot) {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
     if (!offsets.size() || now_offset - offsets[index.back().second.get_offset()] >= kChunkSize) {
@@ -375,7 +375,9 @@ class SSTBuilder {
       if (offsets.size() == 0) first_key = kv.key();
     }
     offsets.push_back(now_offset);
-    keys_.emplace_back(BloomFilter::BloomHash(kv.key()), kv.value().is_stable());
+    if (is_hot) {
+      keys_.emplace_back(BloomFilter::BloomHash(kv.key()), kv.value().is_stable());
+    }
     stable_cnt_ += kv.value().is_stable();
     index.back().second.add(kv.key(), kv.value());
     now_offset += kv.size();
@@ -384,12 +386,12 @@ class SSTBuilder {
     key_n_ += 1;
   }
   template <typename Value>
-  void append(const std::pair<SKey, Value>& kv) {
-    append(DataKey(kv.first, kv.second));
+  void append(const std::pair<SKey, Value>& kv, bool is_hot) {
+    append(DataKey(kv.first, kv.second), is_hot);
   }
   template <typename Value>
-  void append(const std::pair<IndSKey, Value>& kv) {
-    append(DataKey(kv.first.ref(), kv.second));
+  void append(const std::pair<IndSKey, Value>& kv, bool is_hot) {
+    append(DataKey(kv.first.ref(), kv.second), is_hot);
   }
 
   template<typename T>
@@ -481,9 +483,12 @@ class SSTBuilder {
 
   void make_bloom() {
     BloomFilter bf(kBloomFilterBitNum);
-    // * 2 so that the correct rate 0.7 --> 0.9 in test_stable_hot in test_viscnts.cpp
-    check_hot_buffer_ = bf.Create(keys_.size() - stable_cnt_);
-    check_stably_hot_buffer_ = bf.Create(stable_cnt_);
+    size_t stable_cnt_in_hot = 0;
+    for (auto& [k, is_stably_hot] : keys_) {
+      stable_cnt_in_hot += is_stably_hot;
+    }
+    check_hot_buffer_ = bf.Create(keys_.size() - stable_cnt_in_hot);
+    check_stably_hot_buffer_ = bf.Create(stable_cnt_in_hot);
     for (auto& [k, is_stably_hot] : keys_) {
       if (is_stably_hot) {
         bf.Add(k, check_stably_hot_buffer_);
