@@ -115,7 +115,7 @@ constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
 constexpr auto kPeriodAccessMultiplier = 1;
-constexpr auto kExpPeriodMultiplier = 0.01;
+constexpr auto kExpPeriodMultiplier = 0.001;
 
 constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
@@ -1691,13 +1691,12 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
-    double hs_step = (max_hot_size_limit_ - min_hot_size_limit_) / 20.0;
-    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, stable_hot_size + hs_step));
+    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, stable_hot_size));
     logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size, ", period: ", period_, ", lst_decay_period: ", lst_decay_period_);
     sv->unref();
     est_hot.sort();
     est_phy.sort();
-    tick_threshold_ = -est_hot.get_from_points(std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, hot_size_limit_ - hs_step)));
+    tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
     decay_tick_threshold_ = std::max(-est_phy.get_from_points(physical_size_limit_), -est_hot.get_from_points(hot_size_limit_ * 2));
     stat_decay_scan_time_ += sw.GetTimeInNanos();
   }
@@ -1718,7 +1717,8 @@ class EstimateLSM {
   }
 
   bool check_decay_condition() {
-    return hot_size_overestimate_ > hot_size_limit_ ||
+    double hs_step = (max_hot_size_limit_ - min_hot_size_limit_) / 20.0;
+    return hot_size_overestimate_ > hot_size_limit_ + hs_step ||
         phy_size_ > physical_size_limit_ * (kHotSetExceedLimit + 1);
   }
 
