@@ -138,21 +138,22 @@ class ExpTickValue {
   size_t vlen_{0};
  public:
   ExpTickValue() {}
-  ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 15) {}
+  ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 15 | 13 << 1 | 0) {}
   void merge(const ExpTickValue& v, double cur_tick) {
+    set_counter(std::min<int>(100, get_counter() + v.get_counter()));
+    vlen_ |= 1;
     if (tick_ < v.tick_) {
       score_ = pow(0.999, v.tick_ - tick_) * score_ + v.score_;
       tick_ = v.tick_;
     } else if (tick_ > v.tick_) {
       score_ = pow(0.999, tick_ - v.tick_) * v.score_ + score_;
     }
-    set_stable(5);
   }
   size_t get_hot_size() const {
     return vlen_ >> 15;
   }
   double get_score() const {
-    return log(score_) + log(0.999) * (-tick_) + (1e5) * (vlen_ & 32767);
+    return log(score_) + log(0.999) * (-tick_) + (1e5) * is_stable();
   }
   bool decay(double, std::mt19937_64&) {
     return true;
@@ -161,13 +162,16 @@ class ExpTickValue {
     return 0;
   }
   bool is_stable() const {
-    return (vlen_ & 32767) != 0;
+    return (vlen_ & 1) && get_counter() > 0;
   }
-  void set_stable(int x) {
-    vlen_ = (vlen_ >> 15) << 15 | x;
+  void set_counter(int x) {
+    vlen_ = (vlen_ >> 15) << 15 | (x << 1) | (vlen_ & 1);
+  }
+  int get_counter() const {
+    return (vlen_ >> 1) & 32767;
   }
   void decrease_stable() {
-    set_stable(std::max<int>((vlen_ & 32767) - 1, 0));
+    set_counter(std::max<int>(get_counter() - 10, 0));
   }
 };
 

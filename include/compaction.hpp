@@ -115,7 +115,7 @@ class Compaction {
             real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
           }
           builder_.append(lst_value_, hot_filter_func(lst_value_));
-          _divide_file(L.first.size() + L.second.get_hot_size());
+          _divide_file(L.first.size() + sizeof(ValueT));
         }
         lst_value_ = {L.first, L.second};
       }

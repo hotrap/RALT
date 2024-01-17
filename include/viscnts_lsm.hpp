@@ -1444,19 +1444,19 @@ class EstimateLSM {
   void append(SKey key, ValueT _value) {
     auto read_size = key.len() + _value.get_hot_size();
     auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
-    if (access_bytes % (kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > kPeriodAccessMultiplier * max_hot_size_limit_) {
+    if (access_bytes % size_t(kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > size_t(kPeriodAccessMultiplier * max_hot_size_limit_)) {
       period_ += 1;
     }
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, value.get_hot_size());
+    ValueT value(exp_tick_period_, _value.get_hot_size());
     bufs_.append_and_notify(key, value);
   }
   void append(SKey key, size_t vlen) {
     auto read_size = key.len() + vlen;
     auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
-    if (access_bytes % (kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > kPeriodAccessMultiplier * max_hot_size_limit_) {
+    if (access_bytes % size_t(kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > size_t(kPeriodAccessMultiplier * max_hot_size_limit_)) {
       period_ += 1;
     }
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
@@ -1717,7 +1717,7 @@ class EstimateLSM {
   }
 
   bool check_decay_condition() {
-    double hs_step = (max_hot_size_limit_ - min_hot_size_limit_) / 20.0;
+    double hs_step = std::max(hot_size_limit_ * kHotSetExceedLimit, (max_hot_size_limit_ - min_hot_size_limit_) / 20.0);
     return hot_size_overestimate_ > hot_size_limit_ + hs_step ||
         phy_size_ > physical_size_limit_ * (kHotSetExceedLimit + 1);
   }
