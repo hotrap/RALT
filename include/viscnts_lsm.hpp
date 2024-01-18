@@ -114,7 +114,7 @@ constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
-constexpr auto kPeriodAccessMultiplier = 1;
+constexpr auto kPeriodAccessMultiplier = 0.5;
 constexpr auto kExpPeriodMultiplier = 0.001;
 
 constexpr size_t kEstPointNum = 1e4;
@@ -1719,8 +1719,9 @@ class EstimateLSM {
 
   bool check_decay_condition() {
     double hs_step = std::max(hot_size_limit_ * kHotSetExceedLimit, (max_hot_size_limit_ - min_hot_size_limit_) / 20.0);
+    double phy_step = std::max<double>(kSSTable, physical_size_limit_ * kHotSetExceedLimit);
     return hot_size_overestimate_ > hot_size_limit_ + hs_step ||
-        phy_size_ > physical_size_limit_ * (kHotSetExceedLimit + 1);
+        phy_size_ > physical_size_limit_ + phy_step;
   }
 
   void set_hot_set_limit(size_t new_limit) {
