@@ -1366,6 +1366,7 @@ class EstimateLSM {
   size_t period_{0};
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
+  size_t delta_c_{13};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1450,7 +1451,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, _value.get_hot_size());
+    ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
     bufs_.append_and_notify(key, value);
   }
   void append(SKey key, size_t vlen) {
@@ -1462,7 +1463,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, vlen);
+    ValueT value(exp_tick_period_, vlen, delta_c_);
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1671,14 +1672,14 @@ class EstimateLSM {
     KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
     KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
     KthEst<double> est_cnt(kEstPointNum, key_n_ * 0.9);
-    est_hot.pre_scan1(get_current_hot_size());
-    est_phy.pre_scan1(get_current_phy_size());
-    est_cnt.pre_scan1(key_n_);
+    auto sv = get_current_sv();
+    logger(sv->to_string());
+    est_hot.pre_scan1(sv->get_current_hot_size() / sv->get_current_real_phy_size() * sv->get_size() * 1.1);
+    est_phy.pre_scan1(sv->get_size());
+    est_cnt.pre_scan1(sv->get_key_n());
     auto hot_tick_filter = get_tick_filter();
     size_t total_hot_size = 0;
     size_t total_n = 0, stable_n = 0, stable_hot_size = 0;
-    auto sv = get_current_sv();
-    logger(sv->to_string());
     Timer sw;
     sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
       est_phy.scan1(-tick, phy_size);

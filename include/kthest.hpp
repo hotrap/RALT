@@ -12,7 +12,7 @@ class KthEst {
   public:
 
     /* point_num should > 2 */
-    KthEst(size_t point_num, size_t size_limit) : point_num_(point_num), size_limit_(size_limit) {
+    KthEst(size_t point_num, size_t size_limit) : point_num_(point_num) {
 
     }
 
@@ -70,34 +70,34 @@ class KthEst {
     }
 
 
-    Key get_kth() {
+    Key get_kth(double size_limit) {
       Key ret = max_key_;
       size_t sum = first_interval_key_size_;
       for(int i = 0; i < scan1_point_num_; i++) {
         sum += point_data_[i].second;
         ret = point_data_[i].first;
-        if (sum > size_limit_) {
+        if (sum > size_limit) {
           break;
         }
       }
       return ret;
     }
 
-    Key get_interplot_kth() {
+    Key get_interplot_kth(double size_limit) {
       size_t sum = first_interval_key_size_;
-      if (sum > size_limit_) {
+      if (sum > size_limit) {
         Key L = min_key_;
         Key R = point_data_[0].first;
         logger(min_key_, ", ", first_interval_key_size_, ", ", sum);
-        return L + (R - L) / double(first_interval_key_size_) * double(size_limit_ - sum);
+        return L + (R - L) / double(first_interval_key_size_) * double(size_limit - sum);
       }
       for(int i = 0; i < scan1_point_num_; i++) {
-        if (sum + point_data_[i].second > size_limit_) {
+        if (sum + point_data_[i].second > size_limit) {
           Key L = point_data_[i].first;
           Key R = i == scan1_point_num_ - 1 ? max_key_ : point_data_[i + 1].first;
           logger(point_data_[i].first, ", ", point_data_[i].second, ", ", sum);
-          logger(max_key_, "<-maxkey", L, ", ", R, ", ", double(size_limit_ - sum), ", ", double(point_data_[i].second));
-          return L + (R - L) / double(point_data_[i].second) * double(size_limit_ - sum);
+          logger(max_key_, "<-maxkey", L, ", ", R, ", ", double(size_limit - sum), ", ", double(point_data_[i].second));
+          return L + (R - L) / double(point_data_[i].second) * double(size_limit - sum);
         }
         sum += point_data_[i].second;
       }
@@ -153,7 +153,6 @@ class KthEst {
     std::vector<size_t> point_size_;
     std::vector<std::pair<Key, size_t>> point_data_;
     size_t point_num_;
-    size_t size_limit_;
     size_t scan1_size_sum_{0}, scan1_point_num_{0}, first_interval_key_size_{0};
     Key min_key_, max_key_;
     bool scan2_flag_{false};

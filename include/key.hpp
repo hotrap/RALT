@@ -29,7 +29,7 @@ class SValue {
   size_t vlen_{0};
  public:
   SValue() {}
-  SValue(double counts, size_t vlen) : counts_(counts), vlen_(vlen << 1) {}
+  SValue(double counts, size_t vlen, size_t _ = 0) : counts_(counts), vlen_(vlen << 1) {}
   void merge(const SValue& v, double) {
     counts_ += v.counts_;
     set_stable(1);
@@ -138,7 +138,7 @@ class ExpTickValue {
   size_t vlen_{0};
  public:
   ExpTickValue() {}
-  ExpTickValue(double tick, size_t vlen) : tick_(tick), score_(1), vlen_(vlen << 15 | 13 << 1 | 0) {}
+  ExpTickValue(double tick, size_t vlen, unsigned int init_score) : tick_(tick), score_(1), vlen_(vlen << 15 | init_score << 1 | 0) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     set_counter(std::min<int>(100, get_counter() + v.get_counter()));
     vlen_ |= 1;

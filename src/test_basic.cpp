@@ -552,8 +552,8 @@ void test_kthest() {
     for (int i = 0; i < 100; i++) est.scan1(i, i);
     est.pre_scan2();
     for (int i = 0; i < 100; i++) est.scan2(i, i);
-    DB_INFO("{}", est.get_kth());
-    DB_ASSERT(est.get_kth() == 14);  
+    DB_INFO("{}", est.get_kth(100));
+    DB_ASSERT(est.get_kth(100) == 14);  
   }
   {
     KthEst<size_t> est(1e4, 1e7);
@@ -569,12 +569,12 @@ void test_kthest() {
     est.pre_scan2();
     for (auto& a : vec) est.scan2(a.first, a.second);
     
-    auto the = est.get_interplot_kth();
+    auto the = est.get_interplot_kth(1e7);
     size_t sum = 0;
     for (auto& a : vec) if (a.first < the) sum += a.second;
     DB_INFO("{}, {}", sum, the);
     DB_ASSERT(sum < 1e7 + 1000 && sum > 1e7 - 1000);
-    DB_ASSERT([&](){ auto the = est.get_kth(); return std::accumulate(vec.begin(), vec.end(), 0, [the](auto x, auto data) { return data.first >= the ? x : x + data.second; } ); } () <= 1e7 ); 
+    DB_ASSERT([&](){ auto the = est.get_kth(1e7); return std::accumulate(vec.begin(), vec.end(), 0, [the](auto x, auto data) { return data.first >= the ? x : x + data.second; } ); } () <= 1e7 ); 
   }
   {
     KthEst<size_t> est(1e4, 1e7);
@@ -594,7 +594,7 @@ void test_kthest() {
     est.pre_scan2();
     for (auto& a : vec) est.scan2(a.first, a.second);
 
-    auto the = est.get_interplot_kth();
+    auto the = est.get_interplot_kth(1e7);
     size_t sum = 0;
     for (auto& a : vec) if (a.first < the) sum += a.second;
     DB_INFO("{}, {}", sum, the);
