@@ -1366,7 +1366,7 @@ class EstimateLSM {
   size_t period_{0};
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
-  size_t delta_c_{40};
+  size_t delta_c_{100};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
