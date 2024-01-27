@@ -103,13 +103,12 @@ class LRUTickValue {
   size_t vlen_{0};
  public:
   LRUTickValue() {}
-  LRUTickValue(double tick, size_t vlen) : tick_(tick), vlen_(vlen << 1) {}
+  LRUTickValue(double tick, size_t vlen, unsigned int init_score = 0, bool init_tag = false) : tick_(tick), vlen_(vlen) {}
   void merge(const LRUTickValue& v, double cur_tick) {
     tick_ = std::max(tick_, v.tick_);
-    set_stable(1);
   }
   size_t get_hot_size() const {
-    return vlen_ >> 1;
+    return vlen_;
   }
   double get_score() const {
     return tick_;
@@ -121,13 +120,50 @@ class LRUTickValue {
     return 0;
   }
   bool is_stable() const {
-    return vlen_ & 1;
+    return 1;
   }
   void set_stable(bool x) {
-    vlen_ = (vlen_ >> 1) << 1 | x;
   }
   size_t get_count() const {
     return 1;
+  }
+  void decrease_stable() {
+
+  }
+};
+
+
+class ClockTickValue {
+  int c_{0};
+  size_t vlen_;
+ public:
+  ClockTickValue() {}
+  ClockTickValue(double tick, size_t vlen, unsigned int init_score = 0, bool init_tag = false) : c_(1), vlen_(vlen) {}
+  void merge(const ClockTickValue& v, double cur_tick) {
+    c_ += v.c_;
+  }
+  size_t get_hot_size() const {
+    return vlen_;
+  }
+  double get_score() const {
+    return c_;
+  }
+  bool decay(double, std::mt19937_64&) {
+    return true;
+  }
+  int tag() const {
+    return 0;
+  }
+  bool is_stable() const {
+    return 1;
+  }
+  void set_stable(bool x) {
+  }
+  size_t get_count() const {
+    return 1;
+  }
+  void decrease_stable() {
+    c_ = std::max(c_ - 1, 0);
   }
 };
 
@@ -138,7 +174,7 @@ class ExpTickValue {
   size_t vlen_{0};
  public:
   ExpTickValue() {}
-  ExpTickValue(double tick, size_t vlen, unsigned int init_score) : tick_(tick), score_(1), vlen_(vlen << 15 | init_score << 1 | 0) {}
+  ExpTickValue(double tick, size_t vlen, unsigned int init_score, bool init_tag = false) : tick_(tick), score_(1), vlen_(vlen << 15 | init_score << 1 | init_tag) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     set_counter(std::min<int>(100, get_counter() + v.get_counter()));
     vlen_ |= 1;

@@ -54,6 +54,17 @@ class TickFilter<ExpTickValue> {
     double tick_threshold_;
 };
 
+
+template<>
+class TickFilter<ClockTickValue> {
+  public:
+    TickFilter(double tick_threshold) {}
+    bool check(ClockTickValue v) const { return v.get_score() > 0; }
+    double get_tick_threshold() const { return 0; }
+
+  private:
+};
+
 }
 
 

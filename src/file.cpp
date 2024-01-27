@@ -7,6 +7,12 @@
 
 #include <atomic>
 
+#ifdef NOT_DIRECTIO
+#define O_DIRECTX 0
+#else
+#define O_DIRECTX O_DIRECT
+#endif
+
 namespace viscnts_lsm {
 
 static std::atomic<size_t> global_read_bytes{0}, global_write_bytes{0};
@@ -138,7 +144,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
   }
 
   int get_fd() const override {
-    int fd = ::open(fname_.c_str(), O_RDONLY|O_DIRECT);
+    int fd = ::open(fname_.c_str(), O_RDONLY|O_DIRECTX);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_RANDOM);
     // logger(fd, ", ", fname_);
     if (fd < 0) {
@@ -153,7 +159,7 @@ class PosixRandomAccessFile : public RandomAccessFile {
   }
 
   SeqFile* get_seqfile() const override {
-    auto fd = ::open(fname_.c_str(), O_RDONLY|O_DIRECT);
+    auto fd = ::open(fname_.c_str(), O_RDONLY|O_DIRECTX);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) {
       logger("Error: ", errno);
@@ -198,7 +204,7 @@ class DefaultEnv : public Env {
  public:
   DefaultEnv() {}
   RandomAccessFile* openRAFile(std::string filename) override {
-    auto fd = ::open(filename.c_str(), O_RDONLY|O_DIRECT);
+    auto fd = ::open(filename.c_str(), O_RDONLY|O_DIRECTX);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_RANDOM);
     if (fd < 0) return nullptr;
     auto result = new PosixRandomAccessFile(filename);
@@ -206,13 +212,13 @@ class DefaultEnv : public Env {
     return result;
   }
   SeqFile* openSeqFile(std::string filename) override {
-    auto fd = ::open(filename.c_str(), O_RDONLY|O_DIRECT);
+    auto fd = ::open(filename.c_str(), O_RDONLY|O_DIRECTX);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) return nullptr;
     return new PosixSeqFile(fd);
   }
   AppendFile* openAppFile(std::string filename) override {
-    auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT, 0644);
+    auto fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | O_TRUNC | O_DIRECTX, 0644);
     posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED|POSIX_FADV_SEQUENTIAL);
     if (fd < 0) return nullptr;
     return new PosixAppendFile(fd);

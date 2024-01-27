@@ -31,7 +31,7 @@ class DefaultComparator : public rocksdb::Comparator {
 } default_comp;
 
 rocksdb::Slice convert_to_slice(char* output, size_t s, size_t len) {
-  std::memset(output, 0, len - 8);
+  std::memset(output, 'a', len - 8);
   std::memcpy(output + len - 8, &s, 8);
   return rocksdb::Slice(output, len);
 }
@@ -246,8 +246,8 @@ void test_decay_hit_rate() {
   size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
   size_t max_hot_set_cnt = N * 0.05;
   size_t max_hot_set_size = max_hot_set_cnt * vlen;
-  size_t max_physical_size = 200 * max_hot_set_cnt;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", N * 0.07 * vlen, N * 0.01 * vlen, N * 0.07 * vlen, max_physical_size);
+  size_t max_physical_size = 60 * max_hot_set_cnt;
+  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", N * 0.05 * vlen, N * 0.05 * vlen, N * 0.05 * vlen, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
   auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_cnt);
@@ -258,9 +258,9 @@ void test_decay_hit_rate() {
   auto real_data = decltype(data)();
   for (int i = 0, cnt0 = 0, cnt1 = 0; i < N; i++) {
     std::uniform_real_distribution<> dis(0, 1);
-    if (dis(gen) < 0.8) {
+    if (dis(gen) < 0.95) {
       std::uniform_int_distribution<> dis2(0, hot_data.size() - 1);
-      real_data.push_back(hot_data[i % max_hot_set_cnt]);
+      real_data.push_back(hot_data[dis2(gen)]);
     } else {
       std::uniform_int_distribution<> dis2(0, cold_data.size() - 1);
       real_data.push_back(cold_data[dis2(gen)]);
@@ -462,10 +462,10 @@ void test_lowerbound() {
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
-  // test_decay_hit_rate();
+  test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  test_stable_hot();
+  // test_stable_hot();
   // test_lowerbound();
 }

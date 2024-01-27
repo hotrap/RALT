@@ -28,7 +28,13 @@ struct SKeyComparatorFromRocksDB {
   }
 };
 
+#ifdef USE_LRU
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseFasterTick>;
+#elif defined(USE_CLOCK)
+using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::ClockTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kClockStyleDecay>;
+#else
 using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::ExpTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseFasterTick>;
+#endif
 
 class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
   public:

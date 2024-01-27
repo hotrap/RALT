@@ -116,6 +116,7 @@ constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
 constexpr auto kPeriodAccessMultiplier = 0.5;
 constexpr auto kExpPeriodMultiplier = 0.001;
+constexpr auto kExtraBufferMultiplier = 20;
 
 constexpr size_t kEstPointNum = 1e4;
 constexpr double kHotSetExceedLimit = 0.1;
@@ -1366,7 +1367,7 @@ class EstimateLSM {
   size_t period_{0};
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
-  size_t delta_c_{100};
+  size_t delta_c_{66};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1385,6 +1386,10 @@ class EstimateLSM {
   size_t stat_decay_scan_time_{0};
   size_t stat_decay_write_time_{0};
   size_t stat_flush_time_{0};
+
+  // Clock hand for simulating clock algorithm
+  IndSKey clock_hand_;
+  bool clock_hand_valid_{false};
 
 
   using LevelIteratorSetTForScan = SeqIteratorSetForScan<typename Level::LevelIterator, KeyCompT, ValueT>;
@@ -1668,6 +1673,63 @@ class EstimateLSM {
     return flush_thread_timer_.GetTimeInNanos();
   }
 
+  // Only used for simulating clock cache.
+  void clock_style_decay() {
+    ssize_t total_hot_size = 0;
+    ssize_t total_phy_size = 0;
+    auto sv = get_current_sv();
+    sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
+      if (value.get_score() > 0) {
+        total_hot_size += hot_size;
+        total_phy_size += phy_size;
+      }
+    });
+    sv->unref();
+    sv_modify_mutex_.lock();
+    logger("[total phy]: ", total_phy_size, ", [total hot] ", total_hot_size, ", [hot limit] ", hot_size_limit_, ", [phy limit]", physical_size_limit_);
+    while(true) {
+      Timer sw;
+      auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay, [&](auto& key, auto& value) {
+        if (value.get_score() > 0 && (total_phy_size > physical_size_limit_ || total_hot_size > hot_size_limit_) && (!clock_hand_valid_ || comp_(key.ref(), clock_hand_.ref()) > 0)) {
+          value.decrease_stable();
+          if (value.get_score() == 0) {
+            total_hot_size -= value.get_hot_size() + key.len();
+            total_phy_size -= key.size() + sizeof(ValueT) + 4;
+            if (total_phy_size <= physical_size_limit_ && total_hot_size <= hot_size_limit_) {
+              clock_hand_ = key;
+              clock_hand_valid_ = false;
+            }
+          }
+        }
+      });
+      stat_decay_write_time_ += sw.GetTimeInNanos();
+
+      if (new_sv == nullptr) {
+        break;
+      }
+      auto old_sv = _update_superversion(new_sv);
+      while (old_sv && old_sv->get_ref_cnt() > 1) {
+        logger("wait");
+        sv_modify_mutex_.unlock();
+        std::this_thread::sleep_for(std::chrono::duration<int, std::milli>(kWaitCompactionSleepMilliSeconds));
+        sv_modify_mutex_.lock();
+      }
+      if (old_sv) {
+        old_sv->unref();
+      }
+      if (sv_->get_decay_step() == 0) {
+        if (total_phy_size <= physical_size_limit_ && total_hot_size <= hot_size_limit_) {
+          break;
+        } else {
+          clock_hand_valid_ = false;
+        }
+      }
+    }
+    real_hot_size_ = sv_->get_current_hot_size();
+    real_phy_size_ = sv_->get_current_real_phy_size();
+    sv_modify_mutex_.unlock();
+  }
+
   void update_tick_threshold() {
     KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
     KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
@@ -1868,7 +1930,8 @@ class EstimateLSM {
 enum class CachePolicyT {
   kUseDecay = 0,
   kUseTick,
-  kUseFasterTick
+  kUseFasterTick,
+  kClockStyleDecay
 };
 
 // Viscnts, implement lsm tree and other things.
@@ -1921,7 +1984,7 @@ class alignas(128) VisCnts {
   void access(SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
       // tree->append(key, ValueT(1, vlen));
-    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
+    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
       stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT), std::memory_order_relaxed);
       tree->append(key, vlen);
     }
@@ -1952,7 +2015,7 @@ class alignas(128) VisCnts {
       //     tree->trigger_decay();
       //   }
       // }  
-    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
+    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
       if (tree->check_decay_condition() && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
         decay_cv_.notify_one(); 
       }
@@ -1961,7 +2024,7 @@ class alignas(128) VisCnts {
   void flush() {
     std::unique_lock lck(decay_m_);
     tree->all_flush();
-    if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
+    if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
       if (tree->check_decay_condition()) {
         update_tick_threshold();
       }
@@ -2109,6 +2172,8 @@ class alignas(128) VisCnts {
         }
         if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
           update_tick_threshold();
+        } else if (cache_policy == CachePolicyT::kClockStyleDecay) {
+          tree->clock_style_decay();
         }
         is_updating_tick_threshold_ = false;
       }
