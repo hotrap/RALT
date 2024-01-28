@@ -1456,7 +1456,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
+    ValueT value(exp_tick_period_, _value.get_hot_size(), max_hot_size_limit_ == min_hot_size_limit_ ? 0 : delta_c_);
     bufs_.append_and_notify(key, value);
   }
   void append(SKey key, size_t vlen) {
@@ -1468,7 +1468,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, vlen, delta_c_);
+    ValueT value(exp_tick_period_, vlen, max_hot_size_limit_ == min_hot_size_limit_ ? 0 : delta_c_);
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1697,7 +1697,7 @@ class EstimateLSM {
             total_phy_size -= key.size() + sizeof(ValueT) + 4;
             if (total_phy_size <= physical_size_limit_ && total_hot_size <= hot_size_limit_) {
               clock_hand_ = key;
-              clock_hand_valid_ = false;
+              clock_hand_valid_ = true;
             }
           }
         }
