@@ -456,6 +456,33 @@ class FileBlock {     // process blocks in a file
     return {ret0, ret1};
   }
 
+  size_t get_prefix_size_sum(SKey key, int ra_fd, bool exclude) const {
+    ssize_t l = 0, r = handle_.counts - 1, ans = -1;
+    SeekIterator it = SeekIterator(*this);
+    KV _key;
+    while (l <= r) {
+      auto mid = (l + r) >> 1;
+      it.seek_and_read(mid, _key, ra_fd);
+      // compare two keys
+      if (comp_(_key.key(), key) <= 0) {
+        l = mid + 1, ans = mid;
+      } else {
+        r = mid - 1;
+      }
+    }
+    if (exclude) {
+      if (ans == 0) {
+        return 0;
+      }
+      ans -= 1;
+    }
+    if (ans == -1) {
+      return 0;
+    }
+    it.seek_and_read(ans, _key, ra_fd);
+    return _key.value().get_hot_size()[0];
+  }
+
   // it calculates the smallest No. of the key that >= input key.
   uint32_t lower_key(SKey key, uint32_t L, uint32_t R, int ra_fd) const {
     int l = L, r = std::min(R, handle_.counts - 1);

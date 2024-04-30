@@ -304,7 +304,7 @@ class IndexData {
     /*add key to this index block*/
     template<typename T>
     void add(const SKey& key, const T& value) {
-      hot_size_[value.tag()] += value.get_hot_size();
+      hot_size_[value.tag()] += value.get_hot_size() + key.len();
     }
 
     const std::array<size_t, num_tier>& get_hot_size() const {

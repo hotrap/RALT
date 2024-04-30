@@ -459,13 +459,58 @@ void test_lowerbound() {
   }
 }
 
+void test_range_hot_size() {
+  size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
+  size_t N = 1e7, TH = 4, vlen = 10, Q = 500000;
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  std::mt19937_64 gen(0x202309252052);
+  auto data = gen_testdata(N, gen);
+  StopWatch sw;
+  input_all(vc, data, TH, vlen);
+  sort_data(data);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  size_t total_size = 0;
+  // for (int i = 0; i < data.size(); i++) {
+  //   char a[30], a2[30];
+  //   rocksdb::RangeBounds range;
+  //   range.start.user_key = convert_to_slice(a, data[0].first, data[0].second);
+  //   range.start.excluded = false;
+  //   range.end.user_key = convert_to_slice(a2, data[i].first, data[i].second);
+  //   range.end.excluded = false;
+  //   total_size += vlen + data[i].second;
+  //   DB_ASSERT(vc.RangeHotSize(range) >= total_size);
+  //   // DB_INFO("{}, {}", vc.RangeHotSize(range), total_size);
+  // }
+  std::vector<size_t> S(data.size());
+  for (int i = 0; i < data.size(); i++) {
+    S[i] = (i == 0 ? 0 : S[i - 1]) + data[i].second + vlen;
+  }
+  for (int i = 0; i < Q; i++) {
+    char a[30], a2[30];
+    rocksdb::RangeBounds range;
+    size_t l = std::uniform_int_distribution<>(0, data.size() - 1)(gen);
+    size_t r = std::uniform_int_distribution<>(l, data.size() - 1)(gen);
+    range.start.user_key = convert_to_slice(a, data[l].first, data[l].second);
+    range.start.excluded = false;
+    range.end.user_key = convert_to_slice(a2, data[r].first, data[r].second);
+    range.end.excluded = false;
+    size_t ans = S[r] - (l == 0 ? 0 : S[l - 1]);
+    size_t out = vc.RangeHotSize(range);
+    DB_INFO("{},{}",ans,out);
+    DB_ASSERT(out >= ans);
+    // DB_INFO("{}, {}", vc.RangeHotSize(range), total_size);
+  }
+}
+
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
-  test_decay_hit_rate();
+  // test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
   // test_stable_hot();
   // test_lowerbound();
+  test_range_hot_size();
 }

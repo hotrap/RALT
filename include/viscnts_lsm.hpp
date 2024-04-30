@@ -250,10 +250,11 @@ class EstimateLSM {
       return deleted_ranges_.deleted_counts(rank_pair);
     }
     size_t range_data_size(const std::pair<SKey, SKey>& range) {
-      auto rank_pair = file_.rank_pair(range, {0, 0});
+      // auto rank_pair = file_.rank_pair(range, {0, 0});
       // return deleted_ranges_.deleted_data_size(rank_pair);
       // Estimate
-      return deleted_ranges_.deleted_counts(rank_pair) * avg_hot_size_;
+      // return deleted_ranges_.deleted_counts(rank_pair) * avg_hot_size_;
+      return file_.estimate_range_hot_size(range);
     }
     void delete_range(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) {
       auto rank_pair = file_.rank_pair(range, exclude_info);

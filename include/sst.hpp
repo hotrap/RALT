@@ -271,6 +271,15 @@ class ImmutableFile {
   //   return ImmutableFileAsyncSeekHandle(key, *this, aio);
   // }
 
+  size_t estimate_range_hot_size(const std::pair<SKey, SKey>& range) const {
+    size_t retl = 0, retr = 0;
+    auto& [L, R] = range;
+    if (comp_(L, R) > 0) {
+      return 0;
+    }
+    return index_block_.get_prefix_size_sum(R, open_ra_file_.get_fd(), false) - index_block_.get_prefix_size_sum(L, open_ra_file_.get_fd(), true);
+  }
+
   std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) const {
     int retl = 0, retr = 0;
     auto& [L, R] = range;
