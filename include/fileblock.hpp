@@ -470,14 +470,14 @@ class FileBlock {     // process blocks in a file
         r = mid - 1;
       }
     }
+    if (ans == -1) {
+      return 0;
+    }
     if (exclude) {
       if (ans == 0) {
         return 0;
       }
       ans -= 1;
-    }
-    if (ans == -1) {
-      return 0;
     }
     it.seek_and_read(ans, _key, ra_fd);
     return _key.value().get_hot_size()[0];
