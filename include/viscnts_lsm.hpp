@@ -2036,7 +2036,6 @@ class alignas(128) VisCnts {
   }
 
   void update_tick_threshold() {
-    decay_count_ += 1;
     if (cache_policy == CachePolicyT::kUseTick) {
       // auto hot_size = weight_sum();
       // KthEst<double> est(kEstPointNum, hot_set_limit_);
@@ -2074,7 +2073,7 @@ class alignas(128) VisCnts {
       tree->faster_decay();
       logger("weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
     }
-    
+    decay_count_ += 1;
   }
 
   void set_new_hot_limit(size_t new_limit) {
