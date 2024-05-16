@@ -1359,8 +1359,8 @@ class EstimateLSM {
   uint8_t compact_thread_state_{0};
   size_t physical_size_limit_{0};
   size_t hot_size_limit_{0};
-  size_t max_hot_size_limit_{0};
-  size_t min_hot_size_limit_{0};
+  uint64_t max_hot_size_limit_{0};
+  uint64_t min_hot_size_limit_{0};
   size_t phy_size_{0};
   size_t real_hot_size_{0};
   size_t real_phy_size_{0};
@@ -1457,7 +1457,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, _value.get_hot_size(), max_hot_size_limit_ == min_hot_size_limit_ ? 0 : delta_c_);
+    ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
     bufs_.append_and_notify(key, value);
   }
   void append(SKey key, size_t vlen) {
@@ -1469,7 +1469,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, vlen, max_hot_size_limit_ == min_hot_size_limit_ ? 0 : delta_c_);
+    ValueT value(exp_tick_period_, vlen, delta_c_);
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1808,6 +1808,16 @@ class EstimateLSM {
     return hot_size_limit_;
   }
 
+  uint64_t get_min_hot_size_limit() { return min_hot_size_limit_; }
+  void set_min_hot_size_limit(uint64_t min_hot_size_limit) {
+    min_hot_size_limit_ = min_hot_size_limit;
+  }
+
+  uint64_t get_max_hot_size_limit() { return max_hot_size_limit_; }
+  void set_max_hot_size_limit(uint64_t max_hot_size_limit) {
+    max_hot_size_limit_ = max_hot_size_limit;
+  }
+
   void set_proper_phy_limit() {
     if (phy_size_ == 0) {
       return;
@@ -2106,6 +2116,15 @@ class alignas(128) VisCnts {
     return tree->get_hot_set_limit();
   }
 
+  uint64_t get_min_hot_size_limit() { return tree->get_min_hot_size_limit(); }
+  void set_min_hot_size_limit(uint64_t min_hot_size_limit) {
+    tree->set_min_hot_size_limit(min_hot_size_limit);
+  }
+
+  uint64_t get_max_hot_size_limit() { return tree->get_max_hot_size_limit(); }
+  void set_max_hot_size_limit(uint64_t max_hot_size_limit) {
+    tree->set_max_hot_size_limit(max_hot_size_limit);
+  }
 
   void set_proper_phy_limit() {
     tree->set_proper_phy_limit();

@@ -35,6 +35,10 @@ public:
   void SetProperPhysicalSizeLimit();
   size_t GetPhySizeLimit();
   size_t GetHotSetSizeLimit();
+  uint64_t GetMinHotSetSizeLimit();
+  void SetMinHotSetSizeLimit(uint64_t min_hot_size_limit);
+  uint64_t GetMaxHotSetSizeLimit();
+  void SetMaxHotSetSizeLimit(uint64_t max_hot_size_limit);
   size_t DecayCount();
   size_t GetRealHotSetSize();
   size_t GetRealPhySize();
