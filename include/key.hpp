@@ -176,13 +176,13 @@ class ExpTickValue {
   ExpTickValue() {}
   ExpTickValue(double tick, size_t vlen, unsigned int init_score, bool init_tag = false) : tick_(tick), score_(1), vlen_(vlen << 15 | init_score << 1 | init_tag) {}
   void merge(const ExpTickValue& v, double cur_tick) {
-    set_counter(std::min<int>(100, get_counter() + v.get_counter()));
+    set_counter(std::min<int>(10, get_counter() + v.get_counter()));
     vlen_ |= 1;
     if (tick_ < v.tick_) {
-      score_ = pow(0.9998, v.tick_ - tick_) * score_ + v.score_;
+      score_ = pow(0.999, v.tick_ - tick_) * score_ + v.score_;
       tick_ = v.tick_;
     } else if (tick_ > v.tick_) {
-      score_ = pow(0.9998, tick_ - v.tick_) * v.score_ + score_;
+      score_ = pow(0.999, tick_ - v.tick_) * v.score_ + score_;
     }
   }
   size_t get_hot_size() const {
@@ -207,7 +207,7 @@ class ExpTickValue {
     return (vlen_ >> 1) & 32767;
   }
   void decrease_stable() {
-    set_counter(std::max<int>(get_counter() - 5, 0));
+    set_counter(std::max<int>(get_counter() - 1, 0));
   }
 };
 

@@ -1368,7 +1368,7 @@ class EstimateLSM {
   size_t period_{0};
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
-  size_t delta_c_{66};
+  size_t delta_c_{10};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1755,7 +1755,10 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
-    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, stable_hot_size));
+    uint64_t min_hot_size_limit =
+        std::max(min_hot_size_limit_, (uint64_t)(hot_size_limit_ * 0.99));
+    hot_size_limit_ = std::max(min_hot_size_limit,
+                               std::min(max_hot_size_limit_, stable_hot_size));
     logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size, ", period: ", period_, ", lst_decay_period: ", lst_decay_period_);
     sv->unref();
     est_hot.sort();
