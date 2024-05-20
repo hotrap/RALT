@@ -195,7 +195,7 @@ void test_lsm_store_and_scan() {
   auto start = std::chrono::system_clock::now();
   {
     std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp, unused_tick, 1e18, 1, 1e18, 1e18);
+    EstimateLSM<KeyCompType*, ExpTickValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), comp, unused_tick, 1e18, 1e18, 1e18, 1e18);
     int L = 3e7;
     std::vector<int> numbers(L);
     for (int i = 0; i < L; i++) numbers[i] = i;
@@ -209,12 +209,12 @@ void test_lsm_store_and_scan() {
     int TH = 4;
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
-          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, SValue, IndexData<1>>& tree) {
+          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, ExpTickValue, IndexData<1>>& tree) {
             uint8_t a[16];
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
               for (int j = 0; j < 16; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-              tree.append(SKey(a, 16), SValue(1, 1));
+              tree.append(SKey(a, 16), 1);
             }
           },
           std::ref(numbers), std::ref(tree));
@@ -229,12 +229,12 @@ void test_lsm_store_and_scan() {
 
     for (int i = 0; i < TH; i++) {
       threads.emplace_back(
-          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, SValue, IndexData<1>>& tree) {
+          [i, L, TH](std::vector<int>& numbers, EstimateLSM<KeyCompType*, ExpTickValue, IndexData<1>>& tree) {
             uint8_t a[16];
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
               for (int j = 0; j < 16; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-              tree.append(SKey(a, 16), SValue(numbers[i], 1));
+              tree.append(SKey(a, 16), 1);
             }
           },
           std::ref(_numbers), std::ref(tree));
@@ -246,7 +246,7 @@ void test_lsm_store_and_scan() {
     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     std::cout << double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den << std::endl;
     start = std::chrono::system_clock::now();
-    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue, IndexData<1>>::SuperVersionIterator>(tree.seek_to_first());
+    auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, ExpTickValue, IndexData<1>>::SuperVersionIterator>(tree.seek_to_first());
     for (int i = 0; i < L; i++) {
       DB_ASSERT(iter->valid());
       auto kv = iter->read();
@@ -263,8 +263,6 @@ void test_lsm_store_and_scan() {
           x = 0;
         }
       }
-      DB_ASSERT(kv.second.get_counts() == i + 1);
-      DB_ASSERT(kv.second.get_hot_size() == 1);
       iter->next();
     }
     print_memory();
@@ -782,7 +780,7 @@ int main() {
   // test_files();
   // test_unordered_buf();
   // test_lsm_store();
-  // test_lsm_store_and_scan();
+  test_lsm_store_and_scan();
   // test_random_scan_and_count();
   // test_lsm_decay();
   // test_splay();
@@ -790,5 +788,5 @@ int main() {
   // test_kthest();
   // test_lru_cache();
   // test_scan_size();
-  test_bloom();
+  // test_bloom();
 }

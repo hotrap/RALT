@@ -928,7 +928,7 @@ class EstimateLSM {
     }
 
     template<typename FuncT>
-    SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type, FuncT&& do_something) const {
+    SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type, FuncT&& do_something, int tiered_where = -1) const {
       auto comp = lsm.get_comp();
       auto current_tick = lsm.get_current_tick();
       auto filename = lsm.get_filename();
@@ -1026,29 +1026,33 @@ class EstimateLSM {
         // if the number of tables >= kLimitMin, then begin to merge
         // if the number of tables >= kLimitMax, then increase kMergeRatio. (this works when the number of tables is small)
 
-        if (tree_.size() >= kLimitMin) {
+        if (tree_.size() >= kLimitMin || tiered_where != -1) {
           auto _kRatio = kMergeRatio;
           double min_ratio = 1e30;
           int where = -1, _where = -1;
           size_t sum = tree_.back()->size();
-          for (int i = tree_.size() - 2; i >= 0; --i) {
-            if (tree_[i]->size() <= sum * _kRatio)
-              where = i;
-            else if (auto t = tree_[i]->size() / (double)sum; min_ratio > t) {
-              _where = i;
-              min_ratio = t;
-            }
-            sum += tree_[i]->size();
-          }
-          if (tree_.size() >= kLimitMax && where == -1) {
-            where = _where;
-            size_t sum = tree_.back()->size();
+          if (tiered_where != -1) {
+            where = tiered_where;
+          } else {
             for (int i = tree_.size() - 2; i >= 0; --i) {
-              if (tree_[i]->size() <= sum * min_ratio) where = i;
+              if (tree_[i]->size() <= sum * _kRatio)
+                where = i;
+              else if (auto t = tree_[i]->size() / (double)sum; min_ratio > t) {
+                _where = i;
+                min_ratio = t;
+              }
               sum += tree_[i]->size();
             }
+            if (tree_.size() >= kLimitMax && where == -1) {
+              where = _where;
+              size_t sum = tree_.back()->size();
+              for (int i = tree_.size() - 2; i >= 0; --i) {
+                if (tree_[i]->size() <= sum * min_ratio) where = i;
+                sum += tree_[i]->size();
+              }
+            }
+            if (where == -1) return nullptr;  
           }
-          if (where == -1) return nullptr;
           logger("[tiered compaction]");
 
           auto iters = std::make_unique<LevelIteratorSetT>(comp);
@@ -1111,6 +1115,9 @@ class EstimateLSM {
           return nullptr;
         }
 
+        // if (tree_[mni]->pars_cnt() <= 1) {
+        //   return compact(lsm, JobType::kTieredCompaction, std::forward<FuncT>(do_something), mni);
+        // }
 
         auto ret = new SuperVersion(*this);
         auto pars0 = ret->tree_[mni]->get_min_overlap_pars(*tree_[mni - 1], 1, comp);

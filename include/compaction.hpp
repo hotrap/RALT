@@ -37,6 +37,7 @@ class Compaction {
   double decay_prob_;  // = 0.5 on default
   size_t write_bytes_{0};
 
+  // need to ensure that at least one kv pair will be appended to builder_.
   void _begin_new_file() {
     builder_.reset();
     auto [filename, id] = files_->next_pair();
@@ -57,7 +58,7 @@ class Compaction {
     vec_newfiles_.back().real_phy_size = real_phy_size_ - lst_real_phy_size_;
     vec_newfiles_.back().key_n = builder_.get_key_n();
     vec_newfiles_.back().check_hot_buffer = std::move(builder_.get_check_hot_buffer());
-    vec_newfiles_.back().check_stably_hot_buffer = std::move(builder_.get_check_stably_hot_buffer());
+    vec_newfiles_.back().check_stably_hot_buffer = std::move(builder_.get_check_stably_hot_buffer());  
     lst_hot_size_ = hot_size_;
     lst_real_phy_size_ = real_phy_size_;
   }
@@ -86,13 +87,13 @@ class Compaction {
     if (!left.valid()) {
       return std::make_pair(vec_newfiles_, 0.0);
     }
-    _begin_new_file();
     flag_ = false;
     hot_size_ = 0;
     lst_hot_size_ = 0;
     real_phy_size_ = 0;
     lst_real_phy_size_ = 0;
     int CNT = 0;
+    bool first_flag = true;
     // read first kv.
     {
       auto L = left.read();
@@ -107,15 +108,25 @@ class Compaction {
       } else {
         // only store those filter returning true.
         if (phy_filter_func(lst_value_)) {
-          // It maybe the last key.      
+          // if it is the first kv pair, create the builder.
+          if (first_flag) {
+            first_flag = false;
+            _begin_new_file();
+          }
+          // It maybe the last key. 
+          auto phy_size = lst_value_.first.size() + sizeof(ValueT) + 4;     
+          if (builder_.kv_size() + phy_size > kSSTable) {
+            _end_new_file();
+            _begin_new_file();
+          }
           builder_.set_lstkey(lst_value_.first);
           other_func(lst_value_.first, lst_value_.second);
           if (hot_filter_func(lst_value_)) {
             hot_size_ += _calc_hot_size(lst_value_);
-            real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
+            real_phy_size_ += phy_size;
           }
           builder_.append(lst_value_, hot_filter_func(lst_value_));
-          _divide_file(L.first.size() + sizeof(ValueT));
+          
         }
         lst_value_ = {L.first, L.second};
       }
@@ -134,7 +145,10 @@ class Compaction {
         }
       } 
     }
-    _end_new_file();
+    // at least one file is created. if first_flag is not true.
+    if (!first_flag) {
+      _end_new_file();
+    }
     return std::make_pair(vec_newfiles_, hot_size_);
   }
 
@@ -170,13 +184,6 @@ class Compaction {
   template <typename T>
   double _calc_hot_size(const std::pair<T, ValueT>& kv) {
     return kv.first.len() + kv.second.get_hot_size();
-  }
-  void _divide_file(size_t size) {
-    if (builder_.kv_size() + size > kSSTable) {
-      builder_.set_lstkey(lst_value_.first);
-      _end_new_file();
-      _begin_new_file();
-    }
   }
   std::vector<NewFileData> vec_newfiles_;
   double current_tick_;
