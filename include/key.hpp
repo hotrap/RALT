@@ -7,6 +7,8 @@
 
 namespace viscnts_lsm {
 
+constexpr double kExpDecayRatio = 0.999;
+
 using SKey = Slice;
 using IndSKey = IndSlice;
 
@@ -179,17 +181,17 @@ class ExpTickValue {
     set_counter(std::min<int>(100, get_counter() + v.get_counter()));
     vlen_ |= 1;
     if (tick_ < v.tick_) {
-      score_ = pow(0.999, v.tick_ - tick_) * score_ + v.score_;
+      score_ = pow(kExpDecayRatio, v.tick_ - tick_) * score_ + v.score_;
       tick_ = v.tick_;
     } else if (tick_ > v.tick_) {
-      score_ = pow(0.999, tick_ - v.tick_) * v.score_ + score_;
+      score_ = pow(kExpDecayRatio, tick_ - v.tick_) * v.score_ + score_;
     }
   }
   size_t get_hot_size() const {
     return vlen_ >> 15;
   }
   double get_score() const {
-    return log(score_) + log(0.9998) * (-tick_) + (1e5) * is_stable();
+    return log(score_) + log(kExpDecayRatio) * (-tick_) + (1e5) * is_stable();
   }
   bool decay(double, std::mt19937_64&) {
     return true;
