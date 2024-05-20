@@ -224,6 +224,24 @@ size_t VisCnts::GetHotSetSizeLimit() {
   return vc->get_hot_set_limit();
 }
 
+uint64_t VisCnts::GetMinHotSetSizeLimit() {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  return vc->get_min_hot_size_limit();
+}
+void VisCnts::SetMinHotSetSizeLimit(uint64_t min_hot_size_limit) {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  vc->set_min_hot_size_limit(min_hot_size_limit);
+}
+
+uint64_t VisCnts::GetMaxHotSetSizeLimit() {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  return vc->get_max_hot_size_limit();
+}
+void VisCnts::SetMaxHotSetSizeLimit(uint64_t max_hot_size_limit) {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  vc->set_max_hot_size_limit(max_hot_size_limit);
+}
+
 void VisCnts::SetProperPhysicalSizeLimit() {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->set_proper_phy_limit();

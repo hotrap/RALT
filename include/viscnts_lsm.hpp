@@ -1366,8 +1366,8 @@ class EstimateLSM {
   uint8_t compact_thread_state_{0};
   size_t physical_size_limit_{0};
   size_t hot_size_limit_{0};
-  size_t max_hot_size_limit_{0};
-  size_t min_hot_size_limit_{0};
+  uint64_t max_hot_size_limit_{0};
+  uint64_t min_hot_size_limit_{0};
   size_t phy_size_{0};
   size_t real_hot_size_{0};
   size_t real_phy_size_{0};
@@ -1464,7 +1464,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, _value.get_hot_size(), max_hot_size_limit_ == min_hot_size_limit_ ? 0 : delta_c_);
+    ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
     bufs_.append_and_notify(key, value);
   }
   void append(SKey key, size_t vlen) {
@@ -1476,7 +1476,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, vlen, max_hot_size_limit_ == min_hot_size_limit_ ? 0 : delta_c_);
+    ValueT value(exp_tick_period_, vlen, delta_c_);
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1762,7 +1762,10 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
-    hot_size_limit_ = std::max<size_t>(min_hot_size_limit_, std::min<size_t>(max_hot_size_limit_, stable_hot_size));
+    uint64_t min_hot_size_limit =
+        std::max(min_hot_size_limit_, (uint64_t)(hot_size_limit_ * 0.99));
+    hot_size_limit_ = std::max(min_hot_size_limit,
+                               std::min(max_hot_size_limit_, stable_hot_size));
     logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size, ", period: ", period_, ", lst_decay_period: ", lst_decay_period_);
     sv->unref();
     est_hot.sort();
@@ -1813,6 +1816,16 @@ class EstimateLSM {
 
   size_t get_hot_set_limit() const {
     return hot_size_limit_;
+  }
+
+  uint64_t get_min_hot_size_limit() { return min_hot_size_limit_; }
+  void set_min_hot_size_limit(uint64_t min_hot_size_limit) {
+    min_hot_size_limit_ = min_hot_size_limit;
+  }
+
+  uint64_t get_max_hot_size_limit() { return max_hot_size_limit_; }
+  void set_max_hot_size_limit(uint64_t max_hot_size_limit) {
+    max_hot_size_limit_ = max_hot_size_limit;
   }
 
   void set_proper_phy_limit() {
@@ -2043,7 +2056,6 @@ class alignas(128) VisCnts {
   }
 
   void update_tick_threshold() {
-    decay_count_ += 1;
     if (cache_policy == CachePolicyT::kUseTick) {
       // auto hot_size = weight_sum();
       // KthEst<double> est(kEstPointNum, hot_set_limit_);
@@ -2081,7 +2093,7 @@ class alignas(128) VisCnts {
       tree->faster_decay();
       logger("weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
     }
-    
+    decay_count_ += 1;
   }
 
   void set_new_hot_limit(size_t new_limit) {
@@ -2114,6 +2126,15 @@ class alignas(128) VisCnts {
     return tree->get_hot_set_limit();
   }
 
+  uint64_t get_min_hot_size_limit() { return tree->get_min_hot_size_limit(); }
+  void set_min_hot_size_limit(uint64_t min_hot_size_limit) {
+    tree->set_min_hot_size_limit(min_hot_size_limit);
+  }
+
+  uint64_t get_max_hot_size_limit() { return tree->get_max_hot_size_limit(); }
+  void set_max_hot_size_limit(uint64_t max_hot_size_limit) {
+    tree->set_max_hot_size_limit(max_hot_size_limit);
+  }
 
   void set_proper_phy_limit() {
     tree->set_proper_phy_limit();
