@@ -208,7 +208,7 @@ class ExpTickValue {
   int get_counter() const {
     return (vlen_ >> 1) & 32767;
   }
-  void decrease_stable() { set_counter(std::max<int>(get_counter() - 5, 0)); }
+  void decrease_stable() { set_counter(std::max<int>(get_counter() - 1, 0)); }
 };
 
 // Not used.

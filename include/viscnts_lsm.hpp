@@ -114,7 +114,7 @@ constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
-constexpr auto kPeriodAccessMultiplier = 0.5;
+constexpr auto kPeriodAccessMultiplier = 0.1;
 constexpr auto kExpPeriodMultiplier = 0.001;
 constexpr auto kExtraBufferMultiplier = 20;
 
@@ -1376,6 +1376,7 @@ class EstimateLSM {
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
   size_t delta_c_{26};
+  size_t last_stable_hot_size_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1762,6 +1763,7 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
+    last_stable_hot_size_ = stable_hot_size;
     uint64_t max_hot_size_limit_decr =
         (max_hot_size_limit_ - min_hot_size_limit_) / 50;
     uint64_t min_hot_size_limit =
@@ -1799,7 +1801,7 @@ class EstimateLSM {
     double hs_step = std::max(hot_size_limit_ * kHotSetExceedLimit, (max_hot_size_limit_ - min_hot_size_limit_) / 20.0);
     double phy_step = std::max<double>(kSSTable, physical_size_limit_ * kHotSetExceedLimit);
     return hot_size_overestimate_ > hot_size_limit_ + hs_step ||
-        phy_size_ > physical_size_limit_ + phy_step;
+        phy_size_ > physical_size_limit_ + phy_step || lst_decay_period_ != period_;
   }
 
   void set_hot_set_limit(size_t new_limit) {
