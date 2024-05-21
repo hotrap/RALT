@@ -178,7 +178,7 @@ class ExpTickValue {
   ExpTickValue() {}
   ExpTickValue(double tick, size_t vlen, unsigned int init_score, bool init_tag = false) : tick_(tick), score_(1), vlen_(vlen << 15 | init_score << 1 | init_tag) {}
   void merge(const ExpTickValue& v, double cur_tick) {
-    set_counter(std::min<int>(100, get_counter() + v.get_counter()));
+    set_counter(std::min<int>(50, get_counter() + v.get_counter()));
     vlen_ |= 1;
     if (tick_ < v.tick_) {
       score_ = pow(kExpDecayRatio, v.tick_ - tick_) * score_ + v.score_;
