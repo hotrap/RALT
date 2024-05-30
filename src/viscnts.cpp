@@ -49,10 +49,9 @@ class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
       }
       if (it_->valid()) {
         auto key = it_->read().first;
-        auto stable = it_->read().second.is_stable();
         rocksdb::HotRecInfo ret;
-        ret.key = rocksdb::Slice(reinterpret_cast<const char*>(key.data()), key.len());
-        ret.stable = stable;
+        ret = rocksdb::Slice(reinterpret_cast<const char *>(key.data()),
+                             key.len());
         return rocksdb::optional<rocksdb::HotRecInfo>(std::move(ret));
       }
       return rocksdb::optional<rocksdb::HotRecInfo>();
