@@ -101,7 +101,8 @@ void VisCnts::Access(rocksdb::Slice key, size_t vlen) {
 bool VisCnts::IsHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("is_hot");
-  return vc->is_hot(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
+  return vc->is_stably_hot(viscnts_lsm::SKey(
+      reinterpret_cast<const uint8_t *>(key.data()), key.size()));
 }
 bool VisCnts::IsStablyHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
