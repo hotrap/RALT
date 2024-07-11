@@ -247,7 +247,8 @@ void test_decay_hit_rate() {
   size_t max_hot_set_cnt = N * 0.05;
   size_t max_hot_set_size = max_hot_set_cnt * vlen;
   size_t max_physical_size = 60 * max_hot_set_cnt;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/yfzcsc/viscnts/", N * 0.05 * vlen, N * 0.05 * vlen, N * 0.05 * vlen, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "viscnts/", N * 0.05 * vlen,
+                         N * 0.05 * vlen, N * 0.05 * vlen, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
   auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_cnt);
