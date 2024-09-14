@@ -40,14 +40,6 @@ size_t convert_to_int(rocksdb::Slice input) {
   return *reinterpret_cast<const size_t*>(input.data() + input.size() - 8);
 }
 
-size_t convert_to_int(rocksdb::HotRecInfo input) {
-  return convert_to_int(input.key);
-}
-
-size_t get_size(rocksdb::HotRecInfo input) {
-  return input.key.size();
-}
-
 void input_all(VisCnts& vc,const std::vector<std::pair<size_t, size_t>>& data, int TH, int vlen) {
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
@@ -231,7 +223,7 @@ void test_decay_simple() {
     auto result = iter->next();
     if (result.has_value()) {
       cnt += 1;
-      sum += vlen + get_size(result.value());
+      sum += vlen + result.value().size();
     } else {
       break;
     }
@@ -243,7 +235,7 @@ void test_decay_simple() {
 
 void test_decay_hit_rate() {
   // all keys are distinct.
-  size_t N = 1e8, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
+  size_t N = 1e7, TH = 8, vlen = 1000, Q = 1e4, QLEN = 100;
   size_t max_hot_set_cnt = N * 0.05;
   size_t max_hot_set_size = max_hot_set_cnt * vlen;
   size_t max_physical_size = 60 * max_hot_set_cnt;
@@ -278,7 +270,7 @@ void test_decay_hit_rate() {
   while (true) {
     auto result = iter->next();
     if (result.has_value()) {
-      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().key.size()));
+      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().size()));
       sum += 1;
     } else {
       break;
@@ -293,7 +285,7 @@ void test_decay_hit_rate() {
   while (true) {
     auto result = iter->next();
     if (result.has_value()) {
-      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().key.size()));
+      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().size()));
       sum += 1;
     } else {
       break;
@@ -324,7 +316,7 @@ void test_parallel() {
         while (true) {
           auto result = iter->next();
           if (result.has_value()) {
-            sum += vlen + get_size(result.value());
+            sum += vlen + (result.value()).size();
           } else {
             break;
           }
@@ -382,7 +374,7 @@ void test_stable_hot() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e6, TH = 16, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
@@ -507,11 +499,11 @@ void test_range_hot_size() {
 int main() {
   // test_store_and_scan();
   // test_decay_simple();
-  test_decay_hit_rate();
+  // test_decay_hit_rate();
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  // test_stable_hot();
+  test_stable_hot();
   // test_lowerbound();
   // test_range_hot_size();
 }
