@@ -12,7 +12,7 @@ namespace viscnts_lsm {
 
 
 const static size_t kMagicNumber = 0x25a65facc3a23559;  // echo viscnts | sha1sum
-const static size_t kPageSize = 1 << 12;
+const static size_t kPageSize = 16 << 10;
 constexpr size_t kSSTable = 1ull << 24;
 
 template <typename KeyCompT, typename ValueT>
@@ -371,8 +371,10 @@ class SSTBuilder {
   using IndexKey = BlockKey<SKey, IndexDataT>;
 
  public:
-  SSTBuilder(std::unique_ptr<WriteBatch>&& file = nullptr) : 
-    file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0) {}
+  SSTBuilder() = default;
+
+  SSTBuilder(std::unique_ptr<WriteBatch>&& file, size_t bloom_bfk) : 
+    file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0), bloom_bfk_(bloom_bfk) {}
   void append(const DataKey& kv, bool is_hot) {
     assert(kv.key().len() > 0);
     _append_align(kv.size());
@@ -460,8 +462,9 @@ class SSTBuilder {
     check_hot_buffer_.clear();
     check_stably_hot_buffer_.clear();
   }
-  void new_file(std::unique_ptr<WriteBatch>&& file) {
+  void new_file(std::unique_ptr<WriteBatch>&& file, size_t bloom_bfk) {
     file_ = std::move(file);
+    bloom_bfk_ = bloom_bfk;
     assert(file_ != nullptr);
   }
 
@@ -491,7 +494,7 @@ class SSTBuilder {
   }
 
   void make_bloom() {
-    BloomFilter bf(kBloomFilterBitNum);
+    BloomFilter bf(bloom_bfk_);
     size_t stable_cnt_in_hot = 0;
     for (auto& [k, is_stably_hot] : keys_) {
       stable_cnt_in_hot += is_stably_hot;
@@ -508,7 +511,7 @@ class SSTBuilder {
   }
 
  private:
-  uint32_t now_offset, lst_offset, counts, size_;
+  uint32_t now_offset{0}, lst_offset{0}, counts{0}, size_{0};
   std::vector<std::pair<IndSKey, IndexDataT>> index;
   std::vector<std::pair<size_t, int>> keys_;
   std::vector<uint32_t> offsets;
@@ -517,6 +520,7 @@ class SSTBuilder {
   IndSlice check_stably_hot_buffer_;
   size_t stable_cnt_{0};
   size_t key_n_{0};
+  size_t bloom_bfk_{0};
 };
 
 }

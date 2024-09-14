@@ -218,9 +218,10 @@ class EstimateLSM {
     std::string filename_;
     IndSlice check_hot_buffer_;
     IndSlice check_stably_hot_buffer_;
+    size_t bloom_bfk_;
 
    public:
-    Partition(Env* env, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, KeyCompT comp, typename Compaction<KeyCompT, ValueT, IndexDataT>::NewFileData&& data)
+    Partition(Env* env, FileChunkCache* file_index_cache, FileChunkCache* file_key_cache, KeyCompT comp, typename Compaction<KeyCompT, ValueT, IndexDataT>::NewFileData&& data, size_t bloom_bfk)
         : file_(data.file_id, data.size, std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)), data.range, file_index_cache, file_key_cache, comp),
           deleted_ranges_(),
           global_hot_size_(data.hot_size),
@@ -228,7 +229,8 @@ class EstimateLSM {
           real_phy_size_(data.real_phy_size),
           filename_(data.filename),
           check_hot_buffer_(std::move(data.check_hot_buffer)),
-          check_stably_hot_buffer_(std::move(data.check_stably_hot_buffer)) {
+          check_stably_hot_buffer_(std::move(data.check_stably_hot_buffer)),
+          bloom_bfk_(bloom_bfk) {
       global_range_counts_ = file_.counts();
       avg_hot_size_ = data.hot_size / (double) file_.counts();
     }
@@ -267,11 +269,11 @@ class EstimateLSM {
     const DeletedRange& deleted_ranges() const { return deleted_ranges_; }
     const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file() const { return file_; }
     bool check_stably_hot(SKey key) const {
-      BloomFilter bf(kBloomFilterBitNum);
+      BloomFilter bf(bloom_bfk_);
       return bf.Find(key, check_stably_hot_buffer_.ref());
     }
     bool check_hot(SKey key) const {
-      BloomFilter bf(kBloomFilterBitNum);
+      BloomFilter bf(bloom_bfk_);
       return bf.Find(key, check_hot_buffer_.ref());
     }
     size_t get_key_n() const {
@@ -882,12 +884,12 @@ class EstimateLSM {
       if (bufs.size() == 0) return {};
       std::vector<atomic_shared_ptr<Level>> ret_vectors;
       auto flush_func = [&lsm](UnsortedBuffer<KeyCompT, ValueT>* buf, std::mutex& mu, std::vector<atomic_shared_ptr<Level>>& ret_vectors) {
-        Compaction<KeyCompT, ValueT, IndexDataT> worker(lsm.get_current_tick(), lsm.get_filename(), lsm.get_env(), lsm.get_comp());
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(lsm.get_current_tick(), lsm.get_filename(), lsm.get_env(), lsm.get_comp(), lsm.get_bloom_bfk());
         buf->sort(lsm.get_current_tick());
         auto iter = std::make_unique<typename UnsortedBuffer<KeyCompT, ValueT>::Iterator>(*buf);
         auto [files, hot_size] = worker.flush(*iter);
         auto level = make_atomic_shared<Level>();
-        for (auto& a : files) level->append_par(make_atomic_shared<Partition>(lsm.get_env(), lsm.get_file_index_cache(), lsm.get_file_key_cache(), lsm.get_comp(), std::move(a)));
+        for (auto& a : files) level->append_par(make_atomic_shared<Partition>(lsm.get_env(), lsm.get_file_index_cache(), lsm.get_file_key_cache(), lsm.get_comp(), std::move(a), lsm.get_bloom_bfk()));
         delete buf;
         lsm.update_write_bytes(worker.get_write_bytes());
         {
@@ -971,14 +973,14 @@ class EstimateLSM {
         iters->build();
 
         // compaction...
-        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp, lsm.get_bloom_bfk());
         auto [files, hot_size] = worker.decay1(*iters, std::forward<FuncT>(do_something));
         auto ret = new SuperVersion(*this);
         // major compaction, so levels except largest_ become empty.
         
         auto level = make_atomic_shared<Level>();
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a), lsm.get_bloom_bfk());
           level->append_par(std::move(par));
         }   
         ret->tree_.push_back(std::move(level));
@@ -999,14 +1001,14 @@ class EstimateLSM {
         iters->build();
 
         // compaction...
-        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp, lsm.get_bloom_bfk());
         auto [files, hot_size] = worker.flush_with_filter(*iters, tick_filter, decay_tick_filter, std::forward<FuncT>(do_something));
         auto ret = new SuperVersion(comp);
         // major compaction, so levels except largest_ become empty.
         
         auto level = make_atomic_shared<Level>();
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a), lsm.get_bloom_bfk());
           level->append_par(std::move(par));
         }   
         ret->tree_.push_back(std::move(level));
@@ -1067,7 +1069,7 @@ class EstimateLSM {
 
           // logger("compact...");
           // compaction...
-          Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+          Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp, lsm.get_bloom_bfk());
           // Don't use tick filter because it is partial merge.
           auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
           auto ret = new SuperVersion(*this);
@@ -1078,7 +1080,7 @@ class EstimateLSM {
           auto rest_iter = rest.begin();
           auto level = make_atomic_shared<Level>();
           for (auto& a : files) {
-            auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
+            auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a), lsm.get_bloom_bfk());
             while (rest_iter != rest.end() && comp((*rest_iter)->range().first, par->range().first) <= 0) {
               level->append_par(std::move(*rest_iter));
               rest_iter++;
@@ -1132,13 +1134,13 @@ class EstimateLSM {
         iters->push(typename Level::LevelIterator(pars1, 0));
         iters->build();
 
-        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp, lsm.get_bloom_bfk());
         auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
         lsm.update_write_bytes(worker.get_write_bytes());
 
         std::vector<atomic_shared_ptr<Partition>> pars;
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a), lsm.get_bloom_bfk());
           pars.push_back(std::move(par));
         }
         
@@ -1216,14 +1218,14 @@ class EstimateLSM {
         logger("[", step, ", ", compact_r[0], "]");
 
         // compaction...
-        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp);
+        Compaction<KeyCompT, ValueT, IndexDataT> worker(current_tick, filename, env, comp, lsm.get_bloom_bfk());
         auto [files, hot_size] = worker.flush_with_filter(*iters, tick_filter, decay_tick_filter, std::forward<FuncT>(do_something));
         
         std::vector<atomic_shared_ptr<Partition>> result;
         std::vector<atomic_shared_ptr<Partition>> last_ssts;
         last_ssts.clear();
         for (auto& a : files) {
-          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a));
+          auto par = make_atomic_shared<Partition>(env, file_index_cache, file_key_cache, comp, std::move(a), lsm.get_bloom_bfk());
           if ((compact_r[0] < tree_[0]->pars_cnt() && comp(par->range().second, tree_[0]->get_pars()[compact_r[0]]->range().first) >= 0) || 
           (compact_l[0] >= 1 && comp(par->range().first, tree_[0]->get_pars()[compact_l[0] - 1]->range().second) <= 0)) {
             last_ssts.push_back(std::move(par));
@@ -1377,6 +1379,7 @@ class EstimateLSM {
   size_t exp_tick_period_{0};
   size_t delta_c_{26};
   size_t last_stable_hot_size_{0};
+  size_t bloom_bfk_{10};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1417,7 +1420,7 @@ class EstimateLSM {
     auto next() { return iter_.next(); }
   };
   EstimateLSM(Env* env, size_t file_cache_size, std::unique_ptr<FileName>&& filename,
-              KeyCompT comp, std::atomic<size_t>& current_tick, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size_limit)
+              KeyCompT comp, std::atomic<size_t>& current_tick, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size_limit, size_t bloom_bfk)
       : env_(env),
         filename_(std::move(filename)),
         comp_(comp),
@@ -1429,7 +1432,8 @@ class EstimateLSM {
         physical_size_limit_(physical_size_limit),
         hot_size_limit_(initial_hot_size),
         max_hot_size_limit_(max_hot_size),
-        min_hot_size_limit_(min_hot_size) {
+        min_hot_size_limit_(min_hot_size),
+        bloom_bfk_(bloom_bfk) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
     clockid_t compact_thread_clock_id;
     pthread_getcpuclockid(compact_thread_.native_handle(),
@@ -1441,6 +1445,7 @@ class EstimateLSM {
     pthread_getcpuclockid(flush_thread_.native_handle(),
                           &flush_thread_clock_id);
     flush_thread_timer_ = Timer(flush_thread_clock_id);
+    logger_printf("LSM bloom filter BPK: %zu bits.", bloom_bfk_);
   }
   ~EstimateLSM() {
     {
@@ -1566,13 +1571,17 @@ class EstimateLSM {
     return hot_size_overestimate_;
   }
 
-  size_t get_key_n() {
+  size_t get_key_n() const {
     return key_n_;
   }
 
   
-  double get_current_phy_size() {
+  double get_current_phy_size() const {
     return phy_size_;
+  }
+
+  size_t get_bloom_bfk() const {
+    return bloom_bfk_;
   }
 
   void set_tick_threshold(size_t x) {
@@ -1984,8 +1993,8 @@ class alignas(128) VisCnts {
  public:
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
   // Use different file path for two trees.
-  VisCnts(KeyCompT comp, const std::string& path, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size)
-    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, initial_hot_size, max_hot_size, min_hot_size, physical_size)},
+  VisCnts(KeyCompT comp, const std::string& path, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size, size_t bloom_bfk)
+    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, initial_hot_size, max_hot_size, min_hot_size, physical_size, bloom_bfk)},
       comp_(comp) {
         decay_thread_ = std::thread([&](){ decay_thread(); });
         clockid_t decay_cpu_clock_id;

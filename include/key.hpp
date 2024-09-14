@@ -169,14 +169,17 @@ class ClockTickValue {
   }
 };
 
-
+#pragma pack(push, 1)
 class ExpTickValue {
-  double tick_{0};
-  double score_{0};
-  size_t vlen_{0};
+  uint32_t vlen_{0};
+  float score_{0};
+  int16_t tick_{0};
+
+  constexpr const static auto kScoreBitNum = 8;
  public:
   ExpTickValue() {}
-  ExpTickValue(double tick, size_t vlen, unsigned int init_score, bool init_tag = false) : tick_(tick), score_(1), vlen_(vlen << 15 | init_score << 1 | init_tag) {}
+  ExpTickValue(int tick, size_t vlen, unsigned int init_score, bool init_tag = false) : 
+    tick_(tick), score_(1), vlen_(vlen << (kScoreBitNum + 1) | init_score << 1 | init_tag) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     set_counter(std::min<int>(50, get_counter() + v.get_counter()));
     vlen_ |= 1;
@@ -188,7 +191,7 @@ class ExpTickValue {
     }
   }
   size_t get_hot_size() const {
-    return vlen_ >> 15;
+    return vlen_ >> (kScoreBitNum + 1);
   }
   double get_score() const {
     return log(score_) + log(kExpDecayRatio) * (-tick_) + (1e5) * is_stable();
@@ -203,13 +206,14 @@ class ExpTickValue {
     return (vlen_ & 1) && get_counter() > 0;
   }
   void set_counter(int x) {
-    vlen_ = (vlen_ >> 15) << 15 | (x << 1) | (vlen_ & 1);
+    vlen_ = (vlen_ >> (kScoreBitNum + 1)) << (kScoreBitNum + 1) | (x << 1) | (vlen_ & 1);
   }
   int get_counter() const {
-    return (vlen_ >> 1) & 32767;
+    return (vlen_ >> 1) & ((1ull << kScoreBitNum) - 1);
   }
   void decrease_stable() { set_counter(std::max<int>(get_counter() - 1, 0)); }
 };
+#pragma pack(pop)
 
 // Not used.
 // class Tag2TickValue {

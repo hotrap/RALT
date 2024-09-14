@@ -11,8 +11,6 @@ namespace viscnts_lsm {
 
 
 
-constexpr auto kBloomFilterBitNum = 20;
-
 class BloomFilter {
  private:
   size_t bits_per_key_;

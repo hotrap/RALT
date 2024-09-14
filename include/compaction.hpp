@@ -36,12 +36,13 @@ class Compaction {
   size_t real_phy_size_;
   double decay_prob_;  // = 0.5 on default
   size_t write_bytes_{0};
+  size_t bloom_bfk_{10};
 
   // need to ensure that at least one kv pair will be appended to builder_.
   void _begin_new_file() {
     builder_.reset();
     auto [filename, id] = files_->next_pair();
-    builder_.new_file(std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(env_->openAppFile(filename))));
+    builder_.new_file(std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(env_->openAppFile(filename))), bloom_bfk_);
     vec_newfiles_.emplace_back();
     vec_newfiles_.back().filename = filename;
     vec_newfiles_.back().file_id = id;
@@ -75,8 +76,8 @@ class Compaction {
     IndSlice check_hot_buffer;
     IndSlice check_stably_hot_buffer;
   };
-  Compaction(double current_tick, FileName* files, Env* env, KeyCompT comp) 
-    : current_tick_(current_tick), files_(files), env_(env), flag_(false), rndgen_(std::random_device()()), comp_(comp) {
+  Compaction(double current_tick, FileName* files, Env* env, KeyCompT comp, size_t bloom_bfk) 
+    : current_tick_(current_tick), files_(files), env_(env), flag_(false), rndgen_(std::random_device()()), comp_(comp), bloom_bfk_(bloom_bfk) {
     decay_prob_ = 0.5;
   }
 
