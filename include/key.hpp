@@ -173,7 +173,7 @@ class ClockTickValue {
 class ExpTickValue {
   uint32_t vlen_{0};
   float score_{0};
-  int16_t tick_{0};
+  int32_t tick_{0};
 
   constexpr const static auto kScoreBitNum = 8;
  public:
@@ -189,6 +189,8 @@ class ExpTickValue {
     } else if (tick_ > v.tick_) {
       score_ = pow(kExpDecayRatio, tick_ - v.tick_) * v.score_ + score_;
     }
+    // If tick_ == v.tick_, then the key is accessed multiple times in this
+    // time slice. We just keep one of the access instead of merging them.
   }
   size_t get_hot_size() const {
     return vlen_ >> (kScoreBitNum + 1);
