@@ -3,8 +3,8 @@
 
 #include <optional>
 
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/comparator.h"
+#include "rocksdb/ralt.h"
 
 template<typename T>
 class FastIter {
@@ -23,9 +23,9 @@ public:
   bool IsHot(rocksdb::Slice key);
   bool IsStablyHot(rocksdb::Slice key);
   size_t RangeHotSize(rocksdb::RangeBounds range);
-  rocksdb::CompactionRouter::Iter Begin();
+  rocksdb::RALT::Iter Begin();
   std::unique_ptr<FastIter<rocksdb::Slice>> FastBegin();
-  rocksdb::CompactionRouter::Iter LowerBound(rocksdb::Slice key);
+  rocksdb::RALT::Iter LowerBound(rocksdb::Slice key);
   void Flush();
   size_t GetHotSize();
 

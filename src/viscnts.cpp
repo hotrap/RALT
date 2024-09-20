@@ -14,8 +14,8 @@
 
 #include "viscnts_lsm.hpp"
 
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/comparator.h"
+#include "rocksdb/ralt.h"
 
 struct SKeyComparatorFromRocksDB {
   const rocksdb::Comparator* ucmp;
@@ -117,21 +117,22 @@ size_t VisCnts::RangeHotSize(
   auto rkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.end.user_key.data()), range.end.user_key.size());
   return vc->range_data_size({lkey, rkey});
 }
-rocksdb::CompactionRouter::Iter VisCnts::Begin() {
+rocksdb::RALT::Iter VisCnts::Begin() {
   auto vc = static_cast<VisCntsType*>(vc_);
   logger("Iter Begin");
-  return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek_to_first()));
+  return rocksdb::RALT::Iter(
+      std::make_unique<VisCntsIter>(vc->seek_to_first()));
 }
 std::unique_ptr<FastIter<rocksdb::Slice>> VisCnts::FastBegin() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return std::make_unique<FastVisCntsIter>(vc->seek_to_first());
 }
-rocksdb::CompactionRouter::Iter VisCnts::LowerBound(
-  rocksdb::Slice key
-) {
+rocksdb::RALT::Iter VisCnts::LowerBound(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("Iter LowerBound");
-  return rocksdb::CompactionRouter::Iter(std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()))));
+  return rocksdb::RALT::Iter(
+      std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(
+          reinterpret_cast<const uint8_t *>(key.data()), key.size()))));
 }
 
 size_t VisCnts::TierNum() {
