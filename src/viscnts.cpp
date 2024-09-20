@@ -84,11 +84,13 @@ class FastVisCntsIter : public FastIter<rocksdb::Slice> {
     std::unique_ptr<VisCntsType::IteratorT> it_;
 };
 
-VisCnts VisCnts::New(
-		const rocksdb::Comparator *ucmp, const char *dir,
-		size_t init_hot_set_size, size_t max_hot_set_size, size_t min_hot_set_size, size_t max_physical_size, size_t bloom_bfk) {
-  return VisCnts(new VisCntsType(SKeyComparatorFromRocksDB(ucmp), dir, init_hot_set_size, max_hot_set_size, min_hot_set_size, max_physical_size, bloom_bfk));
-}
+VisCnts::VisCnts(const rocksdb::Comparator *ucmp, const char *dir,
+                 size_t init_hot_set_size, size_t max_hot_set_size,
+                 size_t min_hot_set_size, size_t max_physical_size,
+                 size_t bloom_bfk)
+    : vc_(new VisCntsType(SKeyComparatorFromRocksDB(ucmp), dir,
+                          init_hot_set_size, max_hot_set_size, min_hot_set_size,
+                          max_physical_size, bloom_bfk)) {}
 
 VisCnts::~VisCnts() {
   delete static_cast<VisCntsType*>(vc_);
