@@ -12,7 +12,7 @@ public:
   virtual std::optional<T> next() = 0;
 };
 
-class VisCnts {
+class VisCnts : public rocksdb::RALT {
 public:
   VisCnts(const VisCnts &) = delete;
   ~VisCnts();
@@ -20,14 +20,15 @@ public:
           size_t init_hot_set_size, size_t max_hot_set_size,
           size_t min_hot_set_size, size_t max_physical_size,
           size_t bloom_bfk = 10);
-  size_t TierNum();
-  void Access(rocksdb::Slice key, size_t vlen);
-  bool IsHot(rocksdb::Slice key);
+  const char *Name() const override { return "RALT-LSM"; }
+  void Access(rocksdb::Slice key, size_t vlen) override;
+  size_t RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) override;
+  rocksdb::RALT::Iter LowerBound(rocksdb::Slice key) override;
+  bool IsHot(rocksdb::Slice key) override;
+
   bool IsStablyHot(rocksdb::Slice key);
-  size_t RangeHotSize(rocksdb::RangeBounds range);
   rocksdb::RALT::Iter Begin();
   std::unique_ptr<FastIter<rocksdb::Slice>> FastBegin();
-  rocksdb::RALT::Iter LowerBound(rocksdb::Slice key);
   void Flush();
   size_t GetHotSize();
 
@@ -63,8 +64,6 @@ public:
   bool GetIntProperty(std::string_view property, uint64_t *value);
 
 private:
-  VisCnts(void *vc) : vc_(vc) {}
-
   void *vc_;
 };
 

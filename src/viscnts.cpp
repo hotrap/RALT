@@ -100,6 +100,21 @@ void VisCnts::Access(rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->access(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
 }
+size_t VisCnts::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  auto lkey = viscnts_lsm::SKey(
+      reinterpret_cast<const uint8_t *>(smallest.data()), smallest.size());
+  auto rkey = viscnts_lsm::SKey(
+      reinterpret_cast<const uint8_t *>(largest.data()), largest.size());
+  return vc->range_data_size({lkey, rkey});
+}
+rocksdb::RALT::Iter VisCnts::LowerBound(rocksdb::Slice key) {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  // logger("Iter LowerBound");
+  return rocksdb::RALT::Iter(
+      std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(
+          reinterpret_cast<const uint8_t *>(key.data()), key.size()))));
+}
 bool VisCnts::IsHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("is_hot");
@@ -111,14 +126,6 @@ bool VisCnts::IsStablyHot(rocksdb::Slice key) {
   // logger("is_hot");
   return vc->is_stably_hot(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
 }
-size_t VisCnts::RangeHotSize(
-  rocksdb::RangeBounds range
-) {
-  auto vc = static_cast<VisCntsType*>(vc_);
-  auto lkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.start.user_key.data()), range.start.user_key.size());
-  auto rkey = viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(range.end.user_key.data()), range.end.user_key.size());
-  return vc->range_data_size({lkey, rkey});
-}
 rocksdb::RALT::Iter VisCnts::Begin() {
   auto vc = static_cast<VisCntsType*>(vc_);
   logger("Iter Begin");
@@ -128,17 +135,6 @@ rocksdb::RALT::Iter VisCnts::Begin() {
 std::unique_ptr<FastIter<rocksdb::Slice>> VisCnts::FastBegin() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return std::make_unique<FastVisCntsIter>(vc->seek_to_first());
-}
-rocksdb::RALT::Iter VisCnts::LowerBound(rocksdb::Slice key) {
-  auto vc = static_cast<VisCntsType*>(vc_);
-  // logger("Iter LowerBound");
-  return rocksdb::RALT::Iter(
-      std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(
-          reinterpret_cast<const uint8_t *>(key.data()), key.size()))));
-}
-
-size_t VisCnts::TierNum() {
-  return 2;
 }
 
 void VisCnts::Flush() {
