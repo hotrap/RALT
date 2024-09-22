@@ -84,23 +84,20 @@ class FastVisCntsIter : public FastIter<rocksdb::Slice> {
     std::unique_ptr<VisCntsType::IteratorT> it_;
 };
 
-VisCnts::VisCnts(const rocksdb::Comparator *ucmp, const char *dir,
-                 size_t init_hot_set_size, size_t max_hot_set_size,
-                 size_t min_hot_set_size, size_t max_physical_size,
-                 size_t bloom_bfk)
+RALT::RALT(const rocksdb::Comparator *ucmp, const char *dir,
+           size_t init_hot_set_size, size_t max_hot_set_size,
+           size_t min_hot_set_size, size_t max_physical_size, size_t bloom_bfk)
     : vc_(new VisCntsType(SKeyComparatorFromRocksDB(ucmp), dir,
                           init_hot_set_size, max_hot_set_size, min_hot_set_size,
                           max_physical_size, bloom_bfk)) {}
 
-VisCnts::~VisCnts() {
-  delete static_cast<VisCntsType*>(vc_);
-}
+RALT::~RALT() { delete static_cast<VisCntsType *>(vc_); }
 
-void VisCnts::Access(rocksdb::Slice key, size_t vlen) {
+void RALT::Access(rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->access(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
 }
-size_t VisCnts::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
+size_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
   auto vc = static_cast<VisCntsType *>(vc_);
   auto lkey = viscnts_lsm::SKey(
       reinterpret_cast<const uint8_t *>(smallest.data()), smallest.size());
@@ -108,86 +105,85 @@ size_t VisCnts::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
       reinterpret_cast<const uint8_t *>(largest.data()), largest.size());
   return vc->range_data_size({lkey, rkey});
 }
-rocksdb::RALT::Iter VisCnts::LowerBound(rocksdb::Slice key) {
+rocksdb::RALT::Iter RALT::LowerBound(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType *>(vc_);
   // logger("Iter LowerBound");
   return rocksdb::RALT::Iter(
       std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(
           reinterpret_cast<const uint8_t *>(key.data()), key.size()))));
 }
-bool VisCnts::IsHot(rocksdb::Slice key) {
+bool RALT::IsHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("is_hot");
   return vc->is_stably_hot(viscnts_lsm::SKey(
       reinterpret_cast<const uint8_t *>(key.data()), key.size()));
 }
-bool VisCnts::IsStablyHot(rocksdb::Slice key) {
+bool RALT::IsStablyHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("is_hot");
   return vc->is_stably_hot(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
 }
-rocksdb::RALT::Iter VisCnts::Begin() {
+rocksdb::RALT::Iter RALT::Begin() {
   auto vc = static_cast<VisCntsType*>(vc_);
   logger("Iter Begin");
   return rocksdb::RALT::Iter(
       std::make_unique<VisCntsIter>(vc->seek_to_first()));
 }
-std::unique_ptr<FastIter<rocksdb::Slice>> VisCnts::FastBegin() {
+std::unique_ptr<FastIter<rocksdb::Slice>> RALT::FastBegin() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return std::make_unique<FastVisCntsIter>(vc->seek_to_first());
 }
 
-void VisCnts::Flush() {
+void RALT::Flush() {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->flush();
 }
 
-size_t VisCnts::GetHotSize() {
+size_t RALT::GetHotSize() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->weight_sum();
 }
 
-const std::string VisCnts::Properties::kReadBytes = "viscnts.read.bytes";
-const std::string VisCnts::Properties::kWriteBytes = "viscnts.write.bytes";
-const std::string VisCnts::Properties::kCompactionCPUNanos =
+const std::string RALT::Properties::kReadBytes = "viscnts.read.bytes";
+const std::string RALT::Properties::kWriteBytes = "viscnts.write.bytes";
+const std::string RALT::Properties::kCompactionCPUNanos =
     "viscnts.compaction.cpu.nanos";
-const std::string VisCnts::Properties::kFlushCPUNanos =
-    "viscnts.flush.cpu.nanos";
-const std::string VisCnts::Properties::kDecayScanCPUNanos =
+const std::string RALT::Properties::kFlushCPUNanos = "viscnts.flush.cpu.nanos";
+const std::string RALT::Properties::kDecayScanCPUNanos =
     "viscnts.decay.scan.cpu.nanos";
-const std::string VisCnts::Properties::kDecayWriteCPUNanos =
+const std::string RALT::Properties::kDecayWriteCPUNanos =
     "viscnts.decay.write.cpu.nanos";
-const std::string VisCnts::Properties::kCompactionThreadCPUNanos =
+const std::string RALT::Properties::kCompactionThreadCPUNanos =
     "viscnts.compaction.thread.cpu.nanos";
-const std::string VisCnts::Properties::kFlushThreadCPUNanos =
+const std::string RALT::Properties::kFlushThreadCPUNanos =
     "viscnts.flush.thread.cpu.nanos";
-const std::string VisCnts::Properties::kDecayThreadCPUNanos =
+const std::string RALT::Properties::kDecayThreadCPUNanos =
     "viscnts.decay.thread.cpu.nanos";
 
 struct PropertyInfo {
   bool (VisCntsType::*handle_int)(uint64_t *value);
 };
 const std::unordered_map<std::string, PropertyInfo> ppt_name_to_info = {
-    {VisCnts::Properties::kReadBytes,
+    {RALT::Properties::kReadBytes,
      {.handle_int = &VisCntsType::HandleReadBytes}},
-    {VisCnts::Properties::kWriteBytes,
+    {RALT::Properties::kWriteBytes,
      {.handle_int = &VisCntsType::HandleWriteBytes}},
-    {VisCnts::Properties::kCompactionCPUNanos,
+    {RALT::Properties::kCompactionCPUNanos,
      {.handle_int = &VisCntsType::HandleCompactionCPUNanos}},
-    {VisCnts::Properties::kFlushCPUNanos,
+    {RALT::Properties::kFlushCPUNanos,
      {.handle_int = &VisCntsType::HandleFlushCPUNanos}},
-    {VisCnts::Properties::kDecayScanCPUNanos,
+    {RALT::Properties::kDecayScanCPUNanos,
      {.handle_int = &VisCntsType::HandleDecayScanCPUNanos}},
-    {VisCnts::Properties::kDecayWriteCPUNanos,
+    {RALT::Properties::kDecayWriteCPUNanos,
      {.handle_int = &VisCntsType::HandleDecayWriteCPUNanos}},
-    {VisCnts::Properties::kCompactionThreadCPUNanos,
+    {RALT::Properties::kCompactionThreadCPUNanos,
      {.handle_int = &VisCntsType::HandleCompactionThreadCPUNanos}},
-    {VisCnts::Properties::kFlushThreadCPUNanos,
+    {RALT::Properties::kFlushThreadCPUNanos,
      {.handle_int = &VisCntsType::HandleFlushThreadCPUNanos}},
-    {VisCnts::Properties::kDecayThreadCPUNanos,
+    {RALT::Properties::kDecayThreadCPUNanos,
      {.handle_int = &VisCntsType::HandleDecayThreadCPUNanos}},
 };
-bool VisCnts::GetIntProperty(std::string_view property, uint64_t *value) {
+bool RALT::GetIntProperty(std::string_view property, uint64_t *value) {
   std::string p(property);
   auto it = ppt_name_to_info.find(p);
   if (it == ppt_name_to_info.end())
@@ -198,67 +194,65 @@ bool VisCnts::GetIntProperty(std::string_view property, uint64_t *value) {
   return (vc->*(property_info->handle_int))(value);
 }
 
-void VisCnts::SetHotSetSizeLimit(size_t new_limit) {
+void RALT::SetHotSetSizeLimit(size_t new_limit) {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->set_new_hot_limit(new_limit);
 }
 
-void VisCnts::SetPhysicalSizeLimit(size_t new_limit) {
+void RALT::SetPhysicalSizeLimit(size_t new_limit) {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->set_new_phy_limit(new_limit);
 }
 
-void VisCnts::SetAllSizeLimit(size_t new_hs_limit, size_t new_phy_limit) {
+void RALT::SetAllSizeLimit(size_t new_hs_limit, size_t new_phy_limit) {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->set_all_limit(new_hs_limit, new_phy_limit);
 }
 
-size_t VisCnts::GetPhySizeLimit() {
+size_t RALT::GetPhySizeLimit() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->get_phy_limit();
 }
 
-size_t VisCnts::GetHotSetSizeLimit() {
+size_t RALT::GetHotSetSizeLimit() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->get_hot_set_limit();
 }
 
-uint64_t VisCnts::GetMinHotSetSizeLimit() {
+uint64_t RALT::GetMinHotSetSizeLimit() {
   auto vc = static_cast<VisCntsType *>(vc_);
   return vc->get_min_hot_size_limit();
 }
-void VisCnts::SetMinHotSetSizeLimit(uint64_t min_hot_size_limit) {
+void RALT::SetMinHotSetSizeLimit(uint64_t min_hot_size_limit) {
   auto vc = static_cast<VisCntsType *>(vc_);
   vc->set_min_hot_size_limit(min_hot_size_limit);
 }
 
-uint64_t VisCnts::GetMaxHotSetSizeLimit() {
+uint64_t RALT::GetMaxHotSetSizeLimit() {
   auto vc = static_cast<VisCntsType *>(vc_);
   return vc->get_max_hot_size_limit();
 }
-void VisCnts::SetMaxHotSetSizeLimit(uint64_t max_hot_size_limit) {
+void RALT::SetMaxHotSetSizeLimit(uint64_t max_hot_size_limit) {
   auto vc = static_cast<VisCntsType *>(vc_);
   vc->set_max_hot_size_limit(max_hot_size_limit);
 }
 
-void VisCnts::SetProperPhysicalSizeLimit() {
+void RALT::SetProperPhysicalSizeLimit() {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->set_proper_phy_limit();
 }
 
-size_t VisCnts::DecayCount() {
-  auto vc = static_cast<VisCntsType*>(vc_);
+size_t RALT::DecayCount() {
+  auto vc = static_cast<VisCntsType *>(vc_);
   return vc->decay_count();
 }
 
-
-size_t VisCnts::GetRealHotSetSize() {
-  auto vc = static_cast<VisCntsType*>(vc_);
+size_t RALT::GetRealHotSetSize() {
+  auto vc = static_cast<VisCntsType *>(vc_);
   return vc->get_real_hs_size();
 }
 
-
-size_t VisCnts::GetRealPhySize() {
+size_t RALT::GetRealPhySize() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->get_real_phy_size();
 }

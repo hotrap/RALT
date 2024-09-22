@@ -12,14 +12,14 @@ public:
   virtual std::optional<T> next() = 0;
 };
 
-class VisCnts : public rocksdb::RALT {
+class RALT : public rocksdb::RALT {
 public:
-  VisCnts(const VisCnts &) = delete;
-  ~VisCnts();
-  VisCnts(const rocksdb::Comparator *ucmp, const char *dir,
-          size_t init_hot_set_size, size_t max_hot_set_size,
-          size_t min_hot_set_size, size_t max_physical_size,
-          size_t bloom_bfk = 10);
+  RALT(const RALT &) = delete;
+  ~RALT();
+  RALT(const rocksdb::Comparator *ucmp, const char *dir,
+       size_t init_hot_set_size, size_t max_hot_set_size,
+       size_t min_hot_set_size, size_t max_physical_size,
+       size_t bloom_bfk = 10);
   const char *Name() const override { return "RALT-LSM"; }
   void Access(rocksdb::Slice key, size_t vlen) override;
   size_t RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) override;

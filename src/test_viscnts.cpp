@@ -40,7 +40,8 @@ size_t convert_to_int(rocksdb::Slice input) {
   return *reinterpret_cast<const size_t*>(input.data() + input.size() - 8);
 }
 
-void input_all(VisCnts& vc,const std::vector<std::pair<size_t, size_t>>& data, int TH, int vlen) {
+void input_all(RALT &vc, const std::vector<std::pair<size_t, size_t>> &data,
+               int TH, int vlen) {
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
     int L = (data.size() / TH + 1) * i;
@@ -119,7 +120,8 @@ void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e6, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size,
+          max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   DB_INFO("gen_testdata end.");
@@ -203,7 +205,8 @@ void test_decay_simple() {
   size_t max_hot_set_size = 1e9;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 100, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
@@ -239,8 +242,8 @@ void test_decay_hit_rate() {
   size_t max_hot_set_cnt = N * 0.05;
   size_t max_hot_set_size = max_hot_set_cnt * vlen;
   size_t max_physical_size = 60 * max_hot_set_cnt;
-  auto vc = VisCnts::New(&default_comp, "viscnts/", N * 0.05 * vlen,
-                         N * 0.05 * vlen, N * 0.05 * vlen, max_physical_size);
+  RALT vc(&default_comp, "viscnts/", N * 0.05 * vlen, N * 0.05 * vlen,
+          N * 0.05 * vlen, max_physical_size);
   std::mt19937_64 gen(0x202311101830);
   auto data = gen_testdata(N, gen);
   auto hot_data = decltype(data)(data.begin(), data.begin() + max_hot_set_cnt);
@@ -300,7 +303,8 @@ void test_parallel() {
   size_t max_hot_set_size = 1e9;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, NBLOCK = 1e5, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
     handles.push_back(std::async([&, i]() {
@@ -333,7 +337,8 @@ void test_ishot_simple() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
@@ -374,7 +379,8 @@ void test_stable_hot() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e6, TH = 16, vlen = 10, Q = 1e4, QLEN = 100;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306291601);
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
@@ -440,7 +446,8 @@ void test_lowerbound() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202309252052);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
@@ -456,7 +463,8 @@ void test_range_hot_size() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
   size_t N = 1e7, TH = 4, vlen = 10, Q = 500000;
-  auto vc = VisCnts::New(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size, max_hot_set_size, max_physical_size);
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202309252052);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
@@ -484,12 +492,10 @@ void test_range_hot_size() {
     rocksdb::RangeBounds range;
     size_t l = std::uniform_int_distribution<>(0, data.size() - 1)(gen);
     size_t r = std::uniform_int_distribution<>(l, data.size() - 1)(gen);
-    range.start.user_key = convert_to_slice(a, data[l].first, data[l].second);
-    range.start.excluded = false;
-    range.end.user_key = convert_to_slice(a2, data[r].first, data[r].second);
-    range.end.excluded = false;
     size_t ans = S[r] - (l == 0 ? 0 : S[l - 1]);
-    size_t out = vc.RangeHotSize(range);
+    size_t out =
+        vc.RangeHotSize(convert_to_slice(a, data[l].first, data[l].second),
+                        convert_to_slice(a2, data[r].first, data[r].second));
     DB_INFO("{},{}",ans,out);
     DB_ASSERT(out >= ans);
     // DB_INFO("{}, {}", vc.RangeHotSize(range), total_size);
