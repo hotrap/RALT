@@ -97,7 +97,7 @@ void RALT::Access(rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
   vc->access(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
 }
-size_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
+uint64_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
   auto vc = static_cast<VisCntsType *>(vc_);
   auto lkey = viscnts_lsm::SKey(
       reinterpret_cast<const uint8_t *>(smallest.data()), smallest.size());

@@ -22,7 +22,8 @@ public:
        size_t bloom_bfk = 10);
   const char *Name() const override { return "RALT-LSM"; }
   void Access(rocksdb::Slice key, size_t vlen) override;
-  size_t RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) override;
+  uint64_t RangeHotSize(rocksdb::Slice smallest,
+                        rocksdb::Slice largest) override;
   rocksdb::RALT::Iter LowerBound(rocksdb::Slice key) override;
   bool IsHot(rocksdb::Slice key) override;
 
