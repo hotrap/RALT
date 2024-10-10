@@ -51,14 +51,14 @@ class WriteBatch {
 
   template <typename T>
   void append_key(const T& x) {
-    if (__builtin_expect(used_size_ + x.size() > buffer_size_, 0)) {
+    if (__builtin_expect(used_size_ + x.serialize_size() > buffer_size_, 0)) {
       flush();
-      assert(x.size() <= buffer_size_);
+      assert(x.serialize_size() <= buffer_size_);
       x.write(data_);
-      used_size_ = x.size();
+      used_size_ = x.serialize_size();
     } else {
       x.write(data_ + used_size_);
-      used_size_ += x.size();
+      used_size_ += x.serialize_size();
     }
   }
 

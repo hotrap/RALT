@@ -16,12 +16,44 @@
 
 #include "rocksdb/comparator.h"
 #include "rocksdb/ralt.h"
+#include "key.hpp"
 
 struct SKeyComparatorFromRocksDB {
   const rocksdb::Comparator* ucmp;
   SKeyComparatorFromRocksDB() : ucmp(nullptr) {}
   SKeyComparatorFromRocksDB(const rocksdb::Comparator* _ucmp) : ucmp(_ucmp) {}
   int operator()(const viscnts_lsm::SKey& x, const viscnts_lsm::SKey& y) const {
+    auto xinfo = viscnts_lsm::KeyInfo::ReadFromString(x);
+    auto yinfo = viscnts_lsm::KeyInfo::ReadFromString(y);
+    rocksdb::Slice rx(reinterpret_cast<const char*>(xinfo.last_.data()), xinfo.last_.len());
+    rocksdb::Slice ry(reinterpret_cast<const char*>(yinfo.last_.data()), yinfo.last_.len());
+    auto lx = xinfo.is_range_ ? rocksdb::Slice(reinterpret_cast<const char*>(xinfo.first_.data()), xinfo.first_.len())
+                              : rx;
+    auto ly = yinfo.is_range_ ? rocksdb::Slice(reinterpret_cast<const char*>(yinfo.first_.data()), yinfo.first_.len())
+                              : ry;
+    int result = ucmp->Compare(rx, ry);
+    if (result == 0) {
+      // If rx = ry, then the one with smaller left side should be small.
+      return ucmp->Compare(lx, ly);
+    } else {
+      return result;
+    }
+  }
+
+  // Whether x contains y
+  int IsContain(const viscnts_lsm::SKey& x, const viscnts_lsm::SKey& y) const {
+    auto xinfo = viscnts_lsm::KeyInfo::ReadFromString(x);
+    auto yinfo = viscnts_lsm::KeyInfo::ReadFromString(y);
+    rocksdb::Slice rx(reinterpret_cast<const char*>(xinfo.last_.data()), xinfo.last_.len());
+    rocksdb::Slice ry(reinterpret_cast<const char*>(yinfo.last_.data()), yinfo.last_.len());
+    auto lx = xinfo.is_range_ ? rocksdb::Slice(reinterpret_cast<const char*>(xinfo.first_.data()), xinfo.first_.len())
+                              : rx;
+    auto ly = yinfo.is_range_ ? rocksdb::Slice(reinterpret_cast<const char*>(yinfo.first_.data()), yinfo.first_.len())
+                              : ry;
+    return ucmp->Compare(lx, ly) <= 0 && ucmp->Compare(ry, rx) <= 0;
+  }
+
+  int RawComp(const viscnts_lsm::SKey& x, const viscnts_lsm::SKey& y) const {
     rocksdb::Slice rx(reinterpret_cast<const char*>(x.data()), x.len());
     rocksdb::Slice ry(reinterpret_cast<const char*>(y.data()), y.len());
     return ucmp->Compare(rx, ry);
@@ -49,9 +81,17 @@ class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
       }
       if (it_->valid()) {
         auto key = it_->read().first;
+        viscnts_lsm::KeyInfo keyinfo = viscnts_lsm::KeyInfo::ReadFromString(key);
         rocksdb::HotRecInfo ret;
-        ret = rocksdb::Slice(reinterpret_cast<const char *>(key.data()),
-                             key.len());
+        if (!keyinfo.is_range_) {
+          ret.first = rocksdb::Slice(); 
+        } else {
+          ret.first = rocksdb::Slice(reinterpret_cast<const char *>(keyinfo.first_.data()),
+                              keyinfo.first_.len());  
+        }
+        
+        ret.last = rocksdb::Slice(reinterpret_cast<const char *>(keyinfo.last_.data()),
+                             keyinfo.last_.len());
         return rocksdb::optional<rocksdb::HotRecInfo>(std::move(ret));
       }
       return rocksdb::optional<rocksdb::HotRecInfo>();
@@ -93,35 +133,77 @@ RALT::RALT(const rocksdb::Comparator *ucmp, const char *dir,
 
 RALT::~RALT() { delete static_cast<VisCntsType *>(vc_); }
 
+viscnts_lsm::IndSKey CreateKey(rocksdb::Slice key) {
+  viscnts_lsm::KeyInfo info;
+  info.last_ = viscnts_lsm::SKey(reinterpret_cast<const uint8_t *>(key.data()), key.size());
+  info.is_range_ = false;
+  viscnts_lsm::IndSKey indkey = viscnts_lsm::KeyInfo::ToString(info);
+  return indkey;
+}
+
+
+viscnts_lsm::IndSKey CreateKey(rocksdb::Slice first, rocksdb::Slice last) {
+  viscnts_lsm::KeyInfo info;
+  info.first_ = viscnts_lsm::SKey(reinterpret_cast<const uint8_t *>(first.data()), first.size());
+  info.last_ = viscnts_lsm::SKey(reinterpret_cast<const uint8_t *>(last.data()), last.size());
+  info.is_range_ = true;
+  viscnts_lsm::IndSKey indkey = viscnts_lsm::KeyInfo::ToString(info);
+  return indkey;
+}
+
 void RALT::Access(rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  vc->access(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
+  auto indkey = CreateKey(key);
+  vc->access(indkey.ref(), vlen, 0);
+}
+
+void RALT::AccessRange(rocksdb::Slice first, rocksdb::Slice last, uint64_t num_bytes,
+                   rocksdb::SequenceNumber seq) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  auto indkey = CreateKey(first, last);
+  vc->access(indkey.ref(), num_bytes, seq);
 }
 size_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
   auto vc = static_cast<VisCntsType *>(vc_);
-  auto lkey = viscnts_lsm::SKey(
-      reinterpret_cast<const uint8_t *>(smallest.data()), smallest.size());
-  auto rkey = viscnts_lsm::SKey(
-      reinterpret_cast<const uint8_t *>(largest.data()), largest.size());
-  return vc->range_data_size({lkey, rkey});
+  auto lkey = CreateKey(smallest);
+  auto rkey = CreateKey(largest);
+  return vc->range_data_size({lkey.ref(), rkey.ref()});
 }
 rocksdb::RALT::Iter RALT::LowerBound(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType *>(vc_);
   // logger("Iter LowerBound");
-  return rocksdb::RALT::Iter(
-      std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(
-          reinterpret_cast<const uint8_t *>(key.data()), key.size()))));
+  auto indkey = CreateKey(key);
+  return rocksdb::RALT::Iter(std::make_unique<VisCntsIter>(vc->seek(indkey.ref())));
 }
 bool RALT::IsHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  // logger("is_hot");
-  return vc->is_stably_hot(viscnts_lsm::SKey(
-      reinterpret_cast<const uint8_t *>(key.data()), key.size()));
+  auto indkey = CreateKey(key);
+  return vc->is_stably_hot(indkey.ref());
+}
+bool RALT::IsHot(rocksdb::Slice first, rocksdb::Slice last) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  auto indkey = CreateKey(first, last);
+  return vc->is_in_stably_hot_range(indkey.ref());
+}
+std::string RALT::LastPromoted(rocksdb::Slice key, rocksdb::SequenceNumber seq) {
+  auto vc = static_cast<VisCntsType*>(vc_);
+  auto indkey = CreateKey(key);
+  auto range = vc->get_last_key_in_hot_range(indkey.ref(), seq);
+  if (!range) {
+    return "";
+  } else {
+    auto keyinfo = viscnts_lsm::KeyInfo::ReadFromString(range.value().ref());
+    if (!keyinfo.is_range_) {
+      return "";
+    } else {
+      return keyinfo.last_.ToString();
+    }
+  }
 }
 bool RALT::IsStablyHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  // logger("is_hot");
-  return vc->is_stably_hot(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
+  auto indkey = CreateKey(key);
+  return vc->is_stably_hot(indkey.ref());
 }
 rocksdb::RALT::Iter RALT::Begin() {
   auto vc = static_cast<VisCntsType*>(vc_);

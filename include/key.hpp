@@ -4,6 +4,7 @@
 #include "common.hpp"
 #include <array>
 #include <random>
+#include "logging.hpp"
 
 namespace viscnts_lsm {
 
@@ -25,13 +26,71 @@ using IndSKey = IndSlice;
 // inline int operator==(SKey A, const IndSKey& B) { return A == B.ref(); }
 // inline int operator==(const IndSKey& A, const IndSKey& B) { return A.ref() == B.ref(); }
 
+// information structure of the key
+class KeyInfo {
+ public:
+  bool is_range_{false};
+  SKey first_;
+  SKey last_;
+
+  KeyInfo() = default;
+ 
+  KeyInfo(SKey first, SKey last, bool is_range)
+    : first_(first), last_(last), is_range_(is_range) {
+  }
+
+  static IndSKey ToString(const KeyInfo& info) {
+    if (!info.is_range_) {
+      IndSKey ret(1 + info.last_.len());
+      ret.data()[0] = 0;
+      memcpy(ret.data() + 1, info.last_.data(), info.last_.len());
+      return ret;
+    } else {
+      IndSKey ret(1 + info.first_.len() + info.last_.len() + sizeof(uint16_t));
+      uint16_t len1 = info.first_.len();
+      ret.data()[0] = 1;
+      auto ptr = ret.data() + 1;
+      memcpy(ptr, &len1, sizeof(uint16_t));
+      ptr += sizeof(uint16_t);
+      memcpy(ptr, info.first_.data(), info.first_.len());
+      ptr += info.first_.len();
+      memcpy(ptr, info.last_.data(), info.last_.len());
+      return ret;
+    }
+  }
+
+  static KeyInfo ReadFromString(const SKey& key) {
+    if (key.len() <= 1) {
+      DB_ASSERT("key.len() <= 1! Fuck!");
+    }
+    bool is_range = key.data()[0] == 1;
+    SKey first, last;
+    auto ptr = key.data() + 1;
+    if (is_range) {
+      uint16_t len1 = *(uint16_t*)(ptr);
+      if (len1 + 1 > key.len()) {
+        DB_ASSERT("len1 + 1 > key.len()! Fuck!");
+      }
+      uint64_t len2 = key.len() - 1 - len1 - sizeof(uint16_t);
+      ptr += sizeof(uint16_t);
+      first = SKey(ptr, len1);
+      ptr += len1;
+      last = SKey(ptr, len2);
+    } else {
+      last = SKey(ptr, key.len() - 1);
+    }
+    return KeyInfo(first, last, is_range);
+  }
+};
+
+
 // Dedicated.
 class SValue {
   double counts_{0};
   size_t vlen_{0};
  public:
   SValue() {}
-  SValue(double counts, size_t vlen, size_t _ = 0) : counts_(counts), vlen_(vlen << 1) {}
+  SValue(double counts, size_t vlen, size_t seq, size_t _ = 0) : counts_(counts), vlen_(vlen << 1) {}
   void merge(const SValue& v, double) {
     counts_ += v.counts_;
     set_stable(1);
@@ -174,12 +233,13 @@ class ExpTickValue {
   uint32_t vlen_{0};
   float score_{0};
   int32_t tick_{0};
+  uint64_t seq_{0};
 
   constexpr const static auto kScoreBitNum = 8;
  public:
   ExpTickValue() {}
-  ExpTickValue(int tick, size_t vlen, unsigned int init_score, bool init_tag = false) : 
-    tick_(tick), score_(1), vlen_(vlen << (kScoreBitNum + 1) | init_score << 1 | init_tag) {}
+  ExpTickValue(int tick, size_t vlen, uint64_t seq, unsigned int init_score, bool init_tag = false) : 
+    tick_(tick), score_(1), vlen_(vlen << (kScoreBitNum + 1) | init_score << 1 | init_tag), seq_(seq) {}
   void merge(const ExpTickValue& v, double cur_tick) {
     set_counter(std::min<int>(50, get_counter() + v.get_counter()));
     vlen_ |= 1;
@@ -200,6 +260,9 @@ class ExpTickValue {
   }
   bool decay(double, std::mt19937_64&) {
     return true;
+  }
+  uint64_t seq() const {
+    return seq_;
   }
   int tag() const {
     return 0;
@@ -278,7 +341,7 @@ class BlockKey {
     v_ = *reinterpret_cast<const ValueT*>(from);
     return from + sizeof(ValueT);
   }
-  size_t size() const { return key_.size() + sizeof(v_); }
+  size_t serialize_size() const { return key_.serialize_size() + sizeof(v_); }
   uint8_t* write(uint8_t* to) const {
     to = key_.write(to);
     *reinterpret_cast<ValueT*>(to) = v_;
@@ -296,14 +359,15 @@ class BlockKey {
 template<const int num_tier>
 class IndexData {
   std::array<size_t, num_tier> hot_size_{};
-  int offset_{0};
+  uint32_t offset_{0}, id_{0};
   public:
     IndexData() {}
-    IndexData(int offset) : offset_(offset) {}
+    IndexData(uint32_t offset, uint32_t id) : offset_(offset), id_(id) {}
 
     /* offset is determined when creating this. */
-    IndexData(int offset, const IndexData& data) {
+    IndexData(uint32_t offset, uint32_t id, const IndexData& data) {
       offset_ = offset;
+      id_ = id;
       hot_size_ = data.hot_size_;
     }
 
@@ -317,8 +381,12 @@ class IndexData {
       return hot_size_;
     }
 
-    int get_offset() const {
+    uint32_t get_offset() const {
       return offset_;
+    }
+
+    uint32_t get_id() const {
+      return id_;
     }
 };
 #pragma pack()

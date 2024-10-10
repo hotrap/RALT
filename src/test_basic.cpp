@@ -167,7 +167,7 @@ void test_lsm_store() {
     memset(a, 0, sizeof(a));
     for (int i = 0; i < L; i++) {
       for (int j = 0; j < 12; j++) a[j] = i >> (j % 4) * 8 & 255;
-      tree.append(SKey(a, 12), SValue());
+      tree.append(SKey(a, 12), 1, 0);
     }
   }
 
@@ -214,7 +214,7 @@ void test_lsm_store_and_scan() {
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
               for (int j = 0; j < 16; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-              tree.append(SKey(a, 16), 1);
+              tree.append(SKey(a, 16), 1, 0);
             }
           },
           std::ref(numbers), std::ref(tree));
@@ -234,7 +234,7 @@ void test_lsm_store_and_scan() {
             int l = (L / TH + 1) * i, r = std::min((L / TH + 1) * (i + 1), (int)numbers.size());
             for (int i = l; i < r; ++i) {
               for (int j = 0; j < 16; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-              tree.append(SKey(a, 16), 1);
+              tree.append(SKey(a, 16), 1, 0);
             }
           },
           std::ref(_numbers), std::ref(tree));
@@ -296,7 +296,7 @@ void test_random_scan_and_count() {
     for (int i = 0; i < L / 2; i++) {
       uint8_t a[12];
       for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-      tree.append(SKey(a, 12), SValue(1, 1));
+      tree.append(SKey(a, 12), 1, 0);
     }
     tree.all_flush();
 
@@ -307,20 +307,20 @@ void test_random_scan_and_count() {
     auto numbers2 = std::vector<int>(numbers.begin(), numbers.begin() + L / 2);
     std::sort(numbers2.begin(), numbers2.end(), comp2);
 
-    start = std::chrono::system_clock::now();
-    for (int i = 0; i < Q; i++) {
-      uint8_t a[12], b[12];
-      int id = abs(rand()) % numbers.size();
-      int x = numbers[id];
-      for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
-      id = abs(rand()) % numbers.size();
-      int y = numbers[id];
-      for (int j = 0; j < 12; j++) b[j] = numbers[id] >> (j % 4) * 8 & 255;
-      int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
-      ans = std::max(ans, 0);
-      int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
-      DB_ASSERT(ans == output);
-    }
+    // start = std::chrono::system_clock::now();
+    // for (int i = 0; i < Q; i++) {
+    //   uint8_t a[12], b[12];
+    //   int id = abs(rand()) % numbers.size();
+    //   int x = numbers[id];
+    //   for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
+    //   id = abs(rand()) % numbers.size();
+    //   int y = numbers[id];
+    //   for (int j = 0; j < 12; j++) b[j] = numbers[id] >> (j % 4) * 8 & 255;
+    //   int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
+    //   ans = std::max(ans, 0);
+    //   int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
+    //   DB_ASSERT(ans == output);
+    // }
 
     int QLEN = 1000;
 
@@ -420,127 +420,127 @@ void test_random_scan_and_count() {
 //   logger("test_lsm_decay(): OK");
 // }
 
-void test_delete_range() {
-  using namespace viscnts_lsm;
+// void test_delete_range() {
+//   using namespace viscnts_lsm;
 
-  auto start = std::chrono::system_clock::now();
-  {
-    std::atomic<size_t> unused_tick; 
-    EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1, 1e18, 1e18, 10);
-    int L = 1e8, Q = 1e4;
-    std::vector<int> numbers(L);
-    auto comp2 = +[](int x, int y) {
-      uint8_t a[12], b[12];
-      for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
-      for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
-      return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
-    };
-    for (int i = 0; i < L; i++) numbers[i] = i;
-    // std::sort(numbers.begin(), numbers.end(), comp2);
-    std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
-    srand(std::random_device()());
-    for (int i = 0; i < L / 2; i++) {
-      uint8_t a[12];
-      for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-      tree.append(SKey(a, 12), SValue(1, 1));
-    }
-    tree.all_flush();
+//   auto start = std::chrono::system_clock::now();
+//   {
+//     std::atomic<size_t> unused_tick; 
+//     EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1, 1e18, 1e18, 10);
+//     int L = 1e8, Q = 1e4;
+//     std::vector<int> numbers(L);
+//     auto comp2 = +[](int x, int y) {
+//       uint8_t a[12], b[12];
+//       for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
+//       for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
+//       return SKeyCompFunc(SKey(a, 12), SKey(b, 12)) < 0;
+//     };
+//     for (int i = 0; i < L; i++) numbers[i] = i;
+//     // std::sort(numbers.begin(), numbers.end(), comp2);
+//     std::shuffle(numbers.begin(), numbers.end(), std::mt19937(std::random_device()()));
+//     srand(std::random_device()());
+//     for (int i = 0; i < L / 2; i++) {
+//       uint8_t a[12];
+//       for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
+//       tree.append(SKey(a, 12), 1, 0);
+//     }
+//     tree.all_flush();
 
-    auto end = std::chrono::system_clock::now();
-    auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    logger("flush used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
-    std::this_thread::sleep_for(std::chrono::milliseconds(5000));
-    auto numbers2 = std::vector<int>(numbers.begin(), numbers.begin() + L / 2);
-    std::sort(numbers2.begin(), numbers2.end(), comp2);
-    {
-      int Qs = 1000;
-      for (int i = 0; i < Qs; i++) {
-        uint8_t a[12], b[12];
-        int id = abs(rand()) % (numbers2.size() - std::min(1000, L / 4));
-        int x = numbers2[id];
-        for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
-        id += std::min(1000, L / 4);
-        int y = numbers2[id];
-        for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
-        auto L = std::lower_bound(numbers2.begin(), numbers2.end(), x, comp2);
-        auto R = std::upper_bound(numbers2.begin(), numbers2.end(), y, comp2);
-        if (L > R) {
-          i--;
-          continue;
-        }
-        numbers2.erase(L, R);
-        logger("[x,y]=", x, ",", y);
-        tree.delete_range({SKey(a, 12), SKey(b, 12)}, {1, 1});
-      }
-    }
+//     auto end = std::chrono::system_clock::now();
+//     auto dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+//     logger("flush used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+//     std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+//     auto numbers2 = std::vector<int>(numbers.begin(), numbers.begin() + L / 2);
+//     std::sort(numbers2.begin(), numbers2.end(), comp2);
+//     {
+//       int Qs = 1000;
+//       for (int i = 0; i < Qs; i++) {
+//         uint8_t a[12], b[12];
+//         int id = abs(rand()) % (numbers2.size() - std::min(1000, L / 4));
+//         int x = numbers2[id];
+//         for (int j = 0; j < 12; j++) a[j] = x >> (j % 4) * 8 & 255;
+//         id += std::min(1000, L / 4);
+//         int y = numbers2[id];
+//         for (int j = 0; j < 12; j++) b[j] = y >> (j % 4) * 8 & 255;
+//         auto L = std::lower_bound(numbers2.begin(), numbers2.end(), x, comp2);
+//         auto R = std::upper_bound(numbers2.begin(), numbers2.end(), y, comp2);
+//         if (L > R) {
+//           i--;
+//           continue;
+//         }
+//         numbers2.erase(L, R);
+//         logger("[x,y]=", x, ",", y);
+//         tree.delete_range({SKey(a, 12), SKey(b, 12)}, {1, 1});
+//       }
+//     }
 
-    start = std::chrono::system_clock::now();
-    for (int i = 0; i < Q; i++) {
-      uint8_t a[12], b[12];
-      int id = abs(rand()) % numbers.size();
-      int x = numbers[id];
-      for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
-      id = abs(rand()) % numbers.size();
-      int y = numbers[id];
-      for (int j = 0; j < 12; j++) b[j] = numbers[id] >> (j % 4) * 8 & 255;
-      int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
-      ans = std::max(ans, 0);
-      int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
-      // logger("[ans,output]=", ans, ",", output);
-      DB_ASSERT(ans == output);
-    }
+//     // start = std::chrono::system_clock::now();
+//     // for (int i = 0; i < Q; i++) {
+//     //   uint8_t a[12], b[12];
+//     //   int id = abs(rand()) % numbers.size();
+//     //   int x = numbers[id];
+//     //   for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
+//     //   id = abs(rand()) % numbers.size();
+//     //   int y = numbers[id];
+//     //   for (int j = 0; j < 12; j++) b[j] = numbers[id] >> (j % 4) * 8 & 255;
+//     //   int ans = std::upper_bound(numbers2.begin(), numbers2.end(), x, comp2) - std::lower_bound(numbers2.begin(), numbers2.end(), y, comp2);
+//     //   ans = std::max(ans, 0);
+//     //   int output = tree.range_count({SKey(b, 12), SKey(a, 12)});
+//     //   // logger("[ans,output]=", ans, ",", output);
+//     //   DB_ASSERT(ans == output);
+//     // }
 
-    int QLEN = 1000;
+//     int QLEN = 1000;
 
-    end = std::chrono::system_clock::now();
-    dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    start = end;
-    logger("range count used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+//     end = std::chrono::system_clock::now();
+//     dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+//     start = end;
+//     logger("range count used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
 
-    for (int i = 0; i < Q; i++) {
-      uint8_t a[12];
-      int id = abs(rand()) % numbers.size();
-      for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
+//     for (int i = 0; i < Q; i++) {
+//       uint8_t a[12];
+//       int id = abs(rand()) % numbers.size();
+//       for (int j = 0; j < 12; j++) a[j] = numbers[id] >> (j % 4) * 8 & 255;
 
-      auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue, IndexData<1>>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
-      auto check_func = [](const uint8_t* a, int goal) {
-        int x = 0, y = 0;
-        for (int j = 0; j < 12; j++) {
-          x |= a[j] << (j % 4) * 8;
-          // if (j % 4 == 3) {
-          //   // logger("[j,x,goal]=",j,",",x,",",goal);
-          // }
-          DB_ASSERT(j % 4 != 3 || x == goal);
-          if (j % 4 == 3) {
-            if (j > 3) {
-              DB_ASSERT(y == x);
-            }
-            y = x;
-            x = 0;
-          }
-        }
-      };
-      int x = a[0] | ((uint32_t)a[1] << 8) | ((uint32_t)a[2] << 16) | ((uint32_t)a[3] << 24);
+//       auto iter = std::unique_ptr<EstimateLSM<KeyCompType*, SValue, IndexData<1>>::SuperVersionIterator>(tree.seek(SKey(a, 12)));
+//       auto check_func = [](const uint8_t* a, int goal) {
+//         int x = 0, y = 0;
+//         for (int j = 0; j < 12; j++) {
+//           x |= a[j] << (j % 4) * 8;
+//           // if (j % 4 == 3) {
+//           //   // logger("[j,x,goal]=",j,",",x,",",goal);
+//           // }
+//           DB_ASSERT(j % 4 != 3 || x == goal);
+//           if (j % 4 == 3) {
+//             if (j > 3) {
+//               DB_ASSERT(y == x);
+//             }
+//             y = x;
+//             x = 0;
+//           }
+//         }
+//       };
+//       int x = a[0] | ((uint32_t)a[1] << 8) | ((uint32_t)a[2] << 16) | ((uint32_t)a[3] << 24);
 
-      int cnt = 0;
-      auto it = std::lower_bound(numbers2.begin(), numbers2.end(), x, comp2);
-      while (true) {
-        if (++cnt > QLEN) break;
-        DB_ASSERT((it != numbers2.end()) == (iter->valid()));
-        if (it == numbers2.end()) break;
-        auto a = iter->read().first.data();
-        // logger("[it]:", *it);
-        check_func(a, *it);
-        it++;
-        iter->next();
-      }
-    }
-    end = std::chrono::system_clock::now();
-    dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    logger("random scan used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
-  }
-  logger("test_random_scan(): OK");
-}
+//       int cnt = 0;
+//       auto it = std::lower_bound(numbers2.begin(), numbers2.end(), x, comp2);
+//       while (true) {
+//         if (++cnt > QLEN) break;
+//         DB_ASSERT((it != numbers2.end()) == (iter->valid()));
+//         if (it == numbers2.end()) break;
+//         auto a = iter->read().first.data();
+//         // logger("[it]:", *it);
+//         check_func(a, *it);
+//         it++;
+//         iter->next();
+//       }
+//     }
+//     end = std::chrono::system_clock::now();
+//     dur = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+//     logger("random scan used time: ", double(dur.count()) * std::chrono::microseconds::period::num / std::chrono::microseconds::period::den);
+//   }
+//   logger("test_random_scan(): OK");
+// }
 
 void test_kthest() {
   using namespace viscnts_lsm;
@@ -733,7 +733,7 @@ void test_scan_size() {
   for (int i = 0; i < L / 2; i++) {
     uint8_t a[12];
     for (int j = 0; j < 12; j++) a[j] = numbers[i] >> (j % 4) * 8 & 255;
-    tree.append(SKey(a, 12), SValue(i, 1));
+    tree.append(SKey(a, 12), 1, 1);
   }
   tree.all_flush();
   

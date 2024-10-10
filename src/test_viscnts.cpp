@@ -30,7 +30,7 @@ class DefaultComparator : public rocksdb::Comparator {
     void FindShortSuccessor(std::string* key) const override {};
 } default_comp;
 
-rocksdb::Slice convert_to_slice(char* output, size_t s, size_t len) {
+rocksdb::Slice convert_to_slice(char* output, uint64_t s, size_t len) {
   std::memset(output, 'a', len - 8);
   std::memcpy(output + len - 8, &s, 8);
   return rocksdb::Slice(output, len);
@@ -40,7 +40,23 @@ size_t convert_to_int(rocksdb::Slice input) {
   return *reinterpret_cast<const size_t*>(input.data() + input.size() - 8);
 }
 
-void input_all(RALT &vc, const std::vector<std::pair<size_t, size_t>> &data,
+size_t convert_to_int(std::string input) {
+  return *reinterpret_cast<const size_t*>(input.data() + input.size() - 8);
+}
+
+std::pair<size_t, size_t> convert_to_range(rocksdb::HotRecInfo info) {
+  return {convert_to_int(info.first), convert_to_int(info.last)};
+}
+
+size_t convert_to_int(rocksdb::HotRecInfo info) {
+  return convert_to_int(info.last);
+}
+
+size_t get_size(rocksdb::HotRecInfo info) {
+  return info.last.size();
+}
+
+void input_all_single_keys(RALT &vc, const std::vector<std::pair<size_t, size_t>> &data,
                int TH, int vlen) {
   std::vector<std::future<void>> handles;
   for (int i = 0; i < TH; i++) {
@@ -51,6 +67,28 @@ void input_all(RALT &vc, const std::vector<std::pair<size_t, size_t>> &data,
       char a[100];
       for (int j = L; j < R; j++) {
         vc.Access(convert_to_slice(a, data[j].first, data[j].second), vlen);
+      }
+      DB_INFO("timer: {}", timer.GetTimeInNanos());
+    }));
+  }
+  for (auto& a : handles) a.get();
+  vc.Flush();
+}
+
+
+void input_all_range_keys(RALT &vc, const std::vector<std::pair<size_t, size_t>> &data,
+               int TH, int vlen, uint64_t range_len, int seq) {
+  std::vector<std::future<void>> handles;
+  for (int i = 0; i < TH; i++) {
+    int L = (data.size() / TH + 1) * i;
+    int R = std::min<int>(L + (data.size() / TH + 1), data.size());
+    handles.push_back(std::async([L, R, &data, &vc, vlen, range_len, seq]() {
+      Timer timer;
+      char a[100], b[100];
+      for (int j = L; j < R; j++) {
+        auto rangel = convert_to_slice(a, data[j].first, data[j].second);
+        auto ranger = convert_to_slice(b, data[j].first + range_len, data[j].second);
+        vc.AccessRange(rangel, ranger, vlen, seq);
       }
       DB_INFO("timer: {}", timer.GetTimeInNanos());
     }));
@@ -70,10 +108,56 @@ std::vector<std::pair<size_t, size_t>> gen_testdata(int N, std::mt19937_64& gen)
   return data;
 }
 
+int ralt_comp_int(uint64_t x, int xlen, uint64_t y, int ylen) {
+  char ax[30], ay[30];
+  return default_comp.Compare(convert_to_slice(ax, x, xlen), convert_to_slice(ay, y, ylen));
+}
+
+// generate ranges.
+std::vector<std::pair<uint64_t, uint64_t>> gen_range_testdata(int N, std::mt19937_64& gen, uint64_t range_len) {
+  std::vector<std::pair<uint64_t, uint64_t>> data(N);
+  uint64_t z = 256;
+  while(z < range_len) z *= 256;
+  z = std::max<uint64_t>(z, 1);
+  for (auto& [a, alen] : data) {
+    std::uniform_int_distribution<> len_dis(8, 20);
+    a = gen() / z * z;
+    alen = len_dis(gen);
+    // find proper so that a + range_len > a in the default_comp.
+    while (ralt_comp_int(a, alen, a + range_len, alen) > 0) {
+      a = gen() / z * z;
+    }
+  }
+  return data;
+}
+
+std::pair<uint64_t, uint64_t> gen_contained_range(uint64_t x, int xlen, uint64_t y, int ylen, std::mt19937_64& gen) {
+  std::uniform_int_distribution<uint64_t> len_L(x, y);
+  std::uniform_int_distribution<uint64_t> len_dis(0, y - x);
+  uint64_t smallL = len_L(gen), smallR = smallL + len_dis(gen);
+  char ax[30], ay[30];
+  while (!(ralt_comp_int(x, xlen, smallL, xlen) <= 0
+        && ralt_comp_int(smallL, xlen, smallR, ylen) < 0
+        && ralt_comp_int(smallR, ylen, y, ylen) <= 0)
+  ) {
+    smallL = len_L(gen), smallR = smallL + len_dis(gen);
+  }
+  return {smallL, smallR};
+}
+
+
 void sort_data(std::vector<std::pair<size_t, size_t>>& data) {
   std::sort(data.begin(), data.end(), [&](auto x, auto y) -> bool {
     char ax[30], ay[30];
     return default_comp.Compare(convert_to_slice(ax, x.first, x.second), convert_to_slice(ay, y.first, y.second)) < 0;
+  });
+}
+
+
+void sort_data(std::vector<std::pair<size_t, size_t>>& data, size_t range_len) {
+  std::sort(data.begin(), data.end(), [&](auto x, auto y) -> bool {
+    char ax[30], ay[30];
+    return default_comp.Compare(convert_to_slice(ax, x.first + range_len, x.second), convert_to_slice(ay, y.first + range_len, y.second)) < 0;
   });
 }
 
@@ -119,14 +203,14 @@ void clear() {
 void test_store_and_scan() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
-  size_t N = 1e6, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
-  RALT vc(&default_comp, "/mnt/sd/tmp/viscnts/", max_hot_set_size,
+  size_t N = 1e7, TH = 4, vlen = 10, Q = 1e4, QLEN = 100;
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size,
           max_hot_set_size, max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   DB_INFO("gen_testdata end.");
   StopWatch sw;
-  input_all(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
   sort_data(data);
@@ -181,7 +265,8 @@ void test_store_and_scan() {
   parallel_run(TH, [&](){
     for (int i = 0; i < Q; i++) {
       char a[30];
-      size_t qx = gen(), qx_len = 8;
+      // size_t qx = gen(), qx_len = 8;
+      size_t qx = data[i].first, qx_len = data[i].second;
       auto iter = vc.LowerBound(convert_to_slice(a, qx, qx_len));
       auto ans_iter = get_lower_bound_in_data(data, qx, qx_len);
       for (int j = 0; j < QLEN; j++) {
@@ -210,13 +295,13 @@ void test_decay_simple() {
   std::mt19937_64 gen(0x202306241834);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, data, TH, vlen);
-  input_all(vc, data, TH, vlen);
-  input_all(vc, data, TH, vlen);
-  input_all(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   std::thread th([&]() {
-    input_all(vc, data, TH, vlen);
+    input_all_single_keys(vc, data, TH, vlen);
   });
   
   auto iter = vc.Begin();
@@ -226,7 +311,7 @@ void test_decay_simple() {
     auto result = iter->next();
     if (result.has_value()) {
       cnt += 1;
-      sum += vlen + result.value().size();
+      sum += vlen + get_size(result.value());
     } else {
       break;
     }
@@ -264,7 +349,7 @@ void test_decay_hit_rate() {
   }
   auto start = std::clock();
   Timer timer;
-  input_all(vc, real_data, TH, vlen);
+  input_all_single_keys(vc, real_data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   
   auto iter = vc.Begin();
@@ -273,7 +358,7 @@ void test_decay_hit_rate() {
   while (true) {
     auto result = iter->next();
     if (result.has_value()) {
-      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().size()));
+      cnt += hots.count(std::make_pair(convert_to_int(result.value()), get_size(result.value())));
       sum += 1;
     } else {
       break;
@@ -288,7 +373,7 @@ void test_decay_hit_rate() {
   while (true) {
     auto result = iter->next();
     if (result.has_value()) {
-      cnt += hots.count(std::make_pair(convert_to_int(result.value()), result.value().size()));
+      cnt += hots.count(std::make_pair(convert_to_int(result.value()), get_size(result.value())));
       sum += 1;
     } else {
       break;
@@ -320,7 +405,7 @@ void test_parallel() {
         while (true) {
           auto result = iter->next();
           if (result.has_value()) {
-            sum += vlen + (result.value()).size();
+            sum += vlen + get_size(result.value());
           } else {
             break;
           }
@@ -343,7 +428,7 @@ void test_ishot_simple() {
   auto data = gen_testdata(N, gen);
   auto data2 = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc,  data, TH, vlen);
+  input_all_single_keys(vc,  data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   sw.Reset();
   {
@@ -386,9 +471,9 @@ void test_stable_hot() {
   auto data2 = gen_testdata(N, gen);
   auto data3 = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, data, TH, vlen);
-  input_all(vc, data2, TH, vlen);
-  input_all(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
+  input_all_single_keys(vc, data2, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   print_memory();
   sw.Reset();
@@ -451,7 +536,7 @@ void test_lowerbound() {
   std::mt19937_64 gen(0x202309252052);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   for (int i = 0; i < data.size(); i++) {
     char a[30];
@@ -468,7 +553,7 @@ void test_range_hot_size() {
   std::mt19937_64 gen(0x202309252052);
   auto data = gen_testdata(N, gen);
   StopWatch sw;
-  input_all(vc, data, TH, vlen);
+  input_all_single_keys(vc, data, TH, vlen);
   sort_data(data);
   DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
   size_t total_size = 0;
@@ -496,10 +581,152 @@ void test_range_hot_size() {
     size_t out =
         vc.RangeHotSize(convert_to_slice(a, data[l].first, data[l].second),
                         convert_to_slice(a2, data[r].first, data[r].second));
-    DB_INFO("{},{}",ans,out);
+    // DB_INFO("{},{}",ans,out);
     DB_ASSERT(out >= ans);
     // DB_INFO("{}, {}", vc.RangeHotSize(range), total_size);
   }
+}
+
+void test_basic_hot_range() {
+  size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
+  size_t N = 1e4, TH = 4, vlen = 10, Q = 500000, range_len = 0, seq = 0;
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
+
+  std::mt19937_64 gen(0x202410101326);
+  auto data = gen_testdata(N, gen);
+  StopWatch sw;
+  input_all_range_keys(vc, data, TH, vlen, range_len, seq);
+  sort_data(data);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  {
+    auto iter = vc.Begin();
+    auto ans_iter = data.begin();
+    while (true) {
+      auto result = iter->next();
+      if (result.has_value()) {
+        DB_ASSERT(ans_iter != data.end());
+        auto [L, R] = convert_to_range(result.value());
+        if(!(ans_iter->first == L && ans_iter->first + range_len == R)) {
+          DB_INFO("{}, {}, {}, {}, {}", ans_iter - data.begin(), ans_iter->first, ans_iter->first + range_len, L, R);
+        }
+        DB_ASSERT(ans_iter->first == L && ans_iter->first + range_len == R);
+        ans_iter++;
+      } else {
+        DB_ASSERT(ans_iter == data.end());
+        break;
+      }
+    }
+  }
+
+  DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
+  clear();
+  sw.Reset();  
+}
+
+void test_is_in_hot_range() {
+  size_t max_hot_set_size = 1e18;
+  size_t max_physical_size = 1e18;
+  size_t N = 1e7, TH = 4, vlen = 10, Q = 10000, range_len = 10000, seq = 1;
+  RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
+          max_hot_set_size, max_physical_size);
+
+  std::mt19937_64 gen(0x202410101326);
+  auto data = gen_range_testdata(N, gen, range_len);
+  auto data2 = gen_range_testdata(N, gen, range_len);
+  StopWatch sw;
+  input_all_range_keys(vc, data, TH, vlen, range_len, seq);
+  sort_data(data, range_len);
+  DB_INFO("input end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();  
+  {
+    auto iter = vc.Begin();
+    auto ans_iter = data.begin();
+    while (true) {
+      auto result = iter->next();
+      if (result.has_value()) {
+        DB_ASSERT(ans_iter != data.end());
+        auto [L, R] = convert_to_range(result.value());
+        if(!(ans_iter->first == L && ans_iter->first + range_len == R)) {
+          DB_INFO("{}, {}, {}, {}, {}", ans_iter - data.begin(), ans_iter->first, ans_iter->first + range_len, L, R);
+        }
+        DB_ASSERT(ans_iter->first == L && ans_iter->first + range_len == R);
+        ans_iter++;
+      } else {
+        DB_ASSERT(ans_iter == data.end());
+        break;
+      }
+    }
+  }
+
+  DB_INFO("scan end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();  
+
+  {
+    for (int i = 0; i < Q; i++) {
+      int z = gen() % N;
+      int alen = data[z].second;
+      auto [L, R] = gen_contained_range(data[z].first, alen, data[z].first + range_len, alen, gen);
+      char ax[30], ay[30];
+      bool result = vc.IsHot(convert_to_slice(ax, L, alen), convert_to_slice(ay, R, alen));
+      // auto iter = vc.LowerBound(convert_to_slice(ay, R, alen));
+      // auto iter_result = convert_to_range(iter->next().value());
+      // DB_INFO("{}, {}, {}, {}, {}, {} | {}, {}", z, i, L, R, data[z].first, data[z].first + range_len, iter_result.first, iter_result.second);
+      DB_ASSERT(result == true);
+    }
+  }
+  DB_INFO("true point query end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();  
+  {
+    for (int i = 0; i < Q; i++) {
+      int z = gen() % N;
+      int alen = data2[z].second;
+      auto L = data2[z].first;
+      auto R = data2[z].first + range_len + 1;
+      char ax[30], ay[30];
+      bool result = vc.IsHot(convert_to_slice(ax, L, alen), convert_to_slice(ay, R, alen));
+      DB_ASSERT(result == false);
+    }
+  }
+  DB_INFO("false point query end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();
+  {
+    uint64_t read_bytes;
+    vc.GetIntProperty(RALT::Properties::kReadBytes, &read_bytes);
+    uint64_t cnt0 = 0, cnt1 = 0, cnt2 = 0;
+    for (int i = 0; i < Q; i++) {
+      int z = gen() % N;
+      int seq_disable_flag = gen() % 10 == 0;
+      auto alen = data2[z].second;
+      auto L = data2[z].first;
+      char ax[30], ay[30];
+      std::string result = vc.LastPromoted(convert_to_slice(ax, L, alen), seq_disable_flag ? 0 : seq);
+      auto it = seq_disable_flag ? data.end() : std::lower_bound(data.begin(), data.end(), std::make_pair(L, alen), [&](auto x, auto y) {
+        return ralt_comp_int(x.first + range_len, x.second, y.first, y.second) < 0;
+      });
+      if (it != data.end() && ralt_comp_int(L, alen, it->first, it->second) < 0) {
+        it = data.end();
+      }
+      if (it == data.end() && result != "") {
+        cnt0 += 1;
+        DB_ASSERT(false);
+      } else if (result == "") {
+        cnt1 += 1;
+        DB_ASSERT(it == data.end());
+      } else {
+        cnt2 += 1;
+        // DB_INFO("{}, {}, {}, {}", convert_to_int(result), result.length(), it->first, it->second);
+        DB_ASSERT(result == convert_to_slice(ay, it->first + range_len, it->second).ToString());
+      }
+    }
+    DB_INFO("{}, {}", cnt0, cnt1);
+    uint64_t read_bytes2;
+    vc.GetIntProperty(RALT::Properties::kReadBytes, &read_bytes2);
+    DB_INFO("read bytes: {}", read_bytes2 - read_bytes);
+  }
+  DB_INFO("true last promoted query end. Used: {} s", sw.GetTimeInSeconds());
+  sw.Reset();  
 }
 
 int main() {
@@ -509,7 +736,9 @@ int main() {
   // test_transfer_range();
   // test_parallel();
   // test_ishot_simple();
-  test_stable_hot();
+  // test_stable_hot();
   // test_lowerbound();
   // test_range_hot_size();
+  test_basic_hot_range();
+  test_is_in_hot_range();
 }

@@ -185,7 +185,7 @@ class PosixAppendFile : public AppendFile {
       write_bytes_ += data.len();
       if(ret < 0) {
         logger("Error: ", errno);
-        exit(-1);
+        std::abort();
       }
       return 0;
     }

@@ -19,8 +19,9 @@ class Slice {
  public:
   Slice() : a_(nullptr), len_(0) {}
   explicit Slice(const uint8_t* a, size_t len) : a_(a), len_(len) {}
-  size_t size() const { return len_ + sizeof(len_); }
+  size_t serialize_size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
+  // size_t size() const { return len_; }
   const uint8_t* data() const { return a_; }
   bool operator==(const Slice& S) const { return S.len_ == len_ && memcmp(S.a_, a_, len_) == 0; }
   bool operator!=(const Slice& S) const { return S.len_ != len_ || memcmp(S.a_, a_, len_) != 0; }
@@ -51,6 +52,19 @@ class Slice {
     for (uint32_t i = 0; i < len_; i++) printf("[%x]", a_[i]);
     puts("");
     fflush(stdout);
+  }
+  std::string ToString() const {
+    return std::string((const char*)(a_), len_);
+  }
+
+  std::string ToHexString() const {
+    std::string ret;
+    char charset[17] = "0123456789ABCDEF";
+    for (int i = 0; i < len_; i++) {
+      ret += charset[a_[i] & 15];
+      ret += charset[(a_[i] >> 4) & 15];
+    }
+    return ret;
   }
 };
 // Independent slice
@@ -127,7 +141,7 @@ class IndSlice {
     // fflush(stdout);
     if (a_) delete[] a_;
   }
-  size_t size() const { return len_ + sizeof(len_); }
+  size_t serialize_size() const { return len_ + sizeof(len_); }
   size_t len() const { return len_; }
   uint8_t* data() const { return len_ == 0 ? nullptr : a_; }
   Slice ref() const { return Slice(len_ == 0 ? nullptr : a_, len_); }
@@ -151,6 +165,12 @@ class IndSlice {
     len_ = a_len_ = 0;
     if (a_) delete[] a_;
     a_ = nullptr;
+  }
+  std::string ToString() const {
+    return ref().ToString();
+  }
+  std::string ToHexString() const {
+    return ref().ToHexString();
   }
 };
 

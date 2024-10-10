@@ -172,7 +172,7 @@ class UnsortedBuffer {
     if (data_) delete[] data_;
   }
   bool append(const SKey &key, const ValueT &value) {
-    auto size = key.size() + sizeof(ValueT);
+    auto size = key.serialize_size() + sizeof(ValueT);
     auto pos = used_size_.fetch_add(size, std::memory_order_relaxed);
     if (pos + size > buffer_size_) {
       used_size_.fetch_sub(size, std::memory_order_relaxed);
@@ -195,7 +195,7 @@ class UnsortedBuffer {
       SKey key;
       uint8_t *v = key.read(d);
       sorted_result_.emplace_back(std::pair<SKey, uint8_t *>(key, v));
-      d += key.size() + sizeof(ValueT);
+      d += key.serialize_size() + sizeof(ValueT);
     }
     // tim::timsort(sorted_result_.begin(), sorted_result_.end(), comp_func);
     std::sort(sorted_result_.begin(), sorted_result_.end(), comp_func);

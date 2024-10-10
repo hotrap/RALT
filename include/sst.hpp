@@ -41,7 +41,7 @@ class SSTIterator {
 
   int rank() { return file_block_iter_.rank(); }
 
-  void jump(int new_id) { file_block_iter_.jump(new_id); }
+  // void jump(int new_id) { file_block_iter_.jump(new_id); }
 
  private:
   typename FileBlock<DataKey, KeyCompT>::EnumIterator file_block_iter_;
@@ -54,8 +54,8 @@ class ImmutableFile {
   // The structure of the file:
   // [A data block]
   // [A index block]
-  // [offset of index block, size, counts]
-  // [offset of data block, size, counts]
+  // [offset of index block, size, counts_]
+  // [offset of data block, size, counts_]
   // [kMagicNumber] (8B)
   // Now we don't consider crash consistency
   // leveldb drops the shared prefix of a key which is not restart point, here we don't consider the compression now
@@ -92,121 +92,6 @@ class ImmutableFile {
   using IndexKey = BlockKey<SKey, IndexDataT>;
 
  public:
-  // class ImmutableFileAsyncSeekHandle {
-  //   public:
-  //     class IndexBS {
-  //       public:
-  //         IndexBS(SKey key, KeyCompT comp, int L, int R) 
-  //           : key_(key), comp_(comp), L_(L), R_(R) {}
-  //         bool end() {
-  //           return L_ > R_;
-  //         }
-  //         int get_mid() {
-  //           return (L_ + R_) >> 1;
-  //         }
-  //         int get_answer() {
-  //           return ANS_;
-  //         }
-  //         /* true if answer is updated. */
-  //         bool gen_next(IndexKey candidate_key) {
-  //           auto M = get_mid();
-  //           // candidate_key.key().print();
-  //           // logger(L_, ", ", R_, ", ", M, ", ", ANS_);
-  //           if (comp_(candidate_key.key(), key_) <= 0) {
-  //             L_ = M + 1;
-  //             ANS_ = candidate_key.value();
-  //             return true;
-  //           } else {
-  //             R_ = M - 1;
-  //             return false;
-  //           }
-  //         }
-  //       private:
-  //         SKey key_;
-  //         KeyCompT comp_;
-  //         int L_{0}, R_{0};
-  //         int ANS_{-1};
-  //     };
-  //     class DataBS {
-  //       public:
-  //         DataBS(SKey key, KeyCompT comp, int L, int R) 
-  //           : key_(key), comp_(comp), L_(L), R_(R), ANS_(R + 1) {}
-  //         bool end() {
-  //           return L_ > R_;
-  //         }
-  //         int get_mid() {
-  //           return (L_ + R_) >> 1;
-  //         }
-  //         int get_answer() {
-  //           return ANS_;
-  //         }
-  //         /* true if answer is updated. */
-  //         bool gen_next(DataKey candidate_key) {
-  //           auto M = get_mid();
-  //           // logger(L_, ", ", R_, ", ", M, ", ", ANS_);
-  //           if (comp_(key_, candidate_key.key()) <= 0) {
-  //             R_ = M - 1;
-  //             ANS_ = M;
-  //             return true;
-  //           } else {
-  //             L_ = M + 1;
-  //             return false;
-  //           }
-  //         }
-  //       private:
-  //         SKey key_;
-  //         KeyCompT comp_;
-  //         int L_{0}, R_{0};
-  //         int ANS_{0};
-  //     };
-  //     ImmutableFileAsyncSeekHandle(SKey key, const ImmutableFile& file, async_io::AsyncIOQueue& aio) 
-  //       : key_(key), file_(file), aio_(aio) {}
-  //     void init() {
-  //       state_ = 0;
-  //       index_async_seek_handle_ = std::make_unique<typename FileBlock<IndexKey, KeyCompT>::AsyncSeekHandle<IndexBS>>
-  //       (file_.index_block_.get_async_seek_handle(aio_, IndexBS(key_, file_.comp_, 0, file_.index_block_.counts() - 1)));
-  //       index_async_seek_handle_->init();
-  //     }
-  //     template<typename T>
-  //     std::optional<SSTIterator<KeyCompT, ValueT>> next(T&& aio_info) {
-  //       if (state_ == 0) {
-  //         auto id = index_async_seek_handle_->search(std::forward<T>(aio_info));
-  //         if (!id) {
-  //           return {};
-  //         }
-  //         if (id.value().first == -1) {
-  //           return SSTIterator<KeyCompT, ValueT>(file_.data_block_.get_enum_iterator_to_first());
-  //         }
-  //         id_from_index_ = id.value().first;
-  //         // logger((uint64_t)(this), ":", id_from_index_);
-  //         index_async_seek_handle_.reset();
-  //         data_async_seek_handle_ = 
-  //           std::make_unique<typename FileBlock<DataKey, KeyCompT>::AsyncSeekHandle<DataBS>>
-  //           (file_.data_block_.template get_async_seek_handle<DataBS>(aio_, DataBS(key_, file_.comp_, id_from_index_, std::min<int>(file_.data_block_.counts() - 1, id_from_index_ + kIndexChunkSize - 1))));
-  //         data_async_seek_handle_->init();
-  //         state_ = 1;
-  //       }
-  //       if (state_ == 1) {
-  //         auto id = data_async_seek_handle_->search(std::forward<T>(aio_info));
-  //         if (!id) {
-  //           return {};
-  //         }
-  //         state_ = 2;
-  //         // logger((uint64_t)(this), ":", id.value().first, ", ", id.value().second);
-  //         return SSTIterator<KeyCompT, ValueT>(file_.data_block_.get_enum_iterator(id.value().first, id.value().second));
-  //       }
-  //       return {};
-  //     }
-  //   private:
-  //     int state_{0};
-  //     SKey key_;
-  //     int id_from_index_;
-  //     const ImmutableFile& file_;
-  //     async_io::AsyncIOQueue& aio_;
-  //     std::unique_ptr<typename FileBlock<IndexKey, KeyCompT>::AsyncSeekHandle<typename ImmutableFile<KeyCompT, ValueT>::ImmutableFileAsyncSeekHandle::IndexBS>> index_async_seek_handle_;
-  //     std::unique_ptr<typename FileBlock<DataKey, KeyCompT>::AsyncSeekHandle<DataBS>> data_async_seek_handle_;
-
-  // };
 
   // Used in seek. We get a temporary fd before seeking, and release it after seeking.
   // We don't use it now.
@@ -232,12 +117,16 @@ class ImmutableFile {
     size_t mgn;
     Chunk c;
     c.allocate();
-    auto ret = file_ptr_->read(ra_fd, size_ - 4096, 4096, c.data());
+    DB_ASSERT(size_ % kChunkSize == 0 && size_ > 0);
+    auto ret = file_ptr_->read(ra_fd, size_ - kChunkSize, kChunkSize, c.data());
     mgn = *(size_t*)(c.data() + sizeof(FileBlockHandle) * 2);
     index_bh = *(FileBlockHandle*)(c.data() + sizeof(FileBlockHandle));
     data_bh = *(FileBlockHandle*)(c.data());
-    assert(ret >= 0);
-    assert(mgn == kMagicNumber);
+    DB_ASSERT(ret >= 0);
+    DB_ASSERT(mgn == kMagicNumber);
+    DB_ASSERT(index_bh.size % kChunkSize == 0 && index_bh.offset % kChunkSize == 0);
+    DB_ASSERT(data_bh.size % kChunkSize == 0 && data_bh.offset % kChunkSize == 0);
+    // DB_INFO("{}, {}", index_bh.offset, data_bh.offset);
     index_block_ = FileBlock<IndexKey, KeyCompT>(file_id, index_bh, file_ptr_.get(), file_index_cache, comp_);
     data_block_ = FileBlock<DataKey, KeyCompT>(file_id, data_bh, file_ptr_.get(), file_key_cache, comp_);
   }
@@ -245,31 +134,31 @@ class ImmutableFile {
   // seek the first key that >= key, but only seek index block.
   typename FileBlock<DataKey, KeyCompT>::EnumIterator estimate_seek(SKey key) {
     if (comp_(range_.second.ref(), key) < 0) return {};
-    auto id = index_block_.upper_offset(key, open_ra_file_.get_fd()).get_offset();
-    if (id == -1) return {};
-    return data_block_.seek_with_id(id, open_ra_file_.get_fd());
+    auto id = index_block_.get_maximum_proper_value(key, open_ra_file_.get_fd(), [&](auto my, auto it) {
+      return comp_(it, my) <= 0;
+    });
+    if (!id) return {};
+    return data_block_.seek_chunk_begin(std::get<2>(id.value()).get_offset() / kChunkSize, 0, std::get<2>(id.value()).get_id());
   }
 
   // seek the first key that >= key
   typename FileBlock<DataKey, KeyCompT>::EnumIterator seek(SKey key) const {
     if (comp_(range_.second.ref(), key) < 0) return {};
-    auto [vl, vr] = index_block_.get_block_id_pair_from_index(key, open_ra_file_.get_fd());
-    auto idl = vl.get_offset();
-    auto idr = vr.get_offset() - 1;
-    if (idl == -1) return data_block_.seek_with_id(0, open_ra_file_.get_fd());
-    assert(idr != -1);
-    // logger(idl, ", ", idr);
-    return data_block_.lower_key_and_get_enum_iter(key, idl, idr, open_ra_file_.get_fd());
+    // DB_INFO("<<< {}", size_t(this));
+    auto id = index_block_.get_maximum_proper_value(key, open_ra_file_.get_fd(), [&](auto my, auto it) {
+      return comp_(it, my) <= 0;
+    });
+    if (!id) {
+      return seek_to_first();
+    }
+    // DB_INFO(">>> {}, {}, {}, {}", std::get<2>(id.value()).get_id(), std::get<2>(id.value()).get_offset(), std::get<0>(id.value()), std::get<1>(id.value()));
+    return data_block_.lower_in_chunk(key, std::get<2>(id.value()).get_offset(), std::get<2>(id.value()).get_id(), open_ra_file_.get_fd());
   }
 
   
   typename FileBlock<DataKey, KeyCompT>::EnumIterator seek_to_first() const {
-    return data_block_.seek_with_id(0, open_ra_file_.get_fd());
+    return data_block_.seek_chunk_begin(0, 0, 0);
   }
-
-  // ImmutableFileAsyncSeekHandle get_seek_handle(SKey key, async_io::AsyncIOQueue& aio) const {
-  //   return ImmutableFileAsyncSeekHandle(key, *this, aio);
-  // }
 
   size_t estimate_range_hot_size(const std::pair<SKey, SKey>& range) const {
     size_t retl = 0, retr = 0;
@@ -278,51 +167,6 @@ class ImmutableFile {
       return 0;
     }
     return index_block_.get_prefix_size_sum(R, open_ra_file_.get_fd(), false) - index_block_.get_prefix_size_sum(L, open_ra_file_.get_fd(), true);
-  }
-
-  std::pair<int, int> rank_pair(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) const {
-    int retl = 0, retr = 0;
-    auto& [L, R] = range;
-    if (comp_(range_.second.ref(), L) < 0)
-      retl = data_block_.counts();
-    else if (comp_(L, range_.first.ref()) < 0)
-      retl = 0;
-    else {
-      auto [vl, vr] = index_block_.get_block_id_pair_from_index(L, open_ra_file_.get_fd());
-      auto idl = vl.get_offset();
-      auto idr = vr.get_offset() - 1;
-      if (idl == -1) {
-        retl = 0;
-      } else {
-        retl = !exclude_info.first 
-              ? data_block_.lower_key(L, idl, idr, open_ra_file_.get_fd())
-              : data_block_.upper_key(L, idl, idr, open_ra_file_.get_fd());
-      }
-    }
-    if (comp_(range_.second.ref(), R) <= 0)
-      retr = data_block_.counts();
-    else if (comp_(R, range_.first.ref()) < 0)
-      retr = 0;
-    else {
-      auto [vl, vr] = index_block_.get_block_id_pair_from_index(R, open_ra_file_.get_fd());
-      auto idl = vl.get_offset();
-      auto idr = vr.get_offset() - 1;
-      if (idl == -1) {
-        retr = 0;
-      } else {
-        retr = !exclude_info.second
-              ? data_block_.upper_key(R, idl, idr, open_ra_file_.get_fd())
-              : data_block_.lower_key(R, idl, idr, open_ra_file_.get_fd());
-      }
-    }
-
-    return {retl, retr};
-  }
-
-  // calculate number of elements in [L, R]
-  int range_count(const std::pair<SKey, SKey>& range) {
-    auto [retl, retr] = rank_pair(range, {0, 0});
-    return retr - retl;
   }
 
   bool in_range(SKey key) {
@@ -350,19 +194,75 @@ class ImmutableFile {
   }
 };
 
+class BlockBuilder {
+  using OffsetTy = uint32_t;
+  std::vector<OffsetTy> offsets_;
+  OffsetTy block_offset_{0};
+  OffsetTy block_size_{0};
+  OffsetTy current_offset_{0};
+  bool is_finished_{false};
+
+
+ public:
+  struct Header {
+    OffsetTy cnt_;
+  };
+
+
+  void NewBlock(OffsetTy block_offset) {
+    block_offset_ = block_offset;
+    current_offset_ = block_offset;
+    block_size_ = sizeof(Header);
+    is_finished_ = false;
+    offsets_.clear();
+  }
+
+  template<typename DataKey>
+  bool CanAppend(const DataKey& kv) const {
+    if (kv.serialize_size() + sizeof(OffsetTy) + block_size_ <= kChunkSize) {
+      return true;
+    }
+    return false;
+  }
+
+  template<typename DataKey>
+  void Append(WriteBatch& file, const DataKey& kv) {
+    file.append_key(kv);
+    offsets_.push_back(current_offset_);
+    current_offset_ += kv.serialize_size();
+    block_size_ += kv.serialize_size() + sizeof(OffsetTy);
+  }
+
+  size_t Finish(WriteBatch& file) {
+    if ((sizeof(OffsetTy) * offsets_.size() + current_offset_ + sizeof(Header)) % kChunkSize > 0) {
+      file.fill(0, kChunkSize - (sizeof(OffsetTy) * offsets_.size() + current_offset_ + sizeof(Header)) % kChunkSize);
+    }
+    for (auto x : offsets_) {
+      file.append_other(x - block_offset_);
+    }
+    file.append_other(Header{.cnt_ = (uint32_t)offsets_.size()});
+    current_offset_ += kChunkSize - current_offset_ % kChunkSize;
+    is_finished_ = true;
+    return current_offset_;
+  }
+  bool IsFinished() const {
+    return is_finished_;
+  }
+};
+
 template<typename ValueT, typename IndexDataT>
 class SSTBuilder {
   std::unique_ptr<WriteBatch> file_;
 
   void _align() {
-    if (now_offset % kChunkSize != 0) {
-      file_->fill(0, kChunkSize - now_offset % kChunkSize);
-      now_offset += kChunkSize - now_offset % kChunkSize;
+    if (now_offset_ % kChunkSize != 0) {
+      file_->fill(0, kChunkSize - now_offset_ % kChunkSize);
+      now_offset_ += kChunkSize - now_offset_ % kChunkSize;
     }
   }
 
   void _append_align(size_t len) {
-    if (len && (now_offset + len - 1) / kChunkSize != now_offset / kChunkSize) {
+    if (len && (now_offset_ + len - 1) / kChunkSize != now_offset_ / kChunkSize) {
       _align();
     }
   }
@@ -374,26 +274,29 @@ class SSTBuilder {
   SSTBuilder() = default;
 
   SSTBuilder(std::unique_ptr<WriteBatch>&& file, size_t bloom_bfk) : 
-    file_(std::move(file)), now_offset(0), lst_offset(0), counts(0), size_(0), bloom_bfk_(bloom_bfk) {}
+    file_(std::move(file)), now_offset_(0), lst_offset_(0), counts_(0), size_(0), bloom_bfk_(bloom_bfk) {}
   void append(const DataKey& kv, bool is_hot) {
     assert(kv.key().len() > 0);
-    _append_align(kv.size());
-    if (!offsets.size() || now_offset - offsets[index.back().second.get_offset()] >= kChunkSize) {
+    // If the block is full, then it is finished.
+    if (key_n_ && !current_block_.CanAppend(kv)) {
+      now_offset_ = current_block_.Finish(*file_);
+    }
+    if (!key_n_ || current_block_.IsFinished()) {
+      current_block_.NewBlock(now_offset_);
       // If it is the first element, then the second parameter (cumulative sum) should be empty.
       // Otherwise, we use the data of the last element.
-      IndexDataT new_index_block(offsets.size(), index.size() ? index.back().second : IndexDataT());
+        // DB_INFO("index key hash = {}", BloomFilter::BloomHash(kv.key()));
+      IndexDataT new_index_block(now_offset_, key_n_, index.size() ? index.back().second : IndexDataT());
       index.emplace_back(kv.key(), new_index_block);
-      if (offsets.size() == 0) first_key = kv.key();
+      if (!key_n_) first_key = kv.key();
     }
-    offsets.push_back(now_offset);
     if (is_hot) {
       keys_.emplace_back(BloomFilter::BloomHash(kv.key()), kv.value().is_stable());
     }
     stable_cnt_ += kv.value().is_stable();
     index.back().second.add(kv.key(), kv.value());
-    now_offset += kv.size();
-    file_->append_key(kv);
-    size_ += kv.size();
+    current_block_.Append(*file_, kv);
+    size_ += kv.serialize_size();
     key_n_ += 1;
   }
   template <typename Value>
@@ -410,49 +313,41 @@ class SSTBuilder {
     lst_key = key;
   }
 
-  void make_offsets(const std::vector<uint32_t>& offsets) {
-    _align();
-    for (const auto& a : offsets) {
-      file_->append_other(a);
-      now_offset += sizeof(uint32_t);
-    }
-  }
-
   void make_index() {
     // append all the offsets in the data block
-    make_offsets(offsets);
-    _align();
-    auto data_bh = FileBlockHandle(0, now_offset, offsets.size());
-    lst_offset = now_offset;
+    now_offset_ = current_block_.Finish(*file_);
+    auto data_bh = FileBlockHandle(0, now_offset_, key_n_);
+    lst_offset_ = now_offset_;
     std::vector<uint32_t> v;
+    current_block_.NewBlock(now_offset_);
     // append keys in the index block
     for (const auto& a : index) {
       IndexKey index_key(a.first.ref(), a.second);
-      _append_align(index_key.size());
-      file_->append_key(index_key);
-      v.push_back(now_offset);
-      now_offset += index_key.size();
+      if (!current_block_.CanAppend(index_key)) {
+        now_offset_ = current_block_.Finish(*file_);
+        current_block_.NewBlock(now_offset_);
+      }
+      current_block_.Append(*file_, index_key);
     }
-    // append all the offsets in the index block
-    make_offsets(v);
+    now_offset_ = current_block_.Finish(*file_);
     _align();
-    auto index_bh = FileBlockHandle(lst_offset, now_offset - lst_offset, index.size());  
+    auto index_bh = FileBlockHandle(lst_offset_, now_offset_ - lst_offset_, index.size());  
     // append two block handles.
     // write offset of index block
     file_->append_other(data_bh);
     file_->append_other(index_bh);
-    now_offset += sizeof(FileBlockHandle) * 2;
+    now_offset_ += sizeof(FileBlockHandle) * 2;
   }
   void finish() {
     file_->append_other(kMagicNumber);
-    now_offset += sizeof(size_t);
+    now_offset_ += sizeof(size_t);
     _align();
     file_->flush();
   }
   void reset() {
-    now_offset = 0;
-    lst_offset = 0;
-    counts = 0;
+    now_offset_ = 0;
+    lst_offset_ = 0;
+    counts_ = 0;
     size_ = 0;
     stable_cnt_ = 0;
     key_n_ = 0;
@@ -468,7 +363,7 @@ class SSTBuilder {
     assert(file_ != nullptr);
   }
 
-  size_t size() { return now_offset; }
+  size_t size() { return now_offset_; }
   size_t kv_size() { return size_; }
   size_t get_key_n() const {
     return key_n_;
@@ -511,7 +406,7 @@ class SSTBuilder {
   }
 
  private:
-  uint32_t now_offset{0}, lst_offset{0}, counts{0}, size_{0};
+  uint32_t now_offset_{0}, lst_offset_{0}, counts_{0}, size_{0};
   std::vector<std::pair<IndSKey, IndexDataT>> index;
   std::vector<std::pair<size_t, int>> keys_;
   std::vector<uint32_t> offsets;
@@ -521,6 +416,7 @@ class SSTBuilder {
   size_t stable_cnt_{0};
   size_t key_n_{0};
   size_t bloom_bfk_{0};
+  BlockBuilder current_block_;
 };
 
 }

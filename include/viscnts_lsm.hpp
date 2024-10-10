@@ -246,11 +246,11 @@ class EstimateLSM {
     size_t size() const { return file_.size(); }
     size_t data_size() const { return file_.data_size(); }
     size_t counts() const { return global_range_counts_; }
-    size_t range_count(const std::pair<SKey, SKey>& range) {
-      auto rank_pair = file_.rank_pair(range, {0, 0});
-      // logger("q[rank_pair]=", rank_pair.first, ",", rank_pair.second);
-      return deleted_ranges_.deleted_counts(rank_pair);
-    }
+    // size_t range_count(const std::pair<SKey, SKey>& range) {
+    //   auto rank_pair = file_.rank_pair(range, {0, 0});
+    //   // logger("q[rank_pair]=", rank_pair.first, ",", rank_pair.second);
+    //   return deleted_ranges_.deleted_counts(rank_pair);
+    // }
     size_t range_data_size(const std::pair<SKey, SKey>& range) {
       // auto rank_pair = file_.rank_pair(range, {0, 0});
       // return deleted_ranges_.deleted_data_size(rank_pair);
@@ -258,13 +258,13 @@ class EstimateLSM {
       // return deleted_ranges_.deleted_counts(rank_pair) * avg_hot_size_;
       return file_.estimate_range_hot_size(range);
     }
-    void delete_range(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) {
-      auto rank_pair = file_.rank_pair(range, exclude_info);
-      logger("delete_range[rank_pair]=", rank_pair.first, ",", rank_pair.second);
-      deleted_ranges_.insert({rank_pair.first, rank_pair.second});
-      global_range_counts_ = file_.counts() - deleted_ranges_.sum();
-      global_hot_size_ = global_range_counts_ * avg_hot_size_;
-    }
+    // void delete_range(const std::pair<SKey, SKey>& range, const std::pair<bool, bool> exclude_info) {
+    //   auto rank_pair = file_.rank_pair(range, exclude_info);
+    //   logger("delete_range[rank_pair]=", rank_pair.first, ",", rank_pair.second);
+    //   deleted_ranges_.insert({rank_pair.first, rank_pair.second});
+    //   global_range_counts_ = file_.counts() - deleted_ranges_.sum();
+    //   global_hot_size_ = global_range_counts_ * avg_hot_size_;
+    // }
     double hot_size() const { return global_hot_size_; }
     const DeletedRange& deleted_ranges() const { return deleted_ranges_; }
     const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file() const { return file_; }
@@ -373,20 +373,20 @@ class EstimateLSM {
 
      private:
       void _del_next() {
-        while (del_ranges_iterator_.valid()) {
-          auto id = iter_.rank();
-          auto new_id = del_ranges_iterator_.jump(id);
-          if (id != new_id) {
-            iter_.jump(new_id);
-            if (!iter_.valid() && vec_it_ != vec_it_end_) {
-              iter_ = SSTIterator<KeyCompT, ValueT>((*vec_it_)->file().seek_to_first());
-              del_ranges_iterator_ = DeletedRange::Iterator((*vec_it_)->deleted_ranges());
-              vec_it_++;
-              continue;
-            }
-          }
-          return;
-        }
+        // while (del_ranges_iterator_.valid()) {
+        //   auto id = iter_.rank();
+        //   auto new_id = del_ranges_iterator_.jump(id);
+        //   if (id != new_id) {
+        //     iter_.jump(new_id);
+        //     if (!iter_.valid() && vec_it_ != vec_it_end_) {
+        //       iter_ = SSTIterator<KeyCompT, ValueT>((*vec_it_)->file().seek_to_first());
+        //       del_ranges_iterator_ = DeletedRange::Iterator((*vec_it_)->deleted_ranges());
+        //       vec_it_++;
+        //       continue;
+        //     }
+        //   }
+        //   return;
+        // }
       }
     };
 
@@ -594,21 +594,21 @@ class EstimateLSM {
       head_.push_back(std::move(par));
     }
 
-    size_t range_count(const std::pair<SKey, SKey>& range, KeyCompT comp) {
-      auto [where_l, where_r] = _get_range_in_head(range, comp);
-      // logger_printf("where[%d, %d]", where_l, where_r);
-      if (where_l == -1 || where_r == -1 || where_l > where_r) return 0;
+    // size_t range_count(const std::pair<SKey, SKey>& range, KeyCompT comp) {
+    //   auto [where_l, where_r] = _get_range_in_head(range, comp);
+    //   // logger_printf("where[%d, %d]", where_l, where_r);
+    //   if (where_l == -1 || where_r == -1 || where_l > where_r) return 0;
 
-      if (where_l == where_r) {
-        return head_[where_l]->range_count(range);
-      } else {
-        size_t ans = 0;
-        for (int i = where_l + 1; i < where_r; i++) ans += head_[i]->counts();
-        ans += head_[where_l]->range_count(range);
-        ans += head_[where_r]->range_count(range);
-        return ans;
-      }
-    }
+    //   if (where_l == where_r) {
+    //     return head_[where_l]->range_count(range);
+    //   } else {
+    //     size_t ans = 0;
+    //     for (int i = where_l + 1; i < where_r; i++) ans += head_[i]->counts();
+    //     ans += head_[where_l]->range_count(range);
+    //     ans += head_[where_r]->range_count(range);
+    //     return ans;
+    //   }
+    // }
 
     size_t range_data_size(const std::pair<SKey, SKey>& range, KeyCompT comp) {
       auto [where_l, where_r] = _get_range_in_head(range, comp);
@@ -627,24 +627,24 @@ class EstimateLSM {
     }
 
     // Dedicated
-    void delete_range(const std::pair<SKey, SKey>& range, KeyCompT comp, std::pair<bool, bool> exclude_info) {
-      auto [where_l, where_r] = _get_range_in_head(range, comp);
-      if (where_l == -1 || where_r == -1 || where_l > where_r) return;
-      if (where_l == where_r) {
-        hot_size_ -= head_[where_l]->hot_size();
-        head_[where_l]->delete_range(range, exclude_info);
-        hot_size_ += head_[where_l]->hot_size();
-      } else {
-        hot_size_ -= head_[where_l]->hot_size();
-        hot_size_ -= head_[where_r]->hot_size();
-        head_[where_l]->delete_range(range, exclude_info);
-        head_[where_r]->delete_range(range, exclude_info);
-        hot_size_ += head_[where_l]->hot_size();
-        hot_size_ += head_[where_r]->hot_size();
-        for (int i = where_l + 1; i < where_r; i++) hot_size_ -= head_[i]->hot_size();
-        head_.erase(head_.begin() + where_l + 1, head_.begin() + where_r);
-      }
-    }
+    // void delete_range(const std::pair<SKey, SKey>& range, KeyCompT comp, std::pair<bool, bool> exclude_info) {
+    //   auto [where_l, where_r] = _get_range_in_head(range, comp);
+    //   if (where_l == -1 || where_r == -1 || where_l > where_r) return;
+    //   if (where_l == where_r) {
+    //     hot_size_ -= head_[where_l]->hot_size();
+    //     head_[where_l]->delete_range(range, exclude_info);
+    //     hot_size_ += head_[where_l]->hot_size();
+    //   } else {
+    //     hot_size_ -= head_[where_l]->hot_size();
+    //     hot_size_ -= head_[where_r]->hot_size();
+    //     head_[where_l]->delete_range(range, exclude_info);
+    //     head_[where_r]->delete_range(range, exclude_info);
+    //     hot_size_ += head_[where_l]->hot_size();
+    //     hot_size_ += head_[where_r]->hot_size();
+    //     for (int i = where_l + 1; i < where_r; i++) hot_size_ -= head_[i]->hot_size();
+    //     head_.erase(head_.begin() + where_l + 1, head_.begin() + where_r);
+    //   }
+    // }
 
     
     const std::vector<atomic_shared_ptr<Partition>>& get_pars() const {
@@ -879,6 +879,32 @@ class EstimateLSM {
       }
       return false;
     }
+
+    bool is_in_stably_hot_range(SKey key) {
+      auto iter = seek(key);
+      for(auto& it : iter.get_iterators()) {
+        BlockKey<SKey, ValueT> kv;
+        it.read(kv);
+        if (comp_.IsContain(kv.key(), key)) return true;
+      }
+      return false;
+    }
+    
+    std::optional<IndSKey> get_last_key_in_hot_range(SKey key, uint64_t seq) {
+      auto iter = seek(key);
+      std::optional<IndSKey> ret;
+      for(auto& it : iter.get_iterators()) {
+        BlockKey<SKey, ValueT> kv;
+        it.read(kv);
+        if (comp_.IsContain(kv.key(), key) && seq >= kv.value().seq()) {
+          if (!ret || (comp_(ret.value().ref(), kv.key()) > 0)) {
+            ret = kv.key();
+          }
+        }
+      }
+      return ret;
+    }
+
 
     std::vector<atomic_shared_ptr<Level>> flush_bufs(const std::vector<UnsortedBuffer<KeyCompT, ValueT>*>& bufs, EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm) {
       if (bufs.size() == 0) return {};
@@ -1258,7 +1284,7 @@ class EstimateLSM {
         for (; iter.valid(); iter.next()) {
           BlockKey<SKey, ValueT> L;
           iter.read(L);
-          func(L.value().get_score(), L.key().size() + sizeof(ValueT) + 4, L.value().get_hot_size() + L.key().len(), L.value());
+          func(L.value().get_score(), L.key().serialize_size() + sizeof(ValueT) + 4, L.value().get_hot_size() + L.key().len(), L.value());
         }
       }
     }
@@ -1273,15 +1299,15 @@ class EstimateLSM {
       for (; iter.valid(); iter.next()) {
         auto L = iter.read();
         // +4 for the offset bytes. in SST.
-        func(L.second.get_score(), L.first.size() + sizeof(ValueT) + 4, L.second.get_hot_size() + L.first.len(), L.second);
+        func(L.second.get_score(), L.first.serialize_size() + sizeof(ValueT) + 4, L.second.get_hot_size() + L.first.len(), L.second);
       }
     }
 
-    size_t range_count(const std::pair<SKey, SKey>& range, KeyCompT comp) {
-      size_t ans = 0;
-      for (auto& level : tree_) ans += level->range_count(range, comp);
-      return ans;
-    }
+    // size_t range_count(const std::pair<SKey, SKey>& range, KeyCompT comp) {
+    //   size_t ans = 0;
+    //   for (auto& level : tree_) ans += level->range_count(range, comp);
+    //   return ans;
+    // }
 
     size_t range_data_size(const std::pair<SKey, SKey>& range, KeyCompT comp) {
       size_t ans = 0;
@@ -1289,12 +1315,12 @@ class EstimateLSM {
       return ans;
     }
 
-    SuperVersion* delete_range(std::pair<SKey, SKey> range, KeyCompT comp, std::pair<bool, bool> exclude_info) {
-      auto ret = new SuperVersion(*this);
-      for (auto& level : ret->tree_) level->delete_range(range, comp, exclude_info);
-      ret->recalc_stats();
-      return ret;
-    }
+    // SuperVersion* delete_range(std::pair<SKey, SKey> range, KeyCompT comp, std::pair<bool, bool> exclude_info) {
+    //   auto ret = new SuperVersion(*this);
+    //   for (auto& level : ret->tree_) level->delete_range(range, comp, exclude_info);
+    //   ret->recalc_stats();
+    //   return ret;
+    // }
 
     double get_current_hot_size() const { return hot_size_overestimate_; }
 
@@ -1460,20 +1486,7 @@ class EstimateLSM {
     flush_thread_.join();
     sv_->unref();
   }
-  
-  void append(SKey key, ValueT _value) {
-    auto read_size = key.len() + _value.get_hot_size();
-    auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
-    if (access_bytes % size_t(kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > size_t(kPeriodAccessMultiplier * max_hot_size_limit_)) {
-      period_ += 1;
-    }
-    if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
-      exp_tick_period_ += 1;
-    }
-    ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
-    bufs_.append_and_notify(key, value);
-  }
-  void append(SKey key, size_t vlen) {
+  void append(SKey key, uint64_t vlen, uint64_t seq) {
     auto read_size = key.len() + vlen;
     auto access_bytes = current_access_bytes_.fetch_add(read_size, std::memory_order_relaxed);
     if (access_bytes % size_t(kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > size_t(kPeriodAccessMultiplier * max_hot_size_limit_)) {
@@ -1482,7 +1495,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
       exp_tick_period_ += 1;
     }
-    ValueT value(exp_tick_period_, vlen, delta_c_);
+    ValueT value(exp_tick_period_, vlen, seq, delta_c_);
     bufs_.append_and_notify(key, value);
   }
   auto seek(SKey key) {
@@ -1500,13 +1513,13 @@ class EstimateLSM {
     return std::make_unique<SuperVersionIterator>(LevelIteratorSetTForScan(sv->batch_seek(key), get_current_tick(), get_tick_filter()), sv);
   }
 
-  size_t range_count(const std::pair<SKey, SKey>& range) {
-    if (comp_(range.first, range.second) > 0) return 0;
-    auto sv = get_current_sv();
-    auto ret = sv->range_count(range, comp_);
-    sv->unref();
-    return ret;
-  }
+  // size_t range_count(const std::pair<SKey, SKey>& range) {
+  //   if (comp_(range.first, range.second) > 0) return 0;
+  //   auto sv = get_current_sv();
+  //   auto ret = sv->range_count(range, comp_);
+  //   sv->unref();
+  //   return ret;
+  // }
 
   size_t range_data_size(const std::pair<SKey, SKey>& range) {
     if (comp_(range.first, range.second) > 0) return 0;
@@ -1548,15 +1561,15 @@ class EstimateLSM {
     }
   }
 
-  void delete_range(std::pair<SKey, SKey> range, std::pair<bool, bool> exclude_info) {
-    if (comp_(range.first, range.second) > 0) return;
-    std::unique_lock del_range_lck(sv_modify_mutex_);
-    auto new_sv = sv_->delete_range(range, comp_, exclude_info);
-    auto old_sv = _update_superversion(new_sv);
-    if (old_sv) {
-      old_sv->unref();
-    }
-  }
+  // void delete_range(std::pair<SKey, SKey> range, std::pair<bool, bool> exclude_info) {
+  //   if (comp_(range.first, range.second) > 0) return;
+  //   std::unique_lock del_range_lck(sv_modify_mutex_);
+  //   auto new_sv = sv_->delete_range(range, comp_, exclude_info);
+  //   auto old_sv = _update_superversion(new_sv);
+  //   if (old_sv) {
+  //     old_sv->unref();
+  //   }
+  // }
 
   void trigger_decay() {
     std::unique_lock del_range_lck(sv_modify_mutex_);
@@ -1602,6 +1615,20 @@ class EstimateLSM {
   bool is_stably_hot(SKey key) {
     auto sv = get_current_sv();
     auto ret = sv->is_stably_hot(key);
+    sv->unref();
+    return ret;
+  }
+
+  bool is_in_stably_hot_range(SKey key) {
+    auto sv = get_current_sv();
+    auto ret = sv->is_in_stably_hot_range(key);
+    sv->unref();
+    return ret;
+  }
+  
+  std::optional<IndSKey> get_last_key_in_hot_range(SKey key, uint64_t seq) {
+    auto sv = get_current_sv();
+    auto ret = sv->get_last_key_in_hot_range(key, seq);
     sv->unref();
     return ret;
   }
@@ -1712,7 +1739,7 @@ class EstimateLSM {
           value.decrease_stable();
           if (value.get_score() == 0) {
             total_hot_size -= value.get_hot_size() + key.len();
-            total_phy_size -= key.size() + sizeof(ValueT) + 4;
+            total_phy_size -= key.serialize_size() + sizeof(ValueT) + 4;
             if (total_phy_size <= physical_size_limit_ && total_hot_size <= hot_size_limit_) {
               clock_hand_ = key;
               clock_hand_valid_ = true;
@@ -2018,18 +2045,22 @@ class alignas(128) VisCnts {
     logger_printf("tier 0. decay scan time: %zu ns, %.6lf s", tree->get_decay_scan_time(), tree->get_decay_scan_time() / 1e9);
     logger_printf("tier 0. decay write time: %zu ns, %.6lf s", tree->get_decay_write_time(), tree->get_decay_write_time() / 1e9);
   }
-  void access(SKey key, size_t vlen) { 
-    if (cache_policy == CachePolicyT::kUseDecay) {
-      // tree->append(key, ValueT(1, vlen));
-    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
-      stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT), std::memory_order_relaxed);
-      tree->append(key, vlen);
-    }
+  void access(SKey key, uint64_t vlen, uint64_t seq) { 
+    stat_input_bytes_.fetch_add(key.serialize_size() + sizeof(ValueT), std::memory_order_relaxed);
+    tree->append(key, vlen, seq);
     check_decay(); 
   }
-  auto delete_range(const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) { 
-    return tree->delete_range(range, exclude_info); 
+  
+  bool is_in_stably_hot_range(SKey key) const {
+    return tree->is_in_stably_hot_range(key);
   }
+  
+  std::optional<IndSKey> get_last_key_in_hot_range(SKey key, uint64_t seq) const {
+    return tree->get_last_key_in_hot_range(key, seq);
+  }
+  // auto delete_range(const std::pair<SKey, SKey>& range, std::pair<bool, bool> exclude_info) { 
+  //   return tree->delete_range(range, exclude_info); 
+  // }
   auto seek_to_first() { return tree->seek_to_first(); }
   auto seek(SKey key) { return tree->seek(key); }
   auto weight_sum() { return tree->get_current_hot_size(); }

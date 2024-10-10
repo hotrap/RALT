@@ -115,7 +115,7 @@ class Compaction {
             _begin_new_file();
           }
           // It maybe the last key. 
-          auto phy_size = lst_value_.first.size() + sizeof(ValueT) + 4;     
+          auto phy_size = lst_value_.first.serialize_size() + sizeof(ValueT) + 4;     
           if (builder_.kv_size() + phy_size > kSSTable) {
             _end_new_file();
             _begin_new_file();
@@ -137,12 +137,16 @@ class Compaction {
     {
       if (phy_filter_func(lst_value_)) {
         // It is the last key.
+        if (first_flag) {
+          first_flag = false;
+          _begin_new_file();
+        }
         builder_.set_lstkey(lst_value_.first);
         other_func(lst_value_.first, lst_value_.second);
         builder_.append(lst_value_, hot_filter_func(lst_value_));
         if (hot_filter_func(lst_value_)) {
           hot_size_ += _calc_hot_size(lst_value_);
-          real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
+          real_phy_size_ += lst_value_.first.serialize_size() + sizeof(ValueT) + 4;
         }
       } 
     }

@@ -45,6 +45,10 @@ public:
   size_t DecayCount();
   size_t GetRealHotSetSize();
   size_t GetRealPhySize();
+  void AccessRange(rocksdb::Slice first, rocksdb::Slice last, uint64_t num_bytes,
+                   rocksdb::SequenceNumber sequence);
+  bool IsHot(rocksdb::Slice first, rocksdb::Slice last);
+  std::string LastPromoted(rocksdb::Slice key, rocksdb::SequenceNumber seq);
 
   struct Properties {
     static const std::string kReadBytes;
