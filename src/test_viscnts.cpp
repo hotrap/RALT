@@ -547,7 +547,7 @@ void test_lowerbound() {
 void test_range_hot_size() {
   size_t max_hot_set_size = 1e18;
   size_t max_physical_size = 1e18;
-  size_t N = 1e4, TH = 4, vlen = 10, Q = 500000;
+  size_t N = 1e6, TH = 4, vlen = 10, Q = 500000;
   RALT vc(&default_comp, "/tmp/viscnts/", max_hot_set_size, max_hot_set_size,
           max_hot_set_size, max_physical_size);
   std::mt19937_64 gen(0x202309252052);
@@ -581,7 +581,7 @@ void test_range_hot_size() {
     size_t out =
         vc.RangeHotSize(convert_to_slice(a, data[l].first, data[l].second),
                         convert_to_slice(a2, data[r].first, data[r].second));
-    DB_INFO("{},{}",ans,out);
+    // DB_INFO("{},{}",ans,out);
     DB_ASSERT(out >= ans);
     // DB_INFO("{}, {}", vc.RangeHotSize(range), total_size);
   }

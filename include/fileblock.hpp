@@ -89,29 +89,6 @@ class FileBlock {     // process blocks in a file
       return ret;
     }
 
-    
-    template<typename CompFn>
-    std::optional<std::tuple<uint32_t, uint32_t, typename KV::ValueType>> get_minimum_proper_value(uint32_t chunk_id, SKey key, int ra_fd, CompFn comp_func) {
-      read_chunk(chunk_id, ra_fd);
-      auto key_n = *(uint32_t*)current_chunk_ref_.data(kChunkSize - sizeof(uint32_t));
-      int l = 0, r = key_n - 1;
-      std::optional<std::tuple<uint32_t, uint32_t, typename KV::ValueType>> ret;
-      KV _key;
-      while (l <= r) {
-        int mid = (l + r) / 2;
-        auto offset = seek_offset(chunk_id, mid, ra_fd);
-        read(chunk_id, offset, _key, ra_fd);
-        if (comp_func(key, _key.key()) || key_n - 1 == mid) {
-          r = mid - 1;
-        // DB_INFO("{}, offset , mid = {}, {}, {}", key_n, offset, mid, BloomFilter::BloomHash(_key.key()));
-          ret = std::make_tuple(mid, offset, _key.value());
-        } else {
-          l = mid + 1;
-        }
-      }
-      return ret;
-    }
-
    private:
     FileBlock<KV, KVComp> block_;
     RefChunk current_chunk_ref_;
@@ -275,28 +252,6 @@ class FileBlock {     // process blocks in a file
     return it.get_maximum_proper_value(result_id, key, ra_fd, comp_func);
   }
 
-  
-  template<typename CompFn>
-  std::optional<std::tuple<uint32_t, uint32_t, typename KV::ValueType>> get_minimum_proper_value(SKey key, int ra_fd, CompFn comp_func) const {
-    int l = handle_.offset / kChunkSize, r = handle_.offset / kChunkSize + handle_.size / kChunkSize - 1, result_id = r;
-    SeekIterator it = SeekIterator(*this);
-    KV _key;
-    while (l <= r) {
-      auto mid = (l + r) >> 1;
-      it.seek_and_read(mid, 0, _key, ra_fd);
-      // compare two keys
-      // true => the value is acceptable.
-      // DB_INFO("{}, {}, {}, {}", l, r, mid, comp_(key, _key.key()));
-      if (comp_func(key, _key.key())) {
-        r = mid - 1, result_id = mid;
-      } else {
-        l = mid + 1;
-      }
-    }
-    // DB_INFO("result_id = {}", result_id);
-    return it.get_minimum_proper_value(result_id, key, ra_fd, comp_func);
-  }
-
   EnumIterator lower_in_chunk(SKey key, uint32_t chunk_offset, uint32_t id, int ra_fd) const {
     SeekIterator it = SeekIterator(*this);
     auto pos = it.get_maximum_proper_value(chunk_offset / kChunkSize, key, ra_fd, [&](auto my, auto it) {
@@ -316,8 +271,8 @@ class FileBlock {     // process blocks in a file
 
   size_t get_prefix_size_sum(SKey key, int ra_fd, bool exclude) const {
     if (!exclude) {
-      auto result = get_minimum_proper_value(key, ra_fd, [&](auto my, auto it) {
-        return comp_(it, my) >= 0;
+      auto result = get_maximum_proper_value(key, ra_fd, [&](auto my, auto it) {
+        return comp_(it, my) <= 0;
       });
       return result ? std::get<2>(result.value()).get_hot_size()[0] : 0;
     } else {
