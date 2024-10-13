@@ -21,12 +21,10 @@ add_executable(test_basic src/test_basic.cpp src/test_splay.cpp src/file.cpp src
 add_executable(test_viscnts src/viscnts.cpp src/test_viscnts.cpp src/file.cpp src/hash.cpp src/cache.cpp)
 add_library(${PROJECT_NAME} SHARED src/viscnts.cpp src/file.cpp src/hash.cpp src/cache.cpp)
 
-add_subdirectory(third_party/fmt)
-
 target_link_libraries(test_basic PRIVATE pthread fmt)
 target_link_libraries(test_viscnts PRIVATE pthread fmt uring rocksdb)
-target_link_libraries(${PROJECT_NAME} PRIVATE pthread)
+target_link_libraries(${PROJECT_NAME} PRIVATE pthread fmt)
 target_link_directories(test_viscnts PRIVATE ${ROCKSDB_LIB})
 
 
-include_directories(${PROJECT_SOURCE_DIR}/include ${ROCKSDB_INCLUDE} third_party/fmt/include third_party/spdlog/include)
+include_directories(${PROJECT_SOURCE_DIR}/include ${ROCKSDB_INCLUDE})

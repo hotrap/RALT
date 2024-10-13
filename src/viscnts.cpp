@@ -163,7 +163,7 @@ void RALT::AccessRange(rocksdb::Slice first, rocksdb::Slice last, uint64_t num_b
   auto indkey = CreateKey(first, last);
   vc->access(indkey.ref(), num_bytes, seq);
 }
-size_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
+uint64_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
   auto vc = static_cast<VisCntsType *>(vc_);
   auto lkey = CreateKey(smallest);
   auto rkey = CreateKey(largest);
