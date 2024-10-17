@@ -6,8 +6,7 @@
 #include "rocksdb/comparator.h"
 #include "rocksdb/ralt.h"
 
-template<typename T>
-class FastIter {
+template <typename T> class FastIter {
 public:
   virtual std::optional<T> next() = 0;
 };
@@ -72,4 +71,4 @@ private:
   void *vc_;
 };
 
-#endif  // VISCNTS_N_
+#endif // VISCNTS_N_
