@@ -1,4 +1,4 @@
-#include "viscnts.h"
+#include "ralt.h"
 
 #include <atomic>
 #include <chrono>
@@ -144,21 +144,21 @@ size_t RALT::GetHotSize() {
   return vc->weight_sum();
 }
 
-const std::string RALT::Properties::kReadBytes = "viscnts.read.bytes";
-const std::string RALT::Properties::kWriteBytes = "viscnts.write.bytes";
+const std::string RALT::Properties::kReadBytes = "ralt.read.bytes";
+const std::string RALT::Properties::kWriteBytes = "ralt.write.bytes";
 const std::string RALT::Properties::kCompactionCPUNanos =
-    "viscnts.compaction.cpu.nanos";
-const std::string RALT::Properties::kFlushCPUNanos = "viscnts.flush.cpu.nanos";
+    "ralt.compaction.cpu.nanos";
+const std::string RALT::Properties::kFlushCPUNanos = "ralt.flush.cpu.nanos";
 const std::string RALT::Properties::kDecayScanCPUNanos =
-    "viscnts.decay.scan.cpu.nanos";
+    "ralt.decay.scan.cpu.nanos";
 const std::string RALT::Properties::kDecayWriteCPUNanos =
-    "viscnts.decay.write.cpu.nanos";
+    "ralt.decay.write.cpu.nanos";
 const std::string RALT::Properties::kCompactionThreadCPUNanos =
-    "viscnts.compaction.thread.cpu.nanos";
+    "ralt.compaction.thread.cpu.nanos";
 const std::string RALT::Properties::kFlushThreadCPUNanos =
-    "viscnts.flush.thread.cpu.nanos";
+    "ralt.flush.thread.cpu.nanos";
 const std::string RALT::Properties::kDecayThreadCPUNanos =
-    "viscnts.decay.thread.cpu.nanos";
+    "ralt.decay.thread.cpu.nanos";
 
 struct PropertyInfo {
   bool (VisCntsType::*handle_int)(uint64_t *value);
