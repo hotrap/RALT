@@ -896,7 +896,7 @@ class EstimateLSM {
       for(auto& it : iter.get_iterators()) {
         BlockKey<SKey, ValueT> kv;
         it.read(kv);
-        if (comp_.IsContain(kv.key(), key) && seq >= kv.value().seq()) {
+        if (comp_.IsContain(kv.key(), key) && kv.value().seq() != 0 && seq >= kv.value().seq()) {
           if (!ret || (comp_(ret.value().ref(), kv.key()) > 0)) {
             ret = kv.key();
           }

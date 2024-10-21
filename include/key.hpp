@@ -249,6 +249,7 @@ class ExpTickValue {
     } else if (tick_ > v.tick_) {
       score_ = pow(kExpDecayRatio, tick_ - v.tick_) * v.score_ + score_;
     }
+    seq_ = std::max(seq_, v.seq_);
     // If tick_ == v.tick_, then the key is accessed multiple times in this
     // time slice. We just keep one of the access instead of merging them.
   }
