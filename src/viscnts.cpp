@@ -41,7 +41,7 @@ class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
     VisCntsIter(std::unique_ptr<VisCntsType::IteratorT> it) 
       : it_(std::move(it)) {}
     ~VisCntsIter() {}
-    rocksdb::optional<rocksdb::HotRecInfo> next() override {
+    std::optional<rocksdb::HotRecInfo> next() override {
       if (is_first_) {
         is_first_ = false;
       } else {
@@ -52,10 +52,11 @@ class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
         rocksdb::HotRecInfo ret;
         ret = rocksdb::Slice(reinterpret_cast<const char *>(key.data()),
                              key.len());
-        return rocksdb::optional<rocksdb::HotRecInfo>(std::move(ret));
+        return std::optional<rocksdb::HotRecInfo>(std::move(ret));
       }
-      return rocksdb::optional<rocksdb::HotRecInfo>();
+      return std::optional<rocksdb::HotRecInfo>();
     }
+
   private:
     bool is_first_{true};
     std::unique_ptr<VisCntsType::IteratorT> it_;
