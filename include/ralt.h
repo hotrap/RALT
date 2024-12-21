@@ -18,6 +18,7 @@ public:
   RALT(const rocksdb::Comparator *ucmp, const char *dir,
        size_t init_hot_set_size, size_t max_hot_set_size,
        size_t min_hot_set_size, size_t max_physical_size,
+       uint64_t accessed_size_to_decr_tick,
        size_t bloom_bfk = 10);
   const char *Name() const override { return "RALT-LSM"; }
   void Access(rocksdb::Slice key, size_t vlen) override;

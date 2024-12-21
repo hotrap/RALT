@@ -115,7 +115,6 @@ constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
 constexpr auto kPeriodAccessMultiplier = 0.1;
-constexpr auto kExpPeriodMultiplier = 0.001;
 constexpr auto kExtraBufferMultiplier = 20;
 
 constexpr size_t kEstPointNum = 1e4;
@@ -1344,9 +1343,16 @@ class EstimateLSM {
       }
     }
   };
+  // Arguments
   Env* env_;
   std::unique_ptr<FileName> filename_;
   KeyCompT comp_;
+  size_t physical_size_limit_{0};
+  uint64_t max_hot_size_limit_{0};
+  uint64_t min_hot_size_limit_{0};
+  uint64_t accessed_size_to_decr_tick_{0};
+  size_t bloom_bfk_{10};
+
   SuperVersion* sv_;
   std::thread compact_thread_;
   Timer compact_thread_timer_;
@@ -1366,10 +1372,7 @@ class EstimateLSM {
   // 0: idle, 1: working
   uint8_t flush_thread_state_{0};
   uint8_t compact_thread_state_{0};
-  size_t physical_size_limit_{0};
   uint64_t hot_size_limit_{0};
-  uint64_t max_hot_size_limit_{0};
-  uint64_t min_hot_size_limit_{0};
   size_t phy_size_{0};
   size_t real_hot_size_{0};
   size_t real_phy_size_{0};
@@ -1379,7 +1382,6 @@ class EstimateLSM {
   size_t exp_tick_period_{0};
   size_t delta_c_{26};
   size_t last_stable_hot_size_{0};
-  size_t bloom_bfk_{10};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1419,21 +1421,26 @@ class EstimateLSM {
     auto valid() { return iter_.valid(); }
     auto next() { return iter_.next(); }
   };
-  EstimateLSM(Env* env, size_t file_cache_size, std::unique_ptr<FileName>&& filename,
-              KeyCompT comp, std::atomic<size_t>& current_tick, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size_limit, size_t bloom_bfk)
+  EstimateLSM(Env* env, size_t file_cache_size,
+              std::unique_ptr<FileName>&& filename, KeyCompT comp,
+              std::atomic<size_t>& current_tick, size_t initial_hot_size,
+              size_t max_hot_size, size_t min_hot_size,
+              size_t physical_size_limit, uint64_t accessed_size_to_decr_tick,
+              size_t bloom_bfk)
       : env_(env),
         filename_(std::move(filename)),
         comp_(comp),
+        max_hot_size_limit_(max_hot_size),
+        min_hot_size_limit_(min_hot_size),
+        accessed_size_to_decr_tick_(accessed_size_to_decr_tick),
+        bloom_bfk_(bloom_bfk),
         sv_(new SuperVersion(comp)),
         terminate_signal_(0),
         bufs_(kUnsortedBufferSize, kUnsortedBufferMaxQueue, comp),
         file_cache_(std::make_unique<FileChunkCache>(file_cache_size)),
         current_tick_(current_tick),
         physical_size_limit_(physical_size_limit),
-        hot_size_limit_(initial_hot_size),
-        max_hot_size_limit_(max_hot_size),
-        min_hot_size_limit_(min_hot_size),
-        bloom_bfk_(bloom_bfk) {
+        hot_size_limit_(initial_hot_size) {
     compact_thread_ = std::thread([this]() { compact_thread(); });
     clockid_t compact_thread_clock_id;
     pthread_getcpuclockid(compact_thread_.native_handle(),
@@ -1467,7 +1474,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > size_t(kPeriodAccessMultiplier * max_hot_size_limit_)) {
       period_ += 1;
     }
-    if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
+    if (access_bytes % accessed_size_to_decr_tick_ + read_size > accessed_size_to_decr_tick_) {
       exp_tick_period_ += 1;
     }
     ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
@@ -1479,7 +1486,7 @@ class EstimateLSM {
     if (access_bytes % size_t(kPeriodAccessMultiplier * max_hot_size_limit_) + read_size > size_t(kPeriodAccessMultiplier * max_hot_size_limit_)) {
       period_ += 1;
     }
-    if (access_bytes % size_t(kExpPeriodMultiplier * max_hot_size_limit_) + read_size > size_t(kExpPeriodMultiplier * max_hot_size_limit_)) {
+    if (access_bytes % accessed_size_to_decr_tick_ + read_size > accessed_size_to_decr_tick_) {
       exp_tick_period_ += 1;
     }
     ValueT value(exp_tick_period_, vlen, delta_c_);
@@ -1993,15 +2000,20 @@ class alignas(128) VisCnts {
  public:
   using IteratorT = typename EstimateLSM<KeyCompT, ValueT, IndexDataT>::SuperVersionIterator;
   // Use different file path for two trees.
-  VisCnts(KeyCompT comp, const std::string& path, size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size, size_t physical_size, size_t bloom_bfk)
-    : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(createDefaultEnv(), kIndexCacheSize, std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_, initial_hot_size, max_hot_size, min_hot_size, physical_size, bloom_bfk)},
-      comp_(comp) {
-        decay_thread_ = std::thread([&](){ decay_thread(); });
-        clockid_t decay_cpu_clock_id;
-        pthread_getcpuclockid(decay_thread_.native_handle(),
-                              &decay_cpu_clock_id);
-        decay_thread_timer_ = Timer(decay_cpu_clock_id);
-      }
+  VisCnts(KeyCompT comp, const std::string& path, size_t initial_hot_size,
+          size_t max_hot_size, size_t min_hot_size, size_t physical_size,
+          uint64_t accessed_size_to_decr_tick, size_t bloom_bfk)
+      : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(
+            createDefaultEnv(), kIndexCacheSize,
+            std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_,
+            initial_hot_size, max_hot_size, min_hot_size, physical_size,
+            accessed_size_to_decr_tick, bloom_bfk)},
+        comp_(comp) {
+    decay_thread_ = std::thread([&]() { decay_thread(); });
+    clockid_t decay_cpu_clock_id;
+    pthread_getcpuclockid(decay_thread_.native_handle(), &decay_cpu_clock_id);
+    decay_thread_timer_ = Timer(decay_cpu_clock_id);
+  }
   ~VisCnts() {
     terminate_signal_ = true;
     decay_cv_.notify_all(); 
