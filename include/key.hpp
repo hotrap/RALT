@@ -8,6 +8,7 @@
 namespace viscnts_lsm {
 
 constexpr double kExpDecayRatio = 0.999;
+constexpr size_t kCMax = 5;
 
 using SKey = Slice;
 using IndSKey = IndSlice;
@@ -181,7 +182,7 @@ class ExpTickValue {
   ExpTickValue(int tick, size_t vlen, unsigned int init_score, bool init_tag = false) : 
     tick_(tick), score_(1), vlen_(vlen << (kScoreBitNum + 1) | init_score << 1 | init_tag) {}
   void merge(const ExpTickValue& v, double cur_tick) {
-    set_counter(std::min<int>(50, get_counter() + v.get_counter()));
+    set_counter(std::min<int>(kCMax, get_counter() + v.get_counter()));
     vlen_ |= 1;
     if (tick_ < v.tick_) {
       score_ = pow(kExpDecayRatio, v.tick_ - tick_) * score_ + v.score_;

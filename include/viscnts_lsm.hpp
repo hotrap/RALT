@@ -114,7 +114,7 @@ constexpr auto kMaxFlushBufferQueueSize = 10;
 constexpr auto kWaitCompactionSleepMilliSeconds = 100;
 constexpr auto kLevelMultiplier = 10;
 constexpr auto kStepDecayLen = 10;
-constexpr auto kPeriodAccessMultiplier = 0.1;
+constexpr auto kPeriodAccessMultiplier = 1;
 constexpr auto kExtraBufferMultiplier = 20;
 
 constexpr size_t kEstPointNum = 1e4;
@@ -1380,7 +1380,7 @@ class EstimateLSM {
   size_t period_{0};
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
-  size_t delta_c_{26};
+  size_t delta_c_{kCMax};
   size_t last_stable_hot_size_{0};
 
   // Used for tick
