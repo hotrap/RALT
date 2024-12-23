@@ -7,7 +7,7 @@
 #include "fileenv.hpp"
 #include "logging.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 constexpr static size_t kChunkSize = 1 << 12;  // 4 KB
 constexpr static size_t kIndexChunkSize = 512;

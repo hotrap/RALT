@@ -7,15 +7,15 @@
 using namespace std;
 /// testing function.
 
-int SKeyCompFunc(viscnts_lsm::SKey A, viscnts_lsm::SKey B) {
+int SKeyCompFunc(ralt::SKey A, ralt::SKey B) {
   if (A.len() != B.len()) return A.len() < B.len() ? -1 : 1;
   return memcmp(A.data(), B.data(), A.len());
 }
 
-using KeyCompType = int(viscnts_lsm::SKey, viscnts_lsm::SKey);
+using KeyCompType = int(ralt::SKey, ralt::SKey);
 
 void test_files() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   int L = 1e6, FS = 20;
   uint8_t a[12];
   memset(a, 0, sizeof(a));
@@ -73,7 +73,7 @@ void test_files() {
 }
 
 void test_unordered_buf() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   int L = 1e7, TH = 10;
   std::atomic<int> signal = 0;
   std::vector<std::thread> v;
@@ -156,7 +156,7 @@ void test_unordered_buf() {
 }
 
 void test_lsm_store() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
 
   auto start = std::chrono::system_clock::now();
   {
@@ -184,7 +184,7 @@ void print_memory() {
 }
 
 void test_lsm_store_and_scan() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
 
   auto comp = +[](SKey a, SKey b) {
     auto ap = a.data(), bp = b.data();
@@ -275,7 +275,7 @@ void test_lsm_store_and_scan() {
 }
 
 void test_random_scan_and_count() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
 
   auto start = std::chrono::system_clock::now();
   {
@@ -381,7 +381,7 @@ void test_random_scan_and_count() {
 }
 
 // void test_lsm_decay() {
-//   using namespace viscnts_lsm;
+//   using namespace ralt;
 
 //   auto start = std::chrono::system_clock::now();
 //   {
@@ -421,7 +421,7 @@ void test_random_scan_and_count() {
 // }
 
 void test_delete_range() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
 
   auto start = std::chrono::system_clock::now();
   {
@@ -543,7 +543,7 @@ void test_delete_range() {
 }
 
 void test_kthest() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   {
     KthEst<double> est(1e4, 100);
     est.pre_scan1(4950);
@@ -645,7 +645,7 @@ void test_kthest() {
 }
 
 void test_lru_cache() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   int N = 200, CacheSize = 100;
   FileChunkCache cache(CacheSize);
   std::mt19937_64 rgen(0x202307091349);
@@ -723,7 +723,7 @@ void test_lru_cache() {
 
 
 void test_scan_size() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   std::atomic<size_t> unused_tick; 
   EstimateLSM<KeyCompType*, SValue, IndexData<1>> tree(createDefaultEnv(), kIndexCacheSize,  std::make_unique<FileName>(0, "/tmp/viscnts/"), SKeyCompFunc, unused_tick, 1e18, 1, 1e18, 1e18, 10);
   int L = 3e7, Q = 1e4;
@@ -755,7 +755,7 @@ void test_scan_size() {
 
 
 void test_bloom() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   std::vector<size_t> s;
   std::mt19937_64 gen(0x20231216);
   int N = 1e6;

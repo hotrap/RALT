@@ -1,6 +1,6 @@
 #include "cache.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 FileChunkCache* GetDefaultIndexCache() {
   static FileChunkCache index_cache(kIndexCacheSize);

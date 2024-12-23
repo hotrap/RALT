@@ -7,7 +7,7 @@
 #include "hash.hpp"
 #include "key.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 
 
@@ -74,6 +74,6 @@ class BloomFilter {
 };
 
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

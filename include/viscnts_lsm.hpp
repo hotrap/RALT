@@ -103,7 +103,7 @@
  * it costs 39s to flush 3e8 keys (817 * 18888736B).
  * */
 
-namespace viscnts_lsm {
+namespace ralt {
 
 constexpr auto kLimitMin = 5;
 constexpr auto kLimitMax = 5;
@@ -2237,6 +2237,6 @@ class alignas(128) VisCnts {
     }
 };
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

@@ -7,7 +7,7 @@
 #include "splay.hpp"
 
 void test_splay() {
-  using namespace viscnts_lsm;
+  using namespace ralt;
   struct Data {
     std::string key;
     int val;

@@ -15,7 +15,7 @@
 #include <vector>
 #include <unordered_map>
 
-namespace viscnts_lsm {
+namespace ralt {
 
 const static int kMaxHeight = 16;
 static std::mt19937 rndGen(time(0));
@@ -346,6 +346,6 @@ class UnsortedBufferPtrs {
 
 };
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

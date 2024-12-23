@@ -1,4 +1,4 @@
-namespace viscnts_lsm {
+namespace ralt {
 // template <typename Key, void (*Update)(Key&, const Key&, const Key&), void (*SoloUpdate)(Key&, const Key&), void (*EmptyUpdate)(Key&),
 //           void (*Union)(Key&, const Key&), int (*Compare)(const Key&, const Key&)>
 template <typename Key, typename UpdateT, typename SoloUpdateT, typename EmptyUpdateT, typename DupUpdateT, typename CompareT>
@@ -204,4 +204,4 @@ class Splay {
     delete rt;
   }
 };
-}  // namespace viscnts_lsm
+}  // namespace ralt

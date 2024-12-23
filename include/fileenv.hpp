@@ -5,7 +5,7 @@
 #include <filesystem>
 
 #include "common.hpp"
-namespace viscnts_lsm {
+namespace ralt {
 
 class SeqFile {
  public:
@@ -79,6 +79,6 @@ struct FileBlockHandle {
   explicit FileBlockHandle(uint32_t offset, uint32_t size, uint32_t counts) : offset(offset), size(size), counts(counts) {}
 };
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

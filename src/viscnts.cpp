@@ -21,7 +21,7 @@ struct SKeyComparatorFromRocksDB {
   const rocksdb::Comparator* ucmp;
   SKeyComparatorFromRocksDB() : ucmp(nullptr) {}
   SKeyComparatorFromRocksDB(const rocksdb::Comparator* _ucmp) : ucmp(_ucmp) {}
-  int operator()(const viscnts_lsm::SKey& x, const viscnts_lsm::SKey& y) const {
+  int operator()(const ralt::SKey& x, const ralt::SKey& y) const {
     rocksdb::Slice rx(reinterpret_cast<const char*>(x.data()), x.len());
     rocksdb::Slice ry(reinterpret_cast<const char*>(y.data()), y.len());
     return ucmp->Compare(rx, ry);
@@ -29,11 +29,11 @@ struct SKeyComparatorFromRocksDB {
 };
 
 #ifdef USE_LRU
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::LRUTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseFasterTick>;
+using VisCntsType = ralt::VisCnts<SKeyComparatorFromRocksDB, ralt::LRUTickValue, ralt::IndexData<1>, ralt::CachePolicyT::kUseFasterTick>;
 #elif defined(USE_CLOCK)
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::ClockTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kClockStyleDecay>;
+using VisCntsType = ralt::VisCnts<SKeyComparatorFromRocksDB, ralt::ClockTickValue, ralt::IndexData<1>, ralt::CachePolicyT::kClockStyleDecay>;
 #else
-using VisCntsType = viscnts_lsm::VisCnts<SKeyComparatorFromRocksDB, viscnts_lsm::ExpTickValue, viscnts_lsm::IndexData<1>, viscnts_lsm::CachePolicyT::kUseFasterTick>;
+using VisCntsType = ralt::VisCnts<SKeyComparatorFromRocksDB, ralt::ExpTickValue, ralt::IndexData<1>, ralt::CachePolicyT::kUseFasterTick>;
 #endif
 
 class VisCntsIter : public rocksdb::TraitIterator<rocksdb::HotRecInfo> {
@@ -98,13 +98,13 @@ RALT::~RALT() { delete static_cast<VisCntsType *>(vc_); }
 
 void RALT::Access(rocksdb::Slice key, size_t vlen) {
   auto vc = static_cast<VisCntsType*>(vc_);
-  vc->access(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
+  vc->access(ralt::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()), vlen);
 }
 uint64_t RALT::RangeHotSize(rocksdb::Slice smallest, rocksdb::Slice largest) {
   auto vc = static_cast<VisCntsType *>(vc_);
-  auto lkey = viscnts_lsm::SKey(
+  auto lkey = ralt::SKey(
       reinterpret_cast<const uint8_t *>(smallest.data()), smallest.size());
-  auto rkey = viscnts_lsm::SKey(
+  auto rkey = ralt::SKey(
       reinterpret_cast<const uint8_t *>(largest.data()), largest.size());
   return vc->range_data_size({lkey, rkey});
 }
@@ -112,19 +112,19 @@ rocksdb::RALT::Iter RALT::LowerBound(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType *>(vc_);
   // logger("Iter LowerBound");
   return rocksdb::RALT::Iter(
-      std::make_unique<VisCntsIter>(vc->seek(viscnts_lsm::SKey(
+      std::make_unique<VisCntsIter>(vc->seek(ralt::SKey(
           reinterpret_cast<const uint8_t *>(key.data()), key.size()))));
 }
 bool RALT::IsHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("is_hot");
-  return vc->is_stably_hot(viscnts_lsm::SKey(
+  return vc->is_stably_hot(ralt::SKey(
       reinterpret_cast<const uint8_t *>(key.data()), key.size()));
 }
 bool RALT::IsStablyHot(rocksdb::Slice key) {
   auto vc = static_cast<VisCntsType*>(vc_);
   // logger("is_hot");
-  return vc->is_stably_hot(viscnts_lsm::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
+  return vc->is_stably_hot(ralt::SKey(reinterpret_cast<const uint8_t*>(key.data()), key.size()));
 }
 rocksdb::RALT::Iter RALT::Begin() {
   auto vc = static_cast<VisCntsType*>(vc_);

@@ -3,7 +3,7 @@
 
 #include <set>
 
-namespace viscnts_lsm {
+namespace ralt {
   
 class DeletedRange {
  public:

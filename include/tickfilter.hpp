@@ -3,7 +3,7 @@
 
 #include "key.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 template<typename Value>
 class TickFilter {};

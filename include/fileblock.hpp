@@ -7,7 +7,7 @@
 // #include "asyncio.hpp"
 #include "cache.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 // two types of fileblock, one stores (key size, key), the other stores (key size, key, value)
 template <typename KV, typename KVComp>

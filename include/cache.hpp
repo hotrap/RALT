@@ -12,7 +12,7 @@
 #include "key.hpp"
 #include "chunk.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 template<typename T>
 class List {
@@ -220,6 +220,6 @@ constexpr auto kIndexCacheSize = 4 * 1024;
 
 FileChunkCache* GetDefaultIndexCache();
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

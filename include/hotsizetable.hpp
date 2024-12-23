@@ -3,7 +3,7 @@
 
 #include "compaction.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 template<typename KeyCompT, typename ValueT>
 class HotSizeTable {

@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cassert>
 
-namespace viscnts_lsm {
+namespace ralt {
 
 size_t Hash(const char* data, size_t n, size_t seed);
 size_t Hash8(const void* data, size_t seed);

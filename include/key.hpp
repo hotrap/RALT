@@ -5,7 +5,7 @@
 #include <array>
 #include <random>
 
-namespace viscnts_lsm {
+namespace ralt {
 
 constexpr double kExpDecayRatio = 0.999;
 constexpr size_t kCMax = 5;
@@ -328,6 +328,6 @@ class IndexData {
 // using IndexKey = BlockKey<SKey, uint32_t>;
 // using RefDataKey = BlockKey<SKey, SValue*>;
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

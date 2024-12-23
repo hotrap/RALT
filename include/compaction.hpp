@@ -8,7 +8,7 @@
 #include "bloomfilter.hpp"
 #include <random>
 
-namespace viscnts_lsm {
+namespace ralt {
 
 template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class Compaction {

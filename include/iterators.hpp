@@ -5,7 +5,7 @@
 #include "tickfilter.hpp"
 #include "logging.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 // A set of iterators, use heap to manage but not segment tree because it can avoid comparisions opportunistically
 template <typename Iterator, typename KVCompT, typename ValueT>

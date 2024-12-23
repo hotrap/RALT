@@ -1,6 +1,6 @@
 #include "memtable.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 /*
 template <class Key, class SkipListValue, class Allocator, class Comparator>
 typename SkipList<Key, SkipListValue, Allocator, Comparator>::Node *SkipList<Key, SkipListValue, Allocator, Comparator>::newNode(const Key &k,
@@ -165,4 +165,4 @@ void MemTable::append(const SKey &key, const SValue &value) {
 MemTable::Node *MemTable::find(const SKey &key) { return list_.queryEqual(key); }
 bool MemTable::exists(const SKey &key) { return find(key) != nullptr; }
 */
-}  // namespace viscnts_lsm
+}  // namespace ralt

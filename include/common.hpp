@@ -10,7 +10,7 @@
 #include <cstring>
 #include <vector>
 
-namespace viscnts_lsm {
+namespace ralt {
 
 class Slice {
   const uint8_t* a_;
@@ -172,6 +172,6 @@ class RefCounts {
   }
 };
 
-}  // namespace viscnts_lsm
+}  // namespace ralt
 
 #endif

@@ -8,7 +8,7 @@
 #include "writebatch.hpp"
 #include "bloomfilter.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 
 const static size_t kMagicNumber = 0x25a65facc3a23559;  // echo viscnts | sha1sum

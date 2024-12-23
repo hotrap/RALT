@@ -5,7 +5,7 @@
 #include "hash.hpp"
 #include "key.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 static uint32_t BloomHash(SKey key) { return Hash(reinterpret_cast<const char*>(key.data()), key.size(), 0xbc9f1d34); }
 
@@ -58,4 +58,4 @@ static uint32_t BloomHash(SKey key) { return Hash(reinterpret_cast<const char*>(
 // };
 
 
-}  // namespace viscnts_lsm
+}  // namespace ralt

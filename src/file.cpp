@@ -13,7 +13,7 @@
 #define O_DIRECTX O_DIRECT
 #endif
 
-namespace viscnts_lsm {
+namespace ralt {
 
 static std::atomic<size_t> global_read_bytes{0}, global_write_bytes{0};
 
@@ -230,4 +230,4 @@ Env* createDefaultEnv() {
   return &env;
 }
 
-}  // namespace viscnts_lsm
+}  // namespace ralt

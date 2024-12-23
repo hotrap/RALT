@@ -5,7 +5,7 @@
 #include <set>
 #include <random>
 
-namespace viscnts_lsm {
+namespace ralt {
 
 template<typename Key>
 class KthEst {

@@ -4,7 +4,7 @@
 #include "fileenv.hpp"
 #include "key.hpp"
 
-namespace viscnts_lsm {
+namespace ralt {
 
 
 // This write data in a buffer, and flush the buffer when it's full. It is used in SSTBuilder.
