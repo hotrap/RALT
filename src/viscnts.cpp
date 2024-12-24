@@ -17,6 +17,8 @@
 #include "rocksdb/comparator.h"
 #include "rocksdb/ralt.h"
 
+namespace ralt {
+
 struct SKeyComparatorFromRocksDB {
   const rocksdb::Comparator* ucmp;
   SKeyComparatorFromRocksDB() : ucmp(nullptr) {}
@@ -85,14 +87,13 @@ class FastVisCntsIter : public FastIter<rocksdb::Slice> {
     std::unique_ptr<VisCntsType::IteratorT> it_;
 };
 
-RALT::RALT(const rocksdb::Comparator *ucmp, const char *dir,
-           size_t init_hot_set_size, size_t max_hot_set_size,
+RALT::RALT(const Options &options, const rocksdb::Comparator *ucmp,
+           const char *dir, size_t init_hot_set_size, size_t max_hot_set_size,
            size_t min_hot_set_size, size_t max_physical_size,
-           uint64_t accessed_size_to_decr_tick, size_t bloom_bfk)
-    : vc_(new VisCntsType(SKeyComparatorFromRocksDB(ucmp), dir,
+           uint64_t accessed_size_to_decr_tick)
+    : vc_(new VisCntsType(options, SKeyComparatorFromRocksDB(ucmp), dir,
                           init_hot_set_size, max_hot_set_size, min_hot_set_size,
-                          max_physical_size, accessed_size_to_decr_tick,
-                          bloom_bfk)) {}
+                          max_physical_size, accessed_size_to_decr_tick)) {}
 
 RALT::~RALT() { delete static_cast<VisCntsType *>(vc_); }
 
@@ -259,3 +260,5 @@ size_t RALT::GetRealPhySize() {
   auto vc = static_cast<VisCntsType*>(vc_);
   return vc->get_real_phy_size();
 }
+
+}  // namespace ralt

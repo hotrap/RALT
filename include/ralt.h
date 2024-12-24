@@ -3,23 +3,26 @@
 
 #include <optional>
 
+#include "options.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/ralt.h"
 
-template <typename T> class FastIter {
-public:
+namespace ralt {
+
+template <typename T>
+class FastIter {
+ public:
   virtual std::optional<T> next() = 0;
 };
 
 class RALT : public rocksdb::RALT {
-public:
+ public:
   RALT(const RALT &) = delete;
   ~RALT();
-  RALT(const rocksdb::Comparator *ucmp, const char *dir,
-       size_t init_hot_set_size, size_t max_hot_set_size,
+  RALT(const ralt::Options &options, const rocksdb::Comparator *ucmp,
+       const char *dir, size_t init_hot_set_size, size_t max_hot_set_size,
        size_t min_hot_set_size, size_t max_physical_size,
-       uint64_t accessed_size_to_decr_tick,
-       size_t bloom_bfk = 10);
+       uint64_t accessed_size_to_decr_tick);
   const char *Name() const override { return "RALT-LSM"; }
   void Access(rocksdb::Slice key, size_t vlen) override;
   uint64_t RangeHotSize(rocksdb::Slice smallest,
@@ -64,8 +67,10 @@ public:
   // Otherwise, returns false.
   bool GetIntProperty(std::string_view property, uint64_t *value);
 
-private:
+ private:
   void *vc_;
 };
+
+}  // namespace ralt
 
 #endif // VISCNTS_N_

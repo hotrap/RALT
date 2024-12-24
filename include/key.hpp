@@ -1,13 +1,14 @@
 
 #ifndef __KEY_H__
 #define __KEY_H__
-#include "common.hpp"
 #include <array>
 #include <random>
 
+#include "common.hpp"
+#include "options.h"
+
 namespace ralt {
 
-constexpr double kExpDecayRatio = 0.999;
 constexpr size_t kCMax = 5;
 
 using SKey = Slice;
@@ -181,14 +182,16 @@ class ExpTickValue {
   ExpTickValue() {}
   ExpTickValue(int tick, size_t vlen, unsigned int init_score, bool init_tag = false) : 
     tick_(tick), score_(1), vlen_(vlen << (kScoreBitNum + 1) | init_score << 1 | init_tag) {}
-  void merge(const ExpTickValue& v, double cur_tick) {
+  void merge(const Options& options, const ExpTickValue& v, double cur_tick) {
     set_counter(std::min<int>(kCMax, get_counter() + v.get_counter()));
     vlen_ |= 1;
     if (tick_ < v.tick_) {
-      score_ = pow(kExpDecayRatio, v.tick_ - tick_) * score_ + v.score_;
+      score_ = pow(options.exp_smoothing_factor, v.tick_ - tick_) * score_ +
+               v.score_;
       tick_ = v.tick_;
     } else if (tick_ > v.tick_) {
-      score_ = pow(kExpDecayRatio, tick_ - v.tick_) * v.score_ + score_;
+      score_ = pow(options.exp_smoothing_factor, tick_ - v.tick_) * v.score_ +
+               score_;
     }
     // If tick_ == v.tick_, then the key is accessed multiple times in this
     // time slice. We just keep one of the access instead of merging them.
@@ -196,8 +199,9 @@ class ExpTickValue {
   size_t get_hot_size() const {
     return vlen_ >> (kScoreBitNum + 1);
   }
-  double get_score() const {
-    return log(score_) + log(kExpDecayRatio) * (-tick_) + (1e5) * is_stable();
+  double get_score(const Options& options) const {
+    return log(score_) + log(options.exp_smoothing_factor) * (-tick_) +
+           (1e5) * is_stable();
   }
   bool decay(double, std::mt19937_64&) {
     return true;

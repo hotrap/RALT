@@ -134,6 +134,7 @@ class SkipList {
 
 template<typename KeyCompT, typename ValueT>
 class UnsortedBuffer {
+  const Options &options_;
   std::atomic<size_t> used_size_;
   std::atomic<uint32_t> working_count_;
   size_t buffer_size_;
@@ -155,7 +156,13 @@ class UnsortedBuffer {
   };
 
  public:
-  UnsortedBuffer(size_t size, KeyCompT comp) : used_size_(0), working_count_(0), buffer_size_(size), comp_(comp), data_(new uint8_t[size]) { 
+  UnsortedBuffer(const Options &options, size_t size, KeyCompT comp)
+      : options_(options),
+        used_size_(0),
+        working_count_(0),
+        buffer_size_(size),
+        comp_(comp),
+        data_(new uint8_t[size]) {
     memset(data_, 0, size);
   }
   UnsortedBuffer(const UnsortedBuffer &buf) = delete;
@@ -204,7 +211,9 @@ class UnsortedBuffer {
       if (d == 0 || comp_(sorted_result_[d - 1].first, a.first) != 0) {
         sorted_result_[d++] = a;
       } else {
-        reinterpret_cast<ValueT*>(sorted_result_[d - 1].second)->merge(*reinterpret_cast<ValueT*>(a.second), current_tick);
+        reinterpret_cast<ValueT *>(sorted_result_[d - 1].second)
+            ->merge(options_, *reinterpret_cast<ValueT *>(a.second),
+                    current_tick);
       }
     }
     sorted_result_.resize(d);
@@ -250,6 +259,7 @@ class UnsortedBuffer {
 
 template<typename KeyCompT, typename ValueT>
 class UnsortedBufferPtrs {
+  const Options &options_;
   constexpr static size_t kWaitSleepMilliSeconds = 10;
   std::mutex m_;
   std::condition_variable cv_;
@@ -261,8 +271,13 @@ class UnsortedBufferPtrs {
   bool terminal_signal_{false};
 
  public:
-  UnsortedBufferPtrs(size_t buffer_size, size_t max_q_size, KeyCompT comp) : buffer_size_(buffer_size), max_q_size_(max_q_size), comp_(comp) {
-    buf = new UnsortedBuffer<KeyCompT, ValueT>(buffer_size_, comp_);
+  UnsortedBufferPtrs(const Options &options, size_t buffer_size,
+                     size_t max_q_size, KeyCompT comp)
+      : options_(options),
+        buffer_size_(buffer_size),
+        max_q_size_(max_q_size),
+        comp_(comp) {
+    buf = new UnsortedBuffer<KeyCompT, ValueT>(options_, buffer_size_, comp_);
   }
   ~UnsortedBufferPtrs() {
     delete buf.load();
@@ -291,7 +306,8 @@ class UnsortedBufferPtrs {
         continue; // This almost never happens
       }
       buf_q_.push_back(buf);
-      buf = bbuf = new UnsortedBuffer<KeyCompT, ValueT>(buffer_size_, comp_);
+      buf = bbuf =
+          new UnsortedBuffer<KeyCompT, ValueT>(options_, buffer_size_, comp_);
       m_.unlock();
       cv_.notify_one();
     } while (!bbuf->append(key, value));
@@ -331,7 +347,7 @@ class UnsortedBufferPtrs {
     std::unique_lock lck_(m_);
     if (buf.load()->size() > 0) {
       buf_q_.push_back(buf);
-      buf = new UnsortedBuffer<KeyCompT, ValueT>(buffer_size_, comp_);  
+      buf = new UnsortedBuffer<KeyCompT, ValueT>(options_, buffer_size_, comp_);
     }
     cv_.notify_one();
   }

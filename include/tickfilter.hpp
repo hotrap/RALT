@@ -47,7 +47,9 @@ template<>
 class TickFilter<ExpTickValue> {
   public:
     TickFilter(double tick_threshold) : tick_threshold_(tick_threshold) {}
-    bool check(ExpTickValue v) const { return v.get_score() > tick_threshold_; }
+    bool check(const Options &options, ExpTickValue v) const {
+      return v.get_score(options) > tick_threshold_;
+    }
     double get_tick_threshold() const { return tick_threshold_; }
 
   private:
