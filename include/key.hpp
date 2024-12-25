@@ -300,7 +300,7 @@ class BlockKey {
 #pragma pack(4)
 template<const int num_tier>
 class IndexData {
-  std::array<size_t, num_tier> hot_size_{};
+  uint64_t hot_size_;
   int offset_{0};
   public:
     IndexData() {}
@@ -313,14 +313,12 @@ class IndexData {
     }
 
     /*add key to this index block*/
-    template<typename T>
-    void add(const SKey& key, const T& value) {
-      hot_size_[value.tag()] += value.get_hot_size() + key.len();
+    template <typename T>
+    void add_hot(const SKey& key, const T& value) {
+      hot_size_ += value.get_hot_size() + key.len();
     }
 
-    const std::array<size_t, num_tier>& get_hot_size() const {
-      return hot_size_;
-    }
+    uint64_t get_hot_size() const { return hot_size_; }
 
     int get_offset() const {
       return offset_;

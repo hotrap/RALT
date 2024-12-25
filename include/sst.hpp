@@ -388,9 +388,9 @@ class SSTBuilder {
     offsets.push_back(now_offset);
     if (is_hot) {
       keys_.emplace_back(BloomFilter::BloomHash(kv.key()), kv.value().is_stable());
+      index.back().second.add_hot(kv.key(), kv.value());
     }
     stable_cnt_ += kv.value().is_stable();
-    index.back().second.add(kv.key(), kv.value());
     now_offset += kv.size();
     file_->append_key(kv);
     size_ += kv.size();

@@ -480,7 +480,7 @@ class FileBlock {     // process blocks in a file
       ans -= 1;
     }
     it.seek_and_read(ans, _key, ra_fd);
-    return _key.value().get_hot_size()[0];
+    return _key.value().get_hot_size();
   }
 
   // it calculates the smallest No. of the key that >= input key.
