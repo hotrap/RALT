@@ -1394,7 +1394,6 @@ class EstimateLSM {
   uint64_t max_hot_size_limit_{0};
   uint64_t min_hot_size_limit_{0};
   uint64_t accessed_size_to_decr_counter_{0};
-  uint64_t accessed_size_to_decr_tick_{0};
 
   SuperVersion* sv_;
   std::thread compact_thread_;
@@ -1469,8 +1468,7 @@ class EstimateLSM {
               std::atomic<size_t>& current_tick, size_t initial_hot_size,
               size_t max_hot_size, size_t min_hot_size,
               size_t physical_size_limit,
-              uint64_t accessed_size_to_decr_counter,
-              uint64_t accessed_size_to_decr_tick)
+              uint64_t accessed_size_to_decr_counter)
       : options_(options),
         env_(env),
         filename_(std::move(filename)),
@@ -1478,7 +1476,6 @@ class EstimateLSM {
         max_hot_size_limit_(max_hot_size),
         min_hot_size_limit_(min_hot_size),
         accessed_size_to_decr_counter_(accessed_size_to_decr_counter),
-        accessed_size_to_decr_tick_(accessed_size_to_decr_tick),
         sv_(new SuperVersion(options_, comp)),
         terminate_signal_(0),
         bufs_(options_, kUnsortedBufferSize, kUnsortedBufferMaxQueue, comp),
@@ -1520,7 +1517,10 @@ class EstimateLSM {
         size_t(accessed_size_to_decr_counter_)) {
       period_ += 1;
     }
-    if (access_bytes % accessed_size_to_decr_tick_ + read_size > accessed_size_to_decr_tick_) {
+    uint64_t accessed_size_to_decr_tick =
+        options_.tick_period_multiplier * hot_size_limit_;
+    if (access_bytes % accessed_size_to_decr_tick + read_size >
+        accessed_size_to_decr_tick) {
       exp_tick_period_ += 1;
     }
     ValueT value(exp_tick_period_, _value.get_hot_size(), delta_c_);
@@ -1533,7 +1533,10 @@ class EstimateLSM {
         size_t(accessed_size_to_decr_counter_)) {
       period_ += 1;
     }
-    if (access_bytes % accessed_size_to_decr_tick_ + read_size > accessed_size_to_decr_tick_) {
+    uint64_t accessed_size_to_decr_tick =
+        options_.tick_period_multiplier * hot_size_limit_;
+    if (access_bytes % accessed_size_to_decr_tick + read_size >
+        accessed_size_to_decr_tick) {
       exp_tick_period_ += 1;
     }
     ValueT value(exp_tick_period_, vlen, delta_c_);
@@ -2062,13 +2065,12 @@ class alignas(128) VisCnts {
   // Use different file path for two trees.
   VisCnts(const Options& options, KeyCompT comp, const std::string& path,
           size_t initial_hot_size, size_t max_hot_size, size_t min_hot_size,
-          size_t physical_size, uint64_t accessed_size_to_decr_counter,
-          uint64_t accessed_size_to_decr_tick)
+          size_t physical_size, uint64_t accessed_size_to_decr_counter)
       : tree{std::make_unique<EstimateLSM<KeyCompT, ValueT, IndexDataT>>(
             options, createDefaultEnv(), kIndexCacheSize,
             std::make_unique<FileName>(0, path + "/a0"), comp, current_tick_,
             initial_hot_size, max_hot_size, min_hot_size, physical_size,
-            accessed_size_to_decr_counter, accessed_size_to_decr_tick)},
+            accessed_size_to_decr_counter)},
         comp_(comp) {
     decay_thread_ = std::thread([&]() { decay_thread(); });
     clockid_t decay_cpu_clock_id;

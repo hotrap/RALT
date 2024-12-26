@@ -90,12 +90,10 @@ class FastVisCntsIter : public FastIter<rocksdb::Slice> {
 RALT::RALT(const Options &options, const rocksdb::Comparator *ucmp,
            const char *dir, size_t init_hot_set_size, size_t max_hot_set_size,
            size_t min_hot_set_size, size_t max_physical_size,
-           uint64_t accessed_size_to_decr_counter,
-           uint64_t accessed_size_to_decr_tick)
+           uint64_t accessed_size_to_decr_counter)
     : vc_(new VisCntsType(options, SKeyComparatorFromRocksDB(ucmp), dir,
                           init_hot_set_size, max_hot_set_size, min_hot_set_size,
-                          max_physical_size, accessed_size_to_decr_counter,
-                          accessed_size_to_decr_tick)) {}
+                          max_physical_size, accessed_size_to_decr_counter)) {}
 
 RALT::~RALT() { delete static_cast<VisCntsType *>(vc_); }
 

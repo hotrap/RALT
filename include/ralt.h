@@ -22,8 +22,7 @@ class RALT : public rocksdb::RALT {
   RALT(const ralt::Options &options, const rocksdb::Comparator *ucmp,
        const char *dir, size_t init_hot_set_size, size_t max_hot_set_size,
        size_t min_hot_set_size, size_t max_physical_size,
-       uint64_t accessed_size_to_decr_counter,
-       uint64_t accessed_size_to_decr_tick);
+       uint64_t accessed_size_to_decr_counter);
   const char *Name() const override { return "RALT-LSM"; }
   void Access(rocksdb::Slice key, size_t vlen) override;
   uint64_t RangeHotSize(rocksdb::Slice smallest,
