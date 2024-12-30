@@ -208,7 +208,7 @@ atomic_shared_ptr<T> make_atomic_shared(Args&&... args) {
 template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class EstimateLSM {
   struct Partition {
-    const Options& options_;
+    std::shared_ptr<const Options> options_;
     ImmutableFile<KeyCompT, ValueT, IndexDataT> file_;
     DeletedRange deleted_ranges_;
     int global_range_counts_;
@@ -222,10 +222,11 @@ class EstimateLSM {
 
    public:
     Partition(
-        const Options& options, Env* env, FileChunkCache* file_index_cache,
-        FileChunkCache* file_key_cache, KeyCompT comp,
+        std::shared_ptr<const Options> options, Env* env,
+        FileChunkCache* file_index_cache, FileChunkCache* file_key_cache,
+        KeyCompT comp,
         typename Compaction<KeyCompT, ValueT, IndexDataT>::NewFileData&& data)
-        : options_(options),
+        : options_(std::move(options)),
           file_(
               data.file_id, data.size,
               std::unique_ptr<RandomAccessFile>(env->openRAFile(data.filename)),
@@ -237,6 +238,7 @@ class EstimateLSM {
           filename_(data.filename),
           check_hot_buffer_(std::move(data.check_hot_buffer)),
           check_stably_hot_buffer_(std::move(data.check_stably_hot_buffer)) {
+      DB_ASSERT(options_);
       global_range_counts_ = file_.counts();
       avg_hot_size_ = data.hot_size / (double)file_.counts();
     }
@@ -275,11 +277,11 @@ class EstimateLSM {
     const DeletedRange& deleted_ranges() const { return deleted_ranges_; }
     const ImmutableFile<KeyCompT, ValueT, IndexDataT>& file() const { return file_; }
     bool check_stably_hot(SKey key) const {
-      BloomFilter bf(options_.bloom_bits);
+      BloomFilter bf(options_->bloom_bits);
       return bf.Find(key, check_stably_hot_buffer_.ref());
     }
     bool check_hot(SKey key) const {
-      BloomFilter bf(options_.bloom_bits);
+      BloomFilter bf(options_->bloom_bits);
       return bf.Find(key, check_hot_buffer_.ref());
     }
     size_t get_key_n() const {
@@ -702,7 +704,7 @@ class EstimateLSM {
     }
   };
   class SuperVersion {
-    const Options& options_;
+    std::shared_ptr<const Options> options_;
     std::vector<atomic_shared_ptr<Level>> tree_;
     std::atomic<uint32_t> ref_;
     double hot_size_overestimate_{0}, size_{0};
@@ -714,8 +716,8 @@ class EstimateLSM {
     using LevelIteratorSetT = SeqIteratorSet<typename Level::LevelIterator, KeyCompT, ValueT>;
 
    public:
-    SuperVersion(const Options& options, KeyCompT comp)
-        : options_(options), ref_(1), comp_(comp) {}
+    SuperVersion(std::shared_ptr<const Options> options, KeyCompT comp)
+        : options_(std::move(options)), ref_(1), comp_(comp) {}
     SuperVersion(const SuperVersion& sv)
         : options_(sv.options_),
           ref_(1),
@@ -1313,7 +1315,7 @@ class EstimateLSM {
       for (; iter.valid(); iter.next()) {
         auto L = iter.read();
         // +4 for the offset bytes. in SST.
-        func(L.second.get_score(options_), L.first.size() + sizeof(ValueT) + 4,
+        func(L.second.get_score(*options_), L.first.size() + sizeof(ValueT) + 4,
              L.second.get_hot_size() + L.first.len(), L.second);
       }
     }
@@ -1386,7 +1388,7 @@ class EstimateLSM {
     }
   };
   // Arguments
-  Options options_;
+  std::shared_ptr<const Options> options_;
   Env* env_;
   std::unique_ptr<FileName> filename_;
   KeyCompT comp_;
@@ -1469,7 +1471,7 @@ class EstimateLSM {
               size_t max_hot_size, size_t min_hot_size,
               size_t physical_size_limit,
               uint64_t accessed_size_to_decr_counter)
-      : options_(options),
+      : options_(std::make_shared<const Options>(options)),
         env_(env),
         filename_(std::move(filename)),
         comp_(comp),
@@ -1494,7 +1496,7 @@ class EstimateLSM {
     pthread_getcpuclockid(flush_thread_.native_handle(),
                           &flush_thread_clock_id);
     flush_thread_timer_ = Timer(flush_thread_clock_id);
-    logger_printf("LSM bloom filter BPK: %zu bits.", options.bloom_bits);
+    logger_printf("LSM bloom filter BPK: %zu bits.", options_->bloom_bits);
   }
   ~EstimateLSM() {
     {
@@ -1518,7 +1520,7 @@ class EstimateLSM {
       period_ += 1;
     }
     uint64_t accessed_size_to_decr_tick =
-        options_.tick_period_multiplier * hot_size_limit_;
+        options_->tick_period_multiplier * hot_size_limit_;
     if (access_bytes % accessed_size_to_decr_tick + read_size >
         accessed_size_to_decr_tick) {
       exp_tick_period_ += 1;
@@ -1534,7 +1536,7 @@ class EstimateLSM {
       period_ += 1;
     }
     uint64_t accessed_size_to_decr_tick =
-        options_.tick_period_multiplier * hot_size_limit_;
+        options_->tick_period_multiplier * hot_size_limit_;
     if (access_bytes % accessed_size_to_decr_tick + read_size >
         accessed_size_to_decr_tick) {
       exp_tick_period_ += 1;
@@ -1760,7 +1762,7 @@ class EstimateLSM {
     auto sv = get_current_sv();
     sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size,
                                 const ValueT& value) {
-      if (value.get_score(options_) > 0) {
+      if (value.get_score(*options_) > 0) {
         total_hot_size += hot_size;
         total_phy_size += phy_size;
       }
@@ -1773,13 +1775,13 @@ class EstimateLSM {
       auto new_sv =
           sv_->compact(*this, SuperVersion::JobType::kStepDecay,
                        [&](auto& key, auto& value) {
-                         if (value.get_score(options_) > 0 &&
+                         if (value.get_score(*options_) > 0 &&
                              (total_phy_size > physical_size_limit_ ||
                               total_hot_size > hot_size_limit_) &&
                              (!clock_hand_valid_ ||
                               comp_(key.ref(), clock_hand_.ref()) > 0)) {
                            value.decrease_stable();
-                           if (value.get_score(options_) == 0) {
+                           if (value.get_score(*options_) == 0) {
                              total_hot_size -= value.get_hot_size() + key.len();
                              total_phy_size -= key.size() + sizeof(ValueT) + 4;
                              if (total_phy_size <= physical_size_limit_ &&

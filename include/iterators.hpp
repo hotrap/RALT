@@ -133,7 +133,7 @@ class SeqIteratorSet {
 
 template <typename Iterator, typename KeyCompT, typename ValueT>
 class SeqIteratorSetForScan {
-  const Options& options_;
+  std::shared_ptr<const Options> options_;
   IndSKey current_key_;
   ValueT current_value_;
   SeqIteratorSet<Iterator, KeyCompT, ValueT> iter_;
@@ -142,14 +142,15 @@ class SeqIteratorSetForScan {
   TickFilter<ValueT> tick_filter_;
 
  public:
-  SeqIteratorSetForScan(const Options& options,
+  SeqIteratorSetForScan(std::shared_ptr<const Options> options,
                         SeqIteratorSet<Iterator, KeyCompT, ValueT>&& iter,
                         double current_tick, TickFilter<ValueT> tick_filter)
-      : options_(options),
+      : options_(std::move(options)),
         iter_(std::move(iter)),
         valid_(true),
         current_tick_(current_tick),
         tick_filter_(tick_filter) {
+    DB_ASSERT(options_);
     // logger(tick_filter_.get_tick_threshold());
   }
   void build() {
@@ -170,9 +171,9 @@ class SeqIteratorSetForScan {
     while (iter_.valid()) {
       result = iter_.read();
       if (iter_.comp_func()(current_key_.ref(), result.first) == 0) {
-        current_value_.merge(options_, result.second, current_tick_);
+        current_value_.merge(*options_, result.second, current_tick_);
       } else {
-        if (tick_filter_.check(options_, current_value_)) {
+        if (tick_filter_.check(*options_, current_value_)) {
           return;
         } else {
           current_key_ = result.first;
@@ -182,7 +183,7 @@ class SeqIteratorSetForScan {
       is_equal = iter_.get_is_equal();
       iter_.next();
     }
-    if (!tick_filter_.check(options_, current_value_)) {
+    if (!tick_filter_.check(*options_, current_value_)) {
       valid_ = false;
     }
   }

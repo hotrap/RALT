@@ -134,7 +134,7 @@ class SkipList {
 
 template<typename KeyCompT, typename ValueT>
 class UnsortedBuffer {
-  const Options &options_;
+  std::shared_ptr<const Options> options_;
   std::atomic<size_t> used_size_;
   std::atomic<uint32_t> working_count_;
   size_t buffer_size_;
@@ -156,13 +156,15 @@ class UnsortedBuffer {
   };
 
  public:
-  UnsortedBuffer(const Options &options, size_t size, KeyCompT comp)
-      : options_(options),
+  UnsortedBuffer(std::shared_ptr<const Options> options, size_t size,
+                 KeyCompT comp)
+      : options_(std::move(options)),
         used_size_(0),
         working_count_(0),
         buffer_size_(size),
         comp_(comp),
         data_(new uint8_t[size]) {
+    DB_ASSERT(options_);
     memset(data_, 0, size);
   }
   UnsortedBuffer(const UnsortedBuffer &buf) = delete;
@@ -212,7 +214,7 @@ class UnsortedBuffer {
         sorted_result_[d++] = a;
       } else {
         reinterpret_cast<ValueT *>(sorted_result_[d - 1].second)
-            ->merge(options_, *reinterpret_cast<ValueT *>(a.second),
+            ->merge(*options_, *reinterpret_cast<ValueT *>(a.second),
                     current_tick);
       }
     }
@@ -259,7 +261,7 @@ class UnsortedBuffer {
 
 template<typename KeyCompT, typename ValueT>
 class UnsortedBufferPtrs {
-  const Options &options_;
+  std::shared_ptr<const Options> options_;
   constexpr static size_t kWaitSleepMilliSeconds = 10;
   std::mutex m_;
   std::condition_variable cv_;
@@ -271,9 +273,9 @@ class UnsortedBufferPtrs {
   bool terminal_signal_{false};
 
  public:
-  UnsortedBufferPtrs(const Options &options, size_t buffer_size,
+  UnsortedBufferPtrs(std::shared_ptr<const Options> options, size_t buffer_size,
                      size_t max_q_size, KeyCompT comp)
-      : options_(options),
+      : options_(std::move(options)),
         buffer_size_(buffer_size),
         max_q_size_(max_q_size),
         comp_(comp) {
