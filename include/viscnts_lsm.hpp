@@ -717,7 +717,9 @@ class EstimateLSM {
 
    public:
     SuperVersion(std::shared_ptr<const Options> options, KeyCompT comp)
-        : options_(std::move(options)), ref_(1), comp_(comp) {}
+        : options_(std::move(options)), ref_(1), comp_(comp) {
+      DB_ASSERT(options_);
+    }
     SuperVersion(const SuperVersion& sv)
         : options_(sv.options_),
           ref_(1),
@@ -727,6 +729,7 @@ class EstimateLSM {
           comp_(sv.comp_),
           decay_step_(sv.decay_step_),
           real_phy_size_(sv.real_phy_size_) {
+      DB_ASSERT(options_);
       for (auto& level : sv.tree_) {
         tree_.push_back(make_atomic_shared<Level>(*level));
       }
