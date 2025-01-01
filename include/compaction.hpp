@@ -12,7 +12,7 @@ namespace ralt {
 
 template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class Compaction {
-  std::shared_ptr<const Options> options_;
+  const Options options_;
   // builder_ is used to build one file
   // files_ is used to get global file name
   // env_ is used to get global environment
@@ -44,7 +44,7 @@ class Compaction {
     auto [filename, id] = files_->next_pair();
     builder_.new_file(std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(
                           env_->openAppFile(filename))),
-                      options_->bloom_bits);
+                      options_.bloom_bits);
     vec_newfiles_.emplace_back();
     vec_newfiles_.back().filename = filename;
     vec_newfiles_.back().file_id = id;
@@ -78,16 +78,15 @@ class Compaction {
     IndSlice check_hot_buffer;
     IndSlice check_stably_hot_buffer;
   };
-  Compaction(std::shared_ptr<const Options> options, double current_tick,
-             FileName* files, Env* env, KeyCompT comp)
-      : options_(std::move(options)),
+  Compaction(const Options options, double current_tick, FileName* files,
+             Env* env, KeyCompT comp)
+      : options_(options),
         current_tick_(current_tick),
         files_(files),
         env_(env),
         flag_(false),
         rndgen_(std::random_device()()),
         comp_(comp) {
-    DB_ASSERT(options_);
     decay_prob_ = 0.5;
   }
 
@@ -115,7 +114,7 @@ class Compaction {
       CNT++;
       auto L = left.read();
       if (comp_(lst_value_.first.ref(), L.first) == 0) {
-        lst_value_.second.merge(*options_, L.second, current_tick_);
+        lst_value_.second.merge(options_, L.second, current_tick_);
       } else {
         // only store those filter returning true.
         if (phy_filter_func(lst_value_)) {
@@ -185,10 +184,10 @@ class Compaction {
     return flush(
         left,
         [this, hot_tick_filter](auto& kv) {
-          return hot_tick_filter.check(*options_, kv.second);
+          return hot_tick_filter.check(options_, kv.second);
         },
         [this, decay_tick_filter](auto& kv) {
-          return decay_tick_filter.check(*options_, kv.second);
+          return decay_tick_filter.check(options_, kv.second);
         },
         std::forward<FuncT>(func));
   }
