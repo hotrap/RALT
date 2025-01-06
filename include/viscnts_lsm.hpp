@@ -1423,7 +1423,6 @@ class EstimateLSM {
   size_t lst_decay_period_{0};
   size_t exp_tick_period_{0};
   size_t delta_c_{kCMax};
-  size_t last_stable_hot_size_{0};
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
@@ -1831,7 +1830,8 @@ class EstimateLSM {
     size_t total_hot_size = 0;
     size_t total_n = 0, stable_n = 0, stable_hot_size = 0;
     Timer sw;
-    sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size, const ValueT& value) {
+    sv->scan_all_with_merge([&](double tick, size_t phy_size, size_t hot_size,
+                                const ValueT& value) {
       est_phy.scan1(-tick, phy_size);
       est_hot.scan1(-tick, hot_size);
       est_cnt.scan1(-tick, 1);
@@ -1842,7 +1842,6 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
-    last_stable_hot_size_ = stable_hot_size;
     uint64_t max_hot_size_limit_decr =
         (max_hot_size_limit_ - min_hot_size_limit_) / 50;
     uint64_t min_hot_size_limit =
