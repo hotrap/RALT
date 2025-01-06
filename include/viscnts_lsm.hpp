@@ -1426,7 +1426,7 @@ class EstimateLSM {
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
-  std::atomic<double> tick_threshold_{-114514};
+  std::atomic<double> hot_tick_threshold_{-114514};
   std::atomic<double> decay_tick_threshold_{-1919810};
   std::atomic<size_t> current_access_bytes_;
 
@@ -1645,10 +1645,6 @@ class EstimateLSM {
     return phy_size_;
   }
 
-  void set_tick_threshold(size_t x) {
-    tick_threshold_.store(x, std::memory_order_relaxed);
-  }
-  
   void set_decay_tick_threshold(size_t x) {
     decay_tick_threshold_.store(x, std::memory_order_relaxed);
   }
@@ -1672,7 +1668,8 @@ class EstimateLSM {
   }
 
   TickFilter<ValueT> get_tick_filter() const {
-    return TickFilter<ValueT>(tick_threshold_.load(std::memory_order_relaxed));
+    return TickFilter<ValueT>(
+        hot_tick_threshold_.load(std::memory_order_relaxed));
   }
 
   TickFilter<ValueT> get_decay_tick_filter() const {
@@ -1684,7 +1681,8 @@ class EstimateLSM {
     bool is_set_unstable = lst_decay_period_ != period_;
     lst_decay_period_ = period_;
     sv_modify_mutex_.lock();
-    logger("[tick threshold for hot]: ", tick_threshold_.load(), ", [for phy]: ", decay_tick_threshold_.load());
+    logger("[tick threshold for hot]: ", hot_tick_threshold_.load(),
+           ", [for phy]: ", decay_tick_threshold_.load());
     while(true) {
       Timer sw;
       auto new_sv = sv_->compact(*this, SuperVersion::JobType::kStepDecay, [is_set_unstable](auto& key, auto& value) {
@@ -1714,10 +1712,6 @@ class EstimateLSM {
     real_hot_size_ = sv_->get_current_hot_size();
     real_phy_size_ = sv_->get_current_real_phy_size();
     sv_modify_mutex_.unlock();
-  }
-
-  double get_tick_threshold() const {
-    return tick_threshold_.load(std::memory_order_relaxed);
   }
 
   /* Used for stats */
@@ -1855,7 +1849,7 @@ class EstimateLSM {
     sv->unref();
     est_hot.sort();
     est_phy.sort();
-    tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
+    hot_tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
     decay_tick_threshold_ = std::max(-est_phy.get_from_points(physical_size_limit_), -est_hot.get_from_points(hot_size_limit_ * 2));
     stat_decay_scan_time_ += sw.GetTimeInNanos();
   }
