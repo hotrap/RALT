@@ -1814,13 +1814,10 @@ class EstimateLSM {
   void update_tick_threshold() {
     KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
     KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
-    KthEst<double> est_cnt(kEstPointNum, key_n_ * 0.9);
     auto sv = get_current_sv();
     logger(sv->to_string());
     est_hot.pre_scan1(sv->get_current_hot_size() / sv->get_current_real_phy_size() * sv->get_size() * 1.1);
     est_phy.pre_scan1(sv->get_size());
-    est_cnt.pre_scan1(sv->get_key_n());
-    auto hot_tick_filter = get_tick_filter();
     size_t total_hot_size = 0;
     size_t total_n = 0, stable_n = 0, stable_hot_size = 0;
     Timer sw;
@@ -1828,7 +1825,6 @@ class EstimateLSM {
                                 const ValueT& value) {
       est_phy.scan1(-tick, phy_size);
       est_hot.scan1(-tick, hot_size);
-      est_cnt.scan1(-tick, 1);
       total_hot_size += hot_size;
       total_n += 1;
       if (value.is_stable()) {
