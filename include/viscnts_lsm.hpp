@@ -2029,9 +2029,8 @@ class EstimateLSM {
 
 enum class CachePolicyT {
   kUseDecay = 0,
-  kUseTick,
   kUseFasterTick,
-  kClockStyleDecay
+  kClockStyleDecay,
 };
 
 // Viscnts, implement lsm tree and other things.
@@ -2089,7 +2088,8 @@ class alignas(128) VisCnts {
   void access(SKey key, size_t vlen) { 
     if (cache_policy == CachePolicyT::kUseDecay) {
       // tree->append(key, ValueT(1, vlen));
-    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
+    } else if (cache_policy == CachePolicyT::kUseFasterTick ||
+               cache_policy == CachePolicyT::kClockStyleDecay) {
       stat_input_bytes_.fetch_add(key.size() + sizeof(ValueT), std::memory_order_relaxed);
       tree->append(key, vlen);
     }
@@ -2119,8 +2119,9 @@ class alignas(128) VisCnts {
       //   if (weight_sum() > hot_set_limit_) {
       //     tree->trigger_decay();
       //   }
-      // }  
-    } else if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
+      // }
+    } else if (cache_policy == CachePolicyT::kUseFasterTick ||
+               cache_policy == CachePolicyT::kClockStyleDecay) {
       if (tree->check_decay_condition() && !is_updating_tick_threshold_.load(std::memory_order_relaxed)) {
         decay_cv_.notify_one(); 
       }
@@ -2129,7 +2130,8 @@ class alignas(128) VisCnts {
   void flush() {
     std::unique_lock lck(decay_m_);
     tree->all_flush();
-    if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick || cache_policy == CachePolicyT::kClockStyleDecay) {
+    if (cache_policy == CachePolicyT::kUseFasterTick ||
+        cache_policy == CachePolicyT::kClockStyleDecay) {
       if (tree->check_decay_condition()) {
         update_tick_threshold();
       }
@@ -2140,32 +2142,7 @@ class alignas(128) VisCnts {
   }
 
   void update_tick_threshold() {
-    if (cache_policy == CachePolicyT::kUseTick) {
-      // auto hot_size = weight_sum();
-      // KthEst<double> est(kEstPointNum, hot_set_limit_);
-      // est.pre_scan1(hot_size);
-      // auto append_all_to = [&](auto&& iter, auto&& scan_f) {
-      //   for(; iter->valid(); iter->next()) {
-      //     auto L = iter->read();
-      //     // logger(L.second.get_score(), ", ", L.second.get_hot_size() + L.first.len());
-      //     // We find the smallest tick so that sum(a.tick > tick) a.hot_size <= hot_limit.
-      //     scan_f(-L.second.get_score(), L.second.get_hot_size() + L.first.len());
-      //   }
-      // };
-      // StopWatch sw;
-      // logger("first scan");
-      // append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan1(a...); });
-      // // logger("first scan end");
-      // est.pre_scan2();
-      // // logger("second scan");
-      // append_all_to(tree->seek_to_first(), [&] (auto&&... a) { est.scan2(a...); });
-      // // logger("second scan end");
-      // double new_tick_threshold = est.get_interplot_kth();
-      // tree->set_tick_threshold(-new_tick_threshold);
-      // tree->set_decay_tick_threshold(-new_tick_threshold);
-      // tree->update_tick_threshold();
-      // logger("threshold: ", -new_tick_threshold, ", weight_sum: ", weight_sum(), "used time: ", sw.GetTimeInSeconds(), "s");
-    } else if (cache_policy == CachePolicyT::kUseFasterTick) {
+    if (cache_policy == CachePolicyT::kUseFasterTick) {
       // We sample some points and find the oldest 10% * SIZE records. These records are removed in major compaction (update_tick_threshold_and_update_est).
       // We sample points when we are doing compaction, and we get threshold from those points. 
       // The threshold is old but it ensures that we always remove >= 10% * SIZE records. 
@@ -2283,7 +2260,7 @@ class alignas(128) VisCnts {
         if (terminate_signal_) {
           return;
         }
-        if (cache_policy == CachePolicyT::kUseTick || cache_policy == CachePolicyT::kUseFasterTick) {
+        if (cache_policy == CachePolicyT::kUseFasterTick) {
           update_tick_threshold();
         } else if (cache_policy == CachePolicyT::kClockStyleDecay) {
           tree->clock_style_decay();
