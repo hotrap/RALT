@@ -1812,8 +1812,8 @@ class EstimateLSM {
   }
 
   void update_tick_threshold() {
-    KthEst<double> est_hot(kEstPointNum, hot_size_limit_);
-    KthEst<double> est_phy(kEstPointNum, physical_size_limit_);
+    KthEst<double> est_hot(kEstPointNum);
+    KthEst<double> est_phy(kEstPointNum);
     auto sv = get_current_sv();
     logger(sv->to_string());
     est_hot.pre_scan1(sv->get_current_hot_size() / sv->get_current_real_phy_size() * sv->get_size() * 1.1);
