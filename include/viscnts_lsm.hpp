@@ -1832,14 +1832,7 @@ class EstimateLSM {
         stable_hot_size += hot_size;
       }
     });
-    uint64_t max_hot_size_limit_decr =
-        (max_hot_size_limit_ - min_hot_size_limit_) / 50;
-    uint64_t min_hot_size_limit =
-        hot_size_limit_ >= max_hot_size_limit_decr
-            ? hot_size_limit_ - max_hot_size_limit_decr
-            : 0;
-    min_hot_size_limit = std::max(min_hot_size_limit_, min_hot_size_limit);
-    hot_size_limit_ = std::max(min_hot_size_limit,
+    hot_size_limit_ = std::max(min_hot_size_limit_,
                                std::min(max_hot_size_limit_, stable_hot_size));
     logger("total_hot_size: ", total_hot_size, ", total_n: ", total_n, ", stable_n: ", stable_n, ", stable_hot_size: ", stable_hot_size, ", period: ", period_, ", lst_decay_period: ", lst_decay_period_);
     sv->unref();
