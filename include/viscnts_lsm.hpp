@@ -906,7 +906,7 @@ class EstimateLSM {
             lsm.get_comp());
         buf->sort(lsm.get_current_tick());
         auto iter = std::make_unique<typename UnsortedBuffer<KeyCompT, ValueT>::Iterator>(*buf);
-        auto [files, hot_size] = worker.flush(*iter);
+        auto [files, hot_size] = worker.flush(*iter, lsm.get_hot_filter());
         auto level = make_atomic_shared<Level>();
         for (auto& a : files)
           level->append_par(make_atomic_shared<Partition>(
@@ -940,11 +940,10 @@ class EstimateLSM {
       return ret;
     }
     enum class JobType {
-      kDecay = 0,
-      kMajorCompaction = 1,
-      kTieredCompaction = 2,
-      kLeveledCompaction = 3,
-      kStepDecay = 4,
+      kMajorCompaction = 0,
+      kTieredCompaction = 1,
+      kLeveledCompaction = 2,
+      kStepDecay = 3,
     };
 
     SuperVersion* compact(EstimateLSM<KeyCompT, ValueT, IndexDataT>& lsm, JobType job_type) const {
@@ -959,7 +958,7 @@ class EstimateLSM {
       auto env = lsm.get_env();
       auto file_index_cache = lsm.get_file_index_cache();
       auto file_key_cache = lsm.get_file_key_cache();
-      auto tick_filter = lsm.get_tick_filter();
+      auto tick_filter = lsm.get_hot_filter();
       auto decay_tick_filter = lsm.get_decay_tick_filter();
       // check if overlap with any partition
       auto check_func = [comp, this](const Partition& par) {
@@ -984,38 +983,7 @@ class EstimateLSM {
         return for_iter_ptr;
       };
       logger("current superversion. ", this->to_string());
-      // decay
-      if (job_type == JobType::kDecay) {
-        logger("[decay]");
-        auto iters = std::make_unique<LevelIteratorSetT>(comp);
-
-        // logger("Major Compaction tree_.size() = ", tree_.size());
-        // push all iterators to necessary partitions to SeqIteratorSet.
-        for (auto& a : tree_) iters->push(a->seek_to_first());
-        iters->build();
-
-        // compaction...
-        Compaction<KeyCompT, ValueT, IndexDataT> worker(options_, current_tick,
-                                                        filename, env, comp);
-        auto [files, hot_size] = worker.decay1(*iters, std::forward<FuncT>(do_something));
-        auto ret = new SuperVersion(*this);
-        // major compaction, so levels except largest_ become empty.
-        
-        auto level = make_atomic_shared<Level>();
-        for (auto& a : files) {
-          auto par =
-              make_atomic_shared<Partition>(options_, env, file_index_cache,
-                                            file_key_cache, comp, std::move(a));
-          level->append_par(std::move(par));
-        }   
-        ret->tree_.push_back(std::move(level));
-        // calculate new current decay size
-        ret->recalc_stats();
-        ret->_sort_levels();
-
-        lsm.update_write_bytes(worker.get_write_bytes());
-        return ret;
-      } else if (job_type == JobType::kMajorCompaction) {
+      if (job_type == JobType::kMajorCompaction) {
         logger("[major compaction]");
         logger("tick threshold", tick_filter.get_tick_threshold());
         auto iters = std::make_unique<LevelIteratorSetT>(comp);
@@ -1100,7 +1068,9 @@ class EstimateLSM {
           Compaction<KeyCompT, ValueT, IndexDataT> worker(
               options_, current_tick, filename, env, comp);
           // Don't use tick filter because it is partial merge.
-          auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
+          auto [files, hot_size] = worker.flush_with_filter(
+              *iters, lsm.get_hot_filter(), TickFilter<ValueT>(-114514),
+              std::forward<FuncT>(do_something));
           auto ret = new SuperVersion(*this);
           lsm.update_write_bytes(worker.get_write_bytes());
           // minor compaction?
@@ -1130,7 +1100,6 @@ class EstimateLSM {
         }
         return nullptr;
       } else if (job_type == JobType::kLeveledCompaction) {
-        
         if (tree_.size() < kLimitMin) {
           return nullptr;
         }
@@ -1167,7 +1136,9 @@ class EstimateLSM {
 
         Compaction<KeyCompT, ValueT, IndexDataT> worker(options_, current_tick,
                                                         filename, env, comp);
-        auto [files, hot_size] = worker.flush_with_filter(*iters, TickFilter<ValueT>(-114514), TickFilter<ValueT>(-114514), std::forward<FuncT>(do_something));
+        auto [files, hot_size] = worker.flush_with_filter(
+            *iters, lsm.get_hot_filter(), TickFilter<ValueT>(-114514),
+            std::forward<FuncT>(do_something));
         lsm.update_write_bytes(worker.get_write_bytes());
 
         std::vector<atomic_shared_ptr<Partition>> pars;
@@ -1426,7 +1397,10 @@ class EstimateLSM {
 
   // Used for tick
   std::atomic<size_t>& current_tick_;
-  std::atomic<double> hot_tick_threshold_{-114514};
+  // hot_tick_threshold_ is initially zero, which means that RALT is warmming up
+  // and only stable records are considered hot.
+  // This will be updated to a positive value in the first eviction.
+  std::atomic<double> hot_tick_threshold_{0};
   std::atomic<double> decay_tick_threshold_{-1919810};
   std::atomic<size_t> current_access_bytes_;
 
@@ -1545,7 +1519,7 @@ class EstimateLSM {
     auto sv = get_current_sv();
     return std::make_unique<SuperVersionIterator>(
         LevelIteratorSetTForScan(options_, sv->seek(key), get_current_tick(),
-                                 get_tick_filter()),
+                                 get_hot_filter()),
         sv);
   }
 
@@ -1553,7 +1527,7 @@ class EstimateLSM {
     auto sv = get_current_sv();
     return std::make_unique<SuperVersionIterator>(
         LevelIteratorSetTForScan(options_, sv->seek_to_first(),
-                                 get_current_tick(), get_tick_filter()),
+                                 get_current_tick(), get_hot_filter()),
         sv);
   }
 
@@ -1561,7 +1535,7 @@ class EstimateLSM {
     auto sv = get_current_sv();
     return std::make_unique<SuperVersionIterator>(
         LevelIteratorSetTForScan(options_, sv->batch_seek(key),
-                                 get_current_tick(), get_tick_filter()),
+                                 get_current_tick(), get_hot_filter()),
         sv);
   }
 
@@ -1667,7 +1641,7 @@ class EstimateLSM {
     return current_tick_.load(std::memory_order_relaxed);
   }
 
-  TickFilter<ValueT> get_tick_filter() const {
+  TickFilter<ValueT> get_hot_filter() const {
     return TickFilter<ValueT>(
         hot_tick_threshold_.load(std::memory_order_relaxed));
   }
@@ -1839,6 +1813,8 @@ class EstimateLSM {
     est_hot.sort();
     est_phy.sort();
     hot_tick_threshold_ = -est_hot.get_from_points(hot_size_limit_);
+    std::cerr << "hot_size_limit_ " << hot_size_limit_
+              << ", hot_tick_threshold_ " << hot_tick_threshold_ << std::endl;
     decay_tick_threshold_ = std::max(-est_phy.get_from_points(physical_size_limit_), -est_hot.get_from_points(hot_size_limit_ * 2));
     stat_decay_scan_time_ += sw.GetTimeInNanos();
   }
@@ -1911,6 +1887,9 @@ class EstimateLSM {
     return real_phy_size_;
   }
 
+  uint64_t access_bytes() const {
+    return current_access_bytes_.load(std::memory_order_relaxed);
+  }
 
  private:
   void flush_thread() {
@@ -2202,6 +2181,8 @@ class alignas(128) VisCnts {
   size_t decay_count() {
     return decay_count_;
   }
+
+  uint64_t access_bytes() const { return tree->access_bytes(); }
 
   bool HandleReadBytes(uint64_t *value) {
     *value = GetReadBytes();

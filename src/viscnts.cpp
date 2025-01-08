@@ -268,4 +268,9 @@ size_t RALT::GetRealPhySize() {
   return vc->get_real_phy_size();
 }
 
+uint64_t RALT::access_bytes() const {
+  auto vc = static_cast<VisCntsType *>(vc_);
+  return vc->access_bytes();
+}
+
 }  // namespace ralt

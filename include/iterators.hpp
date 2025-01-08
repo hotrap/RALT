@@ -172,7 +172,7 @@ class SeqIteratorSetForScan {
       if (iter_.comp_func()(current_key_.ref(), result.first) == 0) {
         current_value_.merge(options_, result.second, current_tick_);
       } else {
-        if (tick_filter_.check(options_, current_value_)) {
+        if (tick_filter_(options_, current_value_)) {
           return;
         } else {
           current_key_ = result.first;
@@ -182,7 +182,7 @@ class SeqIteratorSetForScan {
       is_equal = iter_.get_is_equal();
       iter_.next();
     }
-    if (!tick_filter_.check(options_, current_value_)) {
+    if (!tick_filter_(options_, current_value_)) {
       valid_ = false;
     }
   }

@@ -90,8 +90,10 @@ class Compaction {
     decay_prob_ = 0.5;
   }
 
-  template <typename TIter, typename HotFilterFunc, typename PhyFilterFunc, typename OtherFunc>
-  auto flush(TIter& left, HotFilterFunc&& hot_filter_func, PhyFilterFunc&& phy_filter_func, OtherFunc&& other_func) {
+  template <typename TIter, typename HotFilter, typename PhyFilter,
+            typename OtherFunc>
+  auto flush_with_filter(TIter& left, HotFilter&& hot_filter,
+                         PhyFilter&& phy_filter, OtherFunc&& other_func) {
     vec_newfiles_.clear();
     // null iterator
     if (!left.valid()) {
@@ -117,7 +119,7 @@ class Compaction {
         lst_value_.second.merge(options_, L.second, current_tick_);
       } else {
         // only store those filter returning true.
-        if (phy_filter_func(lst_value_)) {
+        if (phy_filter(options_, lst_value_.second)) {
           // if it is the first kv pair, create the builder.
           if (first_flag) {
             first_flag = false;
@@ -131,12 +133,11 @@ class Compaction {
           }
           builder_.set_lstkey(lst_value_.first);
           other_func(lst_value_.first, lst_value_.second);
-          if (hot_filter_func(lst_value_)) {
+          if (hot_filter(options_, lst_value_.second)) {
             hot_size_ += _calc_hot_size(lst_value_);
             real_phy_size_ += phy_size;
           }
-          builder_.append(lst_value_, hot_filter_func(lst_value_));
-          
+          builder_.append(lst_value_, hot_filter(options_, lst_value_.second));
         }
         lst_value_ = {L.first, L.second};
       }
@@ -144,16 +145,16 @@ class Compaction {
     }
     // store the last kv.
     {
-      if (phy_filter_func(lst_value_)) {
+      if (phy_filter(options_, lst_value_.second)) {
         // It is the last key.
         builder_.set_lstkey(lst_value_.first);
         other_func(lst_value_.first, lst_value_.second);
-        builder_.append(lst_value_, hot_filter_func(lst_value_));
-        if (hot_filter_func(lst_value_)) {
+        builder_.append(lst_value_, hot_filter(options_, lst_value_.second));
+        if (hot_filter(options_, lst_value_.second)) {
           hot_size_ += _calc_hot_size(lst_value_);
           real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
         }
-      } 
+      }
     }
     // at least one file is created. if first_flag is not true.
     if (!first_flag) {
@@ -162,34 +163,12 @@ class Compaction {
     return std::make_pair(vec_newfiles_, hot_size_);
   }
 
-  template <typename TIter, typename FuncT>
-  auto decay1(TIter& iters, FuncT&& func) {
-    return flush(iters, [this](auto& kv){
-      return kv.second.decay(decay_prob_, rndgen_);
-    }, [](auto&) { return true; }, std::forward<FuncT>(func));
-  }
-
-  template<typename TIter, typename FuncT>
-  auto flush(TIter& left, FuncT&& func) {
-    return flush(left, [](auto&) { return true; }, [](auto&) { return true; }, std::forward<FuncT>(func));
-  }
-
-  template<typename TIter>
-  auto flush(TIter& left) {
-    return flush(left, [](auto&) { return true; }, [](auto&) { return true; }, [](auto&&...){});
-  }
-
-  template<typename TIter, typename FuncT>
-  auto flush_with_filter(TIter& left, TickFilter<ValueT> hot_tick_filter, TickFilter<ValueT> decay_tick_filter, FuncT&& func) {
-    return flush(
-        left,
-        [this, hot_tick_filter](auto& kv) {
-          return hot_tick_filter.check(options_, kv.second);
-        },
-        [this, decay_tick_filter](auto& kv) {
-          return decay_tick_filter.check(options_, kv.second);
-        },
-        std::forward<FuncT>(func));
+  template <typename TIter, typename HotFilter>
+  auto flush(TIter& left, HotFilter&& hot_filter) {
+    return flush_with_filter(
+        left, std::forward<HotFilter>(hot_filter),
+        [](const Options&, const ValueT&) { return true; },
+        [](const IndSKey&, const ValueT&) {});
   }
 
   size_t get_write_bytes() const {

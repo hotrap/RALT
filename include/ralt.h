@@ -19,8 +19,8 @@ class RALT : public rocksdb::RALT {
  public:
   RALT(const RALT &) = delete;
   ~RALT();
-  RALT(const ralt::Options &options, const rocksdb::Comparator *ucmp,
-       const char *dir, size_t init_hot_set_size, size_t max_hot_set_size,
+  RALT(const Options &options, const rocksdb::Comparator *ucmp, const char *dir,
+       size_t init_hot_set_size, size_t max_hot_set_size,
        size_t min_hot_set_size, size_t max_physical_size,
        uint64_t accessed_size_to_decr_counter);
   RALT(const rocksdb::Comparator *ucmp, const char *dir,
@@ -53,6 +53,8 @@ class RALT : public rocksdb::RALT {
   size_t DecayCount();
   size_t GetRealHotSetSize();
   size_t GetRealPhySize();
+
+  uint64_t access_bytes() const;
 
   struct Properties {
     static const std::string kReadBytes;
