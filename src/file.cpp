@@ -36,7 +36,7 @@ class PosixSeqFile : public SeqFile {
     ::close(fd_); 
     global_read_bytes.fetch_add(read_bytes_, std::memory_order_relaxed); 
     if (prefetch_data_) {
-      BaseAllocator::release(prefetch_data_);
+      BaseAllocator::align_release(prefetch_data_);
     }
   }
 

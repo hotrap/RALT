@@ -25,7 +25,7 @@ class WriteBatch {
   }
   ~WriteBatch() {
     flush();
-    BaseAllocator::release(data_);
+    BaseAllocator::align_release(data_);
   }
 
   template <typename T>
