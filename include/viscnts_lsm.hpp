@@ -1905,7 +1905,10 @@ class EstimateLSM {
       if (buf_q_.empty()) continue;
       flush_thread_state_ = 1;
       Timer sw;
+      // We need to hold the lock to make sure that we are using the latest sv.
+      sv_load_mutex_.lock();
       auto new_vec = sv_->flush_bufs(buf_q_, *this);
+      sv_load_mutex_.unlock();
       stat_flush_time_ += sw.GetTimeInNanos();
       while (new_vec.size() + flush_buf_vec_.size() > kMaxFlushBufferQueueSize) {
         logger("full");
