@@ -2,12 +2,13 @@
 #define VISCNTS_ITERATORS_H__
 
 #include "key.hpp"
-#include "tickfilter.hpp"
 #include "logging.hpp"
+#include "tickfilter.hpp"
 
 namespace ralt {
 
-// A set of iterators, use heap to manage but not segment tree because it can avoid comparisions opportunistically
+// A set of iterators, use heap to manage but not segment tree because it can
+// avoid comparisions opportunistically
 template <typename Iterator, typename KVCompT, typename ValueT>
 class SeqIteratorSet {
   std::vector<Iterator> iters_;
@@ -17,8 +18,9 @@ class SeqIteratorSet {
   uint32_t size_{0};
   KVCompT comp_;
 
-  // Check if the current key value is equal to some key value from other iterator.
-  // That means, A = read(), B = get_is_equal(), next(), C = read(), then if B is true, A equals to C.
+  // Check if the current key value is equal to some key value from other
+  // iterator. That means, A = read(), B = get_is_equal(), next(), C = read(),
+  // then if B is true, A equals to C.
   bool is_equal_{false};
 
   using SeqIteratorSetT = SeqIteratorSet<Iterator, KVCompT, ValueT>;
@@ -59,7 +61,8 @@ class SeqIteratorSet {
       seg_tree_[i]->read(kv);
       keys_[i - 1] = std::move(kv.key());
       values_[i - 1] = kv.value();
-      for (uint32_t j = i; j > 1 && _comp(j, j >> 1) < 0; j >>= 1) std::swap(seg_tree_[j], seg_tree_[j >> 1]);
+      for (uint32_t j = i; j > 1 && _comp(j, j >> 1) < 0; j >>= 1)
+        std::swap(seg_tree_[j], seg_tree_[j >> 1]);
     }
     is_equal_ = (size_ >= 2 && _comp(1, 2)) || (size_ >= 3 && _comp(1, 3));
   }
@@ -115,13 +118,9 @@ class SeqIteratorSet {
 
   KVCompT comp_func() { return comp_; }
 
-  std::vector<Iterator>& get_iterators() {
-    return iters_;
-  }
+  std::vector<Iterator>& get_iterators() { return iters_; }
 
-  bool get_is_equal() const {
-    return is_equal_;
-  }
+  bool get_is_equal() const { return is_equal_; }
 
  private:
   int _comp(uint32_t x, uint32_t y) {
@@ -133,7 +132,7 @@ class SeqIteratorSet {
 
 template <typename Iterator, typename KeyCompT, typename ValueT>
 class SeqIteratorSetForScan {
-  const Options options_;
+  std::shared_ptr<const Options> options_;
   IndSKey current_key_;
   ValueT current_value_;
   SeqIteratorSet<Iterator, KeyCompT, ValueT> iter_;
@@ -142,7 +141,7 @@ class SeqIteratorSetForScan {
   TickFilter<ValueT> tick_filter_;
 
  public:
-  SeqIteratorSetForScan(const Options options,
+  SeqIteratorSetForScan(std::shared_ptr<const Options> options,
                         SeqIteratorSet<Iterator, KeyCompT, ValueT>&& iter,
                         double current_tick, TickFilter<ValueT> tick_filter)
       : options_(std::move(options)),
@@ -150,13 +149,16 @@ class SeqIteratorSetForScan {
         valid_(true),
         current_tick_(current_tick),
         tick_filter_(tick_filter) {
+    DB_ASSERT(options_);
     // logger(tick_filter_.get_tick_threshold());
   }
   void build() {
     iter_.build();
     next();
   }
-  std::pair<SKey, ValueT> read() { return {current_key_.ref(), current_value_}; }
+  std::pair<SKey, ValueT> read() {
+    return {current_key_.ref(), current_value_};
+  }
   void next() {
     if (!iter_.valid()) {
       valid_ = false;
@@ -170,19 +172,19 @@ class SeqIteratorSetForScan {
     while (iter_.valid()) {
       result = iter_.read();
       if (iter_.comp_func()(current_key_.ref(), result.first) == 0) {
-        current_value_.merge(options_, result.second, current_tick_);
+        current_value_.merge(*options_, result.second, current_tick_);
       } else {
-        if (tick_filter_(options_, current_value_)) {
+        if (tick_filter_(*options_, current_value_)) {
           return;
         } else {
           current_key_ = result.first;
           current_value_ = result.second;
         }
-      }  
+      }
       is_equal = iter_.get_is_equal();
       iter_.next();
     }
-    if (!tick_filter_(options_, current_value_)) {
+    if (!tick_filter_(*options_, current_value_)) {
       valid_ = false;
     }
   }
@@ -190,7 +192,6 @@ class SeqIteratorSetForScan {
   bool valid() { return valid_; }
 };
 
-}
-
+}  // namespace ralt
 
 #endif

@@ -1,18 +1,19 @@
 #ifndef VISCNTS_COMPACTION_H__
 #define VISCNTS_COMPACTION_H__
 
-#include "sst.hpp"
-#include "fileenv.hpp"
-#include "writebatch.hpp"
-#include "tickfilter.hpp"
-#include "bloomfilter.hpp"
 #include <random>
+
+#include "bloomfilter.hpp"
+#include "fileenv.hpp"
+#include "sst.hpp"
+#include "tickfilter.hpp"
+#include "writebatch.hpp"
 
 namespace ralt {
 
 template <typename KeyCompT, typename ValueT, typename IndexDataT>
 class Compaction {
-  const Options options_;
+  std::shared_ptr<const Options> options_;
   // builder_ is used to build one file
   // files_ is used to get global file name
   // env_ is used to get global environment
@@ -44,7 +45,7 @@ class Compaction {
     auto [filename, id] = files_->next_pair();
     builder_.new_file(std::make_unique<WriteBatch>(std::unique_ptr<AppendFile>(
                           env_->openAppFile(filename))),
-                      options_.bloom_bits);
+                      options_->bloom_bits);
     vec_newfiles_.emplace_back();
     vec_newfiles_.back().filename = filename;
     vec_newfiles_.back().file_id = id;
@@ -60,8 +61,10 @@ class Compaction {
     vec_newfiles_.back().hot_size = hot_size_ - lst_hot_size_;
     vec_newfiles_.back().real_phy_size = real_phy_size_ - lst_real_phy_size_;
     vec_newfiles_.back().key_n = builder_.get_key_n();
-    vec_newfiles_.back().check_hot_buffer = std::move(builder_.get_check_hot_buffer());
-    vec_newfiles_.back().check_stably_hot_buffer = std::move(builder_.get_check_stably_hot_buffer());  
+    vec_newfiles_.back().check_hot_buffer =
+        std::move(builder_.get_check_hot_buffer());
+    vec_newfiles_.back().check_stably_hot_buffer =
+        std::move(builder_.get_check_stably_hot_buffer());
     lst_hot_size_ = hot_size_;
     lst_real_phy_size_ = real_phy_size_;
   }
@@ -78,15 +81,16 @@ class Compaction {
     IndSlice check_hot_buffer;
     IndSlice check_stably_hot_buffer;
   };
-  Compaction(const Options options, double current_tick, FileName* files,
-             Env* env, KeyCompT comp)
-      : options_(options),
+  Compaction(std::shared_ptr<const Options> options, double current_tick,
+             FileName* files, Env* env, KeyCompT comp)
+      : options_(std::move(options)),
         current_tick_(current_tick),
         files_(files),
         env_(env),
         flag_(false),
         rndgen_(std::random_device()()),
         comp_(comp) {
+    DB_ASSERT(options_);
     decay_prob_ = 0.5;
   }
 
@@ -116,28 +120,28 @@ class Compaction {
       CNT++;
       auto L = left.read();
       if (comp_(lst_value_.first.ref(), L.first) == 0) {
-        lst_value_.second.merge(options_, L.second, current_tick_);
+        lst_value_.second.merge(*options_, L.second, current_tick_);
       } else {
         // only store those filter returning true.
-        if (phy_filter(options_, lst_value_.second)) {
+        if (phy_filter(*options_, lst_value_.second)) {
           // if it is the first kv pair, create the builder.
           if (first_flag) {
             first_flag = false;
             _begin_new_file();
           }
-          // It maybe the last key. 
-          auto phy_size = lst_value_.first.size() + sizeof(ValueT) + 4;     
+          // It maybe the last key.
+          auto phy_size = lst_value_.first.size() + sizeof(ValueT) + 4;
           if (builder_.kv_size() + phy_size > kSSTable) {
             _end_new_file();
             _begin_new_file();
           }
           builder_.set_lstkey(lst_value_.first);
           other_func(lst_value_.first, lst_value_.second);
-          if (hot_filter(options_, lst_value_.second)) {
+          if (hot_filter(*options_, lst_value_.second)) {
             hot_size_ += _calc_hot_size(lst_value_);
             real_phy_size_ += phy_size;
           }
-          builder_.append(lst_value_, hot_filter(options_, lst_value_.second));
+          builder_.append(lst_value_, hot_filter(*options_, lst_value_.second));
         }
         lst_value_ = {L.first, L.second};
       }
@@ -145,12 +149,12 @@ class Compaction {
     }
     // store the last kv.
     {
-      if (phy_filter(options_, lst_value_.second)) {
+      if (phy_filter(*options_, lst_value_.second)) {
         // It is the last key.
         builder_.set_lstkey(lst_value_.first);
         other_func(lst_value_.first, lst_value_.second);
-        builder_.append(lst_value_, hot_filter(options_, lst_value_.second));
-        if (hot_filter(options_, lst_value_.second)) {
+        builder_.append(lst_value_, hot_filter(*options_, lst_value_.second));
+        if (hot_filter(*options_, lst_value_.second)) {
           hot_size_ += _calc_hot_size(lst_value_);
           real_phy_size_ += lst_value_.first.size() + sizeof(ValueT) + 4;
         }
@@ -171,10 +175,7 @@ class Compaction {
         [](const IndSKey&, const ValueT&) {});
   }
 
-  size_t get_write_bytes() const {
-    return write_bytes_;
-  }
-
+  size_t get_write_bytes() const { return write_bytes_; }
 
  private:
   template <typename T>
@@ -185,13 +186,6 @@ class Compaction {
   double current_tick_;
 };
 
-
-}
-
-
-
-
-
-
+}  // namespace ralt
 
 #endif
