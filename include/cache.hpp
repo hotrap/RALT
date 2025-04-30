@@ -216,7 +216,7 @@ class LRUChunkCache {
 
 using FileChunkCache = LRUChunkCache<size_t>;
 
-constexpr auto kIndexCacheSize = 4 * 1024;
+constexpr auto kIndexCacheSize = 64 * 1024;
 
 }  // namespace ralt
 
