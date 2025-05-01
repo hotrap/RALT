@@ -218,8 +218,6 @@ using FileChunkCache = LRUChunkCache<size_t>;
 
 constexpr auto kIndexCacheSize = 4 * 1024;
 
-FileChunkCache* GetDefaultIndexCache();
-
 }  // namespace ralt
 
 #endif
