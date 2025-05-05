@@ -177,11 +177,15 @@ class ExpTickValue {
   float score_{0};
   int32_t tick_{0};
 
-  constexpr const static auto kScoreBitNum = 8;
+  constexpr const static auto kNumCounterBits = 8;
+
  public:
   ExpTickValue() {}
-  ExpTickValue(int tick, size_t vlen, unsigned int init_score, bool init_tag = false) : 
-    tick_(tick), score_(1), vlen_(vlen << (kScoreBitNum + 1) | init_score << 1 | init_tag) {}
+  ExpTickValue(int tick, size_t vlen, unsigned int init_score,
+               bool init_tag = false)
+      : tick_(tick),
+        score_(1),
+        vlen_(vlen << (kNumCounterBits + 1) | init_score << 1 | init_tag) {}
   void merge(const Options& options, const ExpTickValue& v, double cur_tick) {
     set_counter(std::min<int>(kCMax, get_counter() + v.get_counter()));
     vlen_ |= 1;
@@ -196,9 +200,7 @@ class ExpTickValue {
     // If tick_ == v.tick_, then the key is accessed multiple times in this
     // time slice. We just keep one of the access instead of merging them.
   }
-  size_t get_hot_size() const {
-    return vlen_ >> (kScoreBitNum + 1);
-  }
+  size_t get_hot_size() const { return vlen_ >> (kNumCounterBits + 1); }
   double get_score(const Options& options) const {
     return log(score_) + log(options.exp_smoothing_factor) * (-tick_) +
            (1e5) * is_stable();
@@ -213,10 +215,11 @@ class ExpTickValue {
     return (vlen_ & 1) && get_counter() > 0;
   }
   void set_counter(int x) {
-    vlen_ = (vlen_ >> (kScoreBitNum + 1)) << (kScoreBitNum + 1) | (x << 1) | (vlen_ & 1);
+    vlen_ = (vlen_ >> (kNumCounterBits + 1)) << (kNumCounterBits + 1) |
+            (x << 1) | (vlen_ & 1);
   }
   int get_counter() const {
-    return (vlen_ >> 1) & ((1ull << kScoreBitNum) - 1);
+    return (vlen_ >> 1) & ((1ull << kNumCounterBits) - 1);
   }
   void decrease_stable() { set_counter(std::max<int>(get_counter() - 1, 0)); }
 };
